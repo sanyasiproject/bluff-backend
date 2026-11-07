@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: bluff-backend
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: CLIENT_ORIGIN
+        sync: false
