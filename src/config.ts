@@ -16,6 +16,7 @@ export const DB_NAMES: DbNames = {
   sessions: process.env.SESSIONS_COLLECTION?.trim() || 'sessions',
   games: process.env.GAMES_COLLECTION?.trim() || 'games',
   audit: process.env.AUDIT_COLLECTION?.trim() || 'audit_log',
+  friends: process.env.FRIENDS_COLLECTION?.trim() || 'friends',
 };
 
 /** coins every new account starts with */

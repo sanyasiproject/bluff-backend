@@ -197,6 +197,45 @@ describe('end-of-game awards', () => {
   });
 });
 
+describe('host removes a player mid-game', () => {
+  it('drops their cards, moves the turn on, and gives them no place', () => {
+    const g = setup(['a', 'b', 'c'], { a: [card('2')], b: [card('3'), card('4')], c: [card('5')] });
+    expect(g.removePlayer('a')).toEqual([]);
+    expect(g.hand('a')).toEqual([]);
+    expect(g.turnId).toBe('b');
+    expect(g.kicked.has('a')).toBe(true);
+    g.play('b', ids(g.hand('b')[0]), '3');
+    expect(g.places).toEqual([]);
+  });
+
+  it('stops the game with no winner when too few players are left before anyone finished', () => {
+    const g = setup(['a', 'b'], { a: [card('2')], b: [card('3')] });
+    expect(g.removePlayer('b')).toEqual([{ kind: 'gameOver', loserId: null }]);
+    expect(g.over).toBe(true);
+    expect(g.aborted).toBe(true);
+  });
+
+  it('ends normally if someone already finished', () => {
+    const q = card('Q');
+    const g = setup(['a', 'b', 'c'], { a: [q], b: [card('2'), card('9')], c: [card('3')] });
+    g.play('a', ids(q), 'Q');
+    g.play('b', ids(g.hand('b')[0]));
+    expect(g.places).toEqual(['a']);
+    expect(g.removePlayer('c')).toEqual([{ kind: 'gameOver', loserId: 'b' }]);
+    expect(g.aborted).toBe(false);
+  });
+
+  it('their last play can no longer be challenged and the next player must play', () => {
+    const a1 = card('7');
+    const g = setup(['a', 'b', 'c'], { a: [a1, card('8')], b: [card('2')], c: [card('3')] });
+    g.play('a', ids(a1), '7');
+    g.removePlayer('a');
+    expect(g.lastPlay).toBeNull();
+    expect(g.roundRank).toBe('7');
+    expect(() => g.pass('b')).toThrow('Put down cards');
+  });
+});
+
 describe('finishing', () => {
   it('a player who empties their hand finishes once the next player moves', () => {
     const [q, b1] = [card('Q'), card('2')];

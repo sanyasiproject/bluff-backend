@@ -1,4 +1,4 @@
-import type { Award, Card, GameConfig, Rank } from './types.js';
+import type { Award, Card, CoinResult, GameConfig, Rank } from './types.js';
 
 // Server-only shapes, never sent to clients as-is
 export interface Member {
@@ -12,6 +12,8 @@ export interface Member {
   watching: boolean;
   /** account id when logged in; null for guests */
   userId: string | null;
+  /** coin balance as last seen (display only); null for guests */
+  coins: number | null;
 }
 
 /** logged-in account attached to a socket */
@@ -20,21 +22,36 @@ export interface SocketUser {
   displayName: string;
 }
 
-/** a finished (or host-ended) game, ready to be saved */
+export interface GameRecordPlayer {
+  memberId: string;
+  userId: string | null;
+  name: string;
+  place: number | null;
+  loser: boolean;
+  /** removed by the host mid-game: pays nothing, wins nothing */
+  kicked: boolean;
+  stats: PlayerStats;
+}
+
+/** a finished (or stopped) game, ready to be saved */
 export interface GameRecord {
   roomCode: string;
   config: GameConfig;
   status: 'finished' | 'ended_early';
   startedAt: Date;
   endedAt: Date;
-  players: { memberId: string; userId: string | null; name: string; place: number | null; loser: boolean; stats: PlayerStats }[];
+  players: GameRecordPlayer[];
   awards: Award[];
 }
 
-/** optional server features wired in by server.ts (accounts, saving games) */
+/** optional server features wired in by server.ts (accounts, coins, friends) */
 export interface SocketHooks {
   resolveUser?: (token: string) => Promise<SocketUser | null>;
-  onGameEnd?: (record: GameRecord) => void;
+  /** current balances by user id */
+  getCoins?: (userIds: string[]) => Promise<Map<string, number>>;
+  /** saves the game, moves stake coins, adds daily bonuses; resolves with each player's coin change */
+  onGameEnd?: (record: GameRecord) => Promise<CoinResult[]>;
+  areFriends?: (a: string, b: string) => Promise<boolean>;
 }
 
 /** per-player counts behind the end-of-game awards */

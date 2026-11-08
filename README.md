@@ -31,7 +31,15 @@ For accounts locally, copy `.env.example` values into your shell (at least `MONG
 | `NODE_VERSION` | `22` | Render's Node version |
 | `MONGODB_URI` | `mongodb+srv://…` (secret) | accounts; empty = guest-only |
 
-Everything else has a built-in default: database `bluff`; collections `users`, `sessions`, `games`, `audit_log` (created with their indexes on first start); 1000 starting coins; logins last 30 days.
+Everything else has a built-in default: database `bluff`; collections `users`, `sessions`, `games`, `audit_log`, `friends` (created with their indexes on first start); 1000 starting coins; logins last 30 days.
+
+## Coins
+
+- New accounts get 1000 coins. **+200** on the first login (or app open) of each India-time day, sign-up day included.
+- **+500** for the first *finished* game of each day, win or lose.
+- **Stakes** (host picks in the lobby): Free, 50, 100, 250, 500, 1K, 5K, 10K, 50K, 1L, 5L, 10L per player. Start checks everyone can pay; guests can only play Free games.
+- Coins move only when a game **finishes**: every logged-in player pays the stake and the winner (1st place) gets the whole pot. A game stopped by the host, or by kicks leaving one player before anyone finished, moves nothing. A kicked player pays nothing and wins nothing.
+- Every finished game stores the stake, pot and each player's coin change in `games`.
 
 `/health` answers `{"ok":true,"accounts":"on"}` when the database is connected.
 
@@ -42,10 +50,14 @@ All bodies are JSON. Protected routes need `Authorization: Bearer <token>` (the 
 | Method & path | Who | Body / query | Returns |
 |---|---|---|---|
 | `POST /api/auth/register` | anyone | `{ username, password, displayName? }` | `{ token, user }` (201) |
-| `POST /api/auth/login` | anyone | `{ username, password }` | `{ token, user }` |
+| `POST /api/auth/login` | anyone | `{ username, password }` | `{ token, user, bonus }` |
 | `POST /api/auth/logout` | logged in | – | 204, token revoked |
-| `GET /api/me` | logged in | – | `{ user }` with coins and stats |
-| `GET /api/me/games` | logged in | `?limit=20` | `{ games }` most recent first |
+| `GET /api/me` | logged in | – | `{ user, bonus }` (bonus = daily +200 if just paid) |
+| `GET /api/me/games` | logged in | `?limit=20` | `{ games }` most recent first, with per-game stats and coins |
+| `GET /api/friends` | logged in | – | `{ friends, incoming, outgoing }` with `online` |
+| `POST /api/friends/request` | logged in | `{ username }` | `{ result: 'sent' \| 'accepted' }` |
+| `POST /api/friends/:id/accept` | logged in | – | 204 |
+| `POST /api/friends/:id/remove` | logged in | – | 204 (decline, cancel or unfriend) |
 | `GET /api/admin/users` | admin | `?search=&limit=50&skip=0` | `{ users, total }` |
 | `POST /api/admin/users/:id/coins` | admin | `{ amount, reason? }` (negative takes coins) | `{ user }` |
 | `POST /api/admin/make-admin` | admin, or header `X-Admin-Key` | `{ username }` | `{ user }` |
@@ -99,5 +111,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `game:pass` | – |
 | `game:bluff` | `{ playId, cardIndex? }` (`cardIndex` for the "pick one" rule) |
 | `chat:send` | `{ kind: 'reaction' \| 'message', index }` |
+| `room:kick` | `{ memberId }` (host only; mid-game the player's cards leave the game) |
+| `friend:invite` | `{ userId }` (logged in, friends only, friend must be online) |
 
-Connect with `io(url, { auth: { token } })` to play as a logged-in account. Server → client: `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud), `chat` (`{ from, kind, index }`), `session:replaced`.
+Connect with `io(url, { auth: { token } })` to play as a logged-in account. Server → client: `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud), `chat` (`{ from, kind, index }`), `invite` (`{ fromId, fromName, code }`), `room:kicked`, `session:replaced`.

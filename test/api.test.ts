@@ -5,7 +5,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBluffServer } from '../src/server.js';
 import { createStore, type Store } from '../src/services/store.js';
-import type { GameSummary, PublicUser, RoomView } from '../src/types.js';
+import type { FriendsResponse, GameSummary, InviteEvent, PublicUser, RoomView } from '../src/types.js';
 
 // run with TEST_MONGODB_URI=mongodb://127.0.0.1:27017 (a throwaway database is created and dropped)
 const MONGO = process.env.TEST_MONGODB_URI;
@@ -40,7 +40,7 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
   beforeAll(async () => {
     store = await createStore(
       MONGO!,
-      { db: DB, users: 'users', sessions: 'sessions', games: 'games', audit: 'audit_log' },
+      { db: DB, users: 'users', sessions: 'sessions', games: 'games', audit: 'audit_log', friends: 'friends' },
       { defaultCoins: 1000, sessionTtlDays: 30 },
     );
     server = createBluffServer({ store, adminApiKey: ADMIN_KEY, authAttempts: 1000 });
@@ -78,7 +78,8 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     const res = await register('ravi_01', 'secret-pass-1', 'Ravi');
     expect(res.status).toBe(201);
     expect(res.body.token).toMatch(/^[\w-]{40,}$/);
-    expect(res.body.user).toMatchObject({ username: 'ravi_01', displayName: 'Ravi', role: 'user', coins: 1000 });
+    expect(res.body.user).toMatchObject({ username: 'ravi_01', displayName: 'Ravi', role: 'user', coins: 1200 });
+    expect(res.body.bonus).toBe(200);
     expect(res.body.user.passwordHash).toBeUndefined();
     expect((await register('RAVI_01')).status).toBe(409);
     expect((await register('x')).body.error).toMatch(/Username/);
@@ -115,11 +116,11 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect(list.body.users[0].passwordHash).toBeUndefined();
 
     const give = await api().post(`/api/admin/users/${kidId}/coins`).set(bossAuth).send({ amount: 500, reason: 'Diwali bonus' });
-    expect(give.body.user.coins).toBe(1500);
-    const tooMuch = await api().post(`/api/admin/users/${kidId}/coins`).set(bossAuth).send({ amount: -2000 });
+    expect(give.body.user.coins).toBe(1700);
+    const tooMuch = await api().post(`/api/admin/users/${kidId}/coins`).set(bossAuth).send({ amount: -5000 });
     expect(tooMuch.status).toBe(400);
     const take = await api().post(`/api/admin/users/${kidId}/coins`).set(bossAuth).send({ amount: -200 });
-    expect(take.body.user.coins).toBe(1300);
+    expect(take.body.user.coins).toBe(1500);
     expect((await api().post('/api/admin/users/abc/coins').set(bossAuth).send({ amount: 5 })).status).toBe(404);
     expect((await api().post('/api/admin/make-admin').set(bossAuth).send({ username: 'kiran' })).body.user.role).toBe('admin');
 
@@ -167,6 +168,148 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect(me.stats).toMatchObject({ gamesPlayed: 1, wins: ashaWon ? 1 : 0, losses: ashaWon ? 0 : 1 });
     player.socket.disconnect();
     guest.socket.disconnect();
+  });
+
+  /** two logged-in players in a lobby; returns them host first */
+  async function stakedRoom(a: string, b: string) {
+    const ra = await register(a, 'secret-pass-1', a.slice(0, 16));
+    const rb = await register(b, 'secret-pass-1', b.slice(0, 16));
+    const host = await socketClient(ra.body.token);
+    const other = await socketClient(rb.body.token);
+    const { code } = await send(host, 'room:create', {});
+    await send(other, 'room:join', { code });
+    await until(() => host.state?.players.length === 2);
+    return { host, other, code: code!, tokens: [ra.body.token as string, rb.body.token as string] };
+  }
+
+  /** whoever starts plays their whole hand, the other passes: the starter wins */
+  async function playToEnd(x: Client, y: Client) {
+    await until(() => x.state?.phase === 'playing' && y.state?.phase === 'playing');
+    const [mover, other] = x.state!.turnId === x.state!.meId ? [x, y] : [y, x];
+    await send(mover, 'game:play', { cardIds: mover.state!.hand.map((c) => c.id), rank: 'A' });
+    await until(() => other.state?.turnId === other.state?.meId);
+    await send(other, 'game:pass');
+    await until(() => x.state?.phase === 'over' && y.state?.phase === 'over');
+    return { winner: mover, loser: other };
+  }
+
+  const coinsOf = async (token: string) => (await api().get('/api/me').set(bearer(token))).body.user.coins as number;
+
+  it('pays the daily login bonus once per day', async () => {
+    const reg = await register('daily_d');
+    expect(reg.body.user.coins).toBe(1200);
+    const again = await api().get('/api/me').set(bearer(reg.body.token));
+    expect(again.body).toMatchObject({ bonus: 0, user: { coins: 1200 } });
+
+    const client = new MongoClient(MONGO!);
+    await client.connect();
+    await client.db(DB).collection('users').updateOne({ username: 'daily_d' }, { $set: { lastLoginBonusDay: '2000-01-01' } });
+    await client.close();
+    const nextDay = await api().get('/api/me').set(bearer(reg.body.token));
+    expect(nextDay.body).toMatchObject({ bonus: 200, user: { coins: 1400 } });
+    expect((await api().get('/api/me').set(bearer(reg.body.token))).body.bonus).toBe(0);
+  });
+
+  it('checks balances at start, moves the stake only when the game finishes, and pays the first-game bonus once', async () => {
+    const { host, other, tokens } = await stakedRoom('stake_a', 'stake_b');
+    expect(await send(host, 'room:config', { decks: 1, bluffRule: 'all', stake: 5000 })).toEqual({ ok: true });
+    const tooRich = await send(host, 'room:start');
+    expect(tooRich.error).toMatch(/Not enough coins for a 5,000 stake: stake_a, stake_b/);
+    expect(await send(host, 'room:config', { decks: 1, bluffRule: 'all', stake: 7 })).toEqual({ ok: false, error: 'Invalid settings' });
+
+    // a game the host stops moves no coins
+    await send(host, 'room:config', { decks: 1, bluffRule: 'all', stake: 100 });
+    expect(await send(host, 'room:start')).toEqual({ ok: true });
+    await until(() => other.state?.phase === 'playing');
+    await send(host, 'room:lobby');
+    expect([await coinsOf(tokens[0]), await coinsOf(tokens[1])]).toEqual([1200, 1200]);
+
+    await send(host, 'room:start');
+    const { winner, loser } = await playToEnd(host, other);
+    await until(() => winner.state?.coinResults != null);
+    const results = new Map(winner.state!.coinResults!.map((r) => [r.playerId, r]));
+    expect(results.get(winner.state!.meId)).toMatchObject({ change: 100, bonus: 500, coins: 1800 });
+    expect(results.get(loser.state!.meId)).toMatchObject({ change: -100, bonus: 500, coins: 1600 });
+    expect(winner.state!.players.find((p) => p.id === winner.state!.meId)?.coins).toBe(1800);
+
+    // second game the same day: stake moves again, no bonus
+    await send(host, 'room:lobby');
+    await send(host, 'room:start');
+    const second = await playToEnd(host, other);
+    await until(() => second.winner.state?.coinResults != null);
+    expect(second.winner.state!.coinResults!.every((r) => r.bonus === 0)).toBe(true);
+
+    const games = (await api().get('/api/me/games').set(bearer(tokens[0]))).body.games as GameSummary[];
+    expect(games.map((g) => g.status)).toEqual(['finished', 'finished', 'ended_early']);
+    expect(games[1]).toMatchObject({ stake: 100, bonus: 500, coinChange: winner === host ? 100 : -100 });
+    expect(games[1].my).toEqual(expect.objectContaining({ bluffs: expect.any(Number), pickedUp: 0 }));
+    host.socket.disconnect();
+    other.socket.disconnect();
+  });
+
+  it('keeps guests out of staked games', async () => {
+    const acc = await register('host_g');
+    const host = await socketClient(acc.body.token);
+    const guest = await socketClient();
+    const { code } = await send(host, 'room:create', {});
+    await send(guest, 'room:join', { code, name: 'Guesty' });
+    await send(host, 'room:config', { decks: 1, bluffRule: 'all', stake: 50 });
+    expect((await send(host, 'room:start')).error).toMatch(/Guesty: guests can only play Free games/);
+    host.socket.disconnect();
+    guest.socket.disconnect();
+  });
+
+  it('lets only the host remove people, and stops a game that is left with one player', async () => {
+    const { host, other, tokens } = await stakedRoom('kick_a', 'kick_b');
+    const otherId = other.state!.meId;
+    expect((await send(other, 'room:kick', { memberId: host.state!.meId })).error).toBe('Only the host can do that');
+
+    let kicked = false;
+    other.socket.on('room:kicked', () => (kicked = true));
+    await send(host, 'room:config', { decks: 1, bluffRule: 'all', stake: 100 });
+    await send(host, 'room:start');
+    await until(() => other.state?.phase === 'playing');
+    expect(await send(host, 'room:kick', { memberId: otherId })).toEqual({ ok: true });
+    await until(() => kicked && host.state?.phase === 'over');
+    expect(host.state!.players.map((p) => p.id)).not.toContain(otherId);
+    expect((await send(other, 'game:pass')).error).toBe('You were removed from this room');
+    await wait(200);
+    expect([await coinsOf(tokens[0]), await coinsOf(tokens[1])]).toEqual([1200, 1200]);
+    host.socket.disconnect();
+    other.socket.disconnect();
+  });
+
+  it('handles friend requests, shows who is online, and delivers room invites', async () => {
+    const a = await register('friend_a', 'secret-pass-1', 'Fa');
+    const b = await register('friend_b', 'secret-pass-1', 'Fb');
+    const authA = bearer(a.body.token);
+    const authB = bearer(b.body.token);
+
+    expect((await api().post('/api/friends/request').set(authA).send({ username: 'friend_a' })).status).toBe(400);
+    expect((await api().post('/api/friends/request').set(authA).send({ username: 'nobody_here' })).status).toBe(404);
+    expect((await api().post('/api/friends/request').set(authA).send({ username: 'friend_b' })).body.result).toBe('sent');
+    expect((await api().post('/api/friends/request').set(authA).send({ username: 'friend_b' })).status).toBe(409);
+
+    const bList = (await api().get('/api/friends').set(authB)).body as FriendsResponse;
+    expect(bList.incoming.map((f) => f.username)).toEqual(['friend_a']);
+    expect((await api().post(`/api/friends/${a.body.user.id}/accept`).set(authB)).status).toBe(204);
+
+    const bSocket = await socketClient(b.body.token);
+    const aList = (await api().get('/api/friends').set(authA)).body as FriendsResponse;
+    expect(aList.friends).toEqual([expect.objectContaining({ username: 'friend_b', online: true })]);
+
+    const invites: InviteEvent[] = [];
+    bSocket.socket.on('invite', (i: InviteEvent) => invites.push(i));
+    const aSocket = await socketClient(a.body.token);
+    const { code } = await send(aSocket, 'room:create', {});
+    expect(await send(aSocket, 'friend:invite', { userId: b.body.user.id })).toEqual({ ok: true });
+    await until(() => invites.length === 1);
+    expect(invites[0]).toEqual({ fromId: a.body.user.id, fromName: 'Fa', code });
+
+    expect((await api().post(`/api/friends/${b.body.user.id}/remove`).set(authA)).status).toBe(204);
+    expect((await send(aSocket, 'friend:invite', { userId: b.body.user.id })).error).toBe('You can only invite friends');
+    aSocket.socket.disconnect();
+    bSocket.socket.disconnect();
   });
 
   it('allows API calls only from allowed sites', async () => {

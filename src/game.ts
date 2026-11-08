@@ -19,6 +19,10 @@ export class Game {
   loserId: string | null = null;
   reveal: RevealView | null = null;
   over = false;
+  /** removed by the host mid-game */
+  readonly kicked = new Set<string>();
+  /** ended because too few players were left before anyone finished; no coins move */
+  aborted = false;
 
   constructor(
     readonly order: string[],
@@ -72,7 +76,7 @@ export class Game {
   pass(playerId: string): GameEvent[] {
     this.assertTurn(playerId);
     const play = this.lastPlay;
-    if (!play) throw new GameError('You start this round, play some cards');
+    if (!play) throw new GameError(this.roundRank ? 'Put down cards to keep the round going' : 'You start this round, play some cards');
     this.passed.add(playerId);
     const events: GameEvent[] = [{ kind: 'pass', playerId }];
     const others = this.order.filter((id) => id !== play.playerId && this.hand(id).length > 0);
@@ -134,6 +138,34 @@ export class Game {
     return events;
   }
 
+  /** the host removed a player: their cards leave the game and they get no place */
+  removePlayer(playerId: string): GameEvent[] {
+    if (this.over || this.kicked.has(playerId)) return [];
+    this.hand(playerId);
+    this.kicked.add(playerId);
+    this.hands.set(playerId, []);
+    this.passed.delete(playerId);
+    // their last play can't be challenged any more; the round rank stays
+    if (this.lastPlay?.playerId === playerId) this.lastPlay = null;
+
+    const left = this.order.filter((p) => this.hand(p).length > 0);
+    if (left.length <= 1) {
+      this.over = true;
+      this.turnId = null;
+      // nobody finished yet means there is no fair winner: stop the game instead
+      this.aborted = this.places.length === 0;
+      this.loserId = this.aborted ? null : (left[0] ?? null);
+      return [{ kind: 'gameOver', loserId: this.loserId }];
+    }
+    if (this.turnId === playerId) this.turnId = this.nextActive(playerId);
+    const play = this.lastPlay;
+    if (play) {
+      const others = this.order.filter((id) => id !== play.playerId && this.hand(id).length > 0);
+      if (others.every((id) => this.passed.has(id))) return this.endRound();
+    }
+    return [];
+  }
+
   private endRound(): GameEvent[] {
     const starter = this.lastPlay!.playerId;
     const discarded = this.pile.length;
@@ -151,7 +183,7 @@ export class Game {
   /** The last play stands; a player whose hand it emptied is now finished */
   private settleLastPlay(): GameEvent[] {
     const id = this.lastPlay?.playerId;
-    if (!id || this.hand(id).length > 0 || this.places.includes(id)) return [];
+    if (!id || this.hand(id).length > 0 || this.places.includes(id) || this.kicked.has(id)) return [];
     this.places.push(id);
     const events: GameEvent[] = [{ kind: 'finish', playerId: id, place: this.places.length }];
     const left = this.order.filter((p) => this.hand(p).length > 0);

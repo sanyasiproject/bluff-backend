@@ -8,9 +8,14 @@ export function meRoutes(store: Store): Router {
   const r = Router();
   r.use(requireUser(store));
 
-  r.get('/', (_req, res) => {
-    res.json({ user: toPublicUser(currentUser(res)) });
-  });
+  // opening the app counts as the day's login, so the daily bonus is paid here too
+  r.get(
+    '/',
+    ah(async (_req, res) => {
+      const daily = await store.users.claimLoginBonus(currentUser(res));
+      res.json({ user: toPublicUser(daily.user), bonus: daily.bonus });
+    }),
+  );
 
   r.get(
     '/games',

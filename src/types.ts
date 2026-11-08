@@ -14,9 +14,17 @@ export interface Card {
 /** all: every card of the challenged play is turned over; one: the caller picks one card to turn over */
 export type BluffRule = 'all' | 'one';
 
+/** coins each player puts in; 0 = free game. Up to 10 lakh */
+export const STAKES = [0, 50, 100, 250, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000] as const;
+
+/** daily rewards, counted per India (IST) calendar day */
+export const LOGIN_BONUS = 200;
+export const FIRST_GAME_BONUS = 500;
+
 export interface GameConfig {
   decks: 1 | 2;
   bluffRule: BluffRule;
+  stake: number;
 }
 
 export type Phase = 'lobby' | 'playing' | 'over';
@@ -86,6 +94,20 @@ export interface PublicPlayer {
   cardCount: number;
   connected: boolean;
   place: number | null;
+  /** logged in (can play staked games) */
+  registered: boolean;
+  /** coin balance as last seen by the server; null for guests */
+  coins: number | null;
+}
+
+/** how one player's coins changed when a game ended */
+export interface CoinResult {
+  playerId: string;
+  /** stake won or lost */
+  change: number;
+  /** first-game-of-the-day bonus, 0 if already claimed today */
+  bonus: number;
+  coins: number | null;
 }
 
 export interface LastPlayView {
@@ -129,6 +151,10 @@ export interface RoomView {
   awards: Award[];
   /** null for seated players, so they never receive anyone else's cards */
   watch: WatchView | null;
+  /** coin changes once the finished game is saved; null until then or for free guest games */
+  coinResults: CoinResult[] | null;
+  /** game ended because too few players were left (after kicks); no coins moved */
+  stopped: boolean;
 }
 
 export type Role = 'user' | 'admin';
@@ -159,17 +185,58 @@ export interface PublicUser {
 export interface AuthResponse {
   token: string;
   user: PublicUser;
+  /** daily login bonus just added (0 if already claimed today) */
+  bonus: number;
+}
+
+export interface MyGameStats {
+  bluffs: number;
+  caught: number;
+  goodCalls: number;
+  wrongCalls: number;
+  pickedUp: number;
 }
 
 export interface GameSummary {
   id: string;
   roomCode: string;
   endedAt: string;
+  durationSec: number;
   status: 'finished' | 'ended_early';
+  decks: 1 | 2;
+  stake: number;
   place: number | null;
   won: boolean;
   lost: boolean;
-  players: { name: string; place: number | null; loser: boolean; guest: boolean }[];
+  kicked: boolean;
+  /** stake won (+) or lost (-) */
+  coinChange: number;
+  bonus: number;
+  my: MyGameStats | null;
+  myAwards: { emoji: string; title: string }[];
+  players: { name: string; place: number | null; loser: boolean; guest: boolean; kicked: boolean }[];
+}
+
+export interface FriendView {
+  id: string;
+  username: string;
+  displayName: string;
+  online: boolean;
+}
+
+export interface FriendsResponse {
+  friends: FriendView[];
+  /** requests waiting for me to accept */
+  incoming: FriendView[];
+  /** requests I sent */
+  outgoing: FriendView[];
+}
+
+/** a friend asking you to join their room */
+export interface InviteEvent {
+  fromId: string;
+  fromName: string;
+  code: string;
 }
 
 export type AnnounceKind ='play' | 'pass' | 'bluff' | 'round' | 'finish' | 'over' | 'room';

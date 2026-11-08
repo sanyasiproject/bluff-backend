@@ -1,5 +1,5 @@
 import { MongoClient } from 'mongodb';
-import type { AuditDoc, Collections, DbNames, GameDoc, SessionDoc, UserDoc } from './documents.js';
+import type { AuditDoc, Collections, DbNames, FriendDoc, GameDoc, SessionDoc, UserDoc } from './documents.js';
 
 export interface MongoConnection {
   client: MongoClient;
@@ -15,6 +15,7 @@ export async function connectMongo(uri: string, names: DbNames): Promise<MongoCo
     sessions: db.collection<SessionDoc>(names.sessions),
     games: db.collection<GameDoc>(names.games),
     audit: db.collection<AuditDoc>(names.audit),
+    friends: db.collection<FriendDoc>(names.friends),
   };
   await Promise.all([
     cols.users.createIndex({ username: 1 }, { unique: true }),
@@ -23,6 +24,9 @@ export async function connectMongo(uri: string, names: DbNames): Promise<MongoCo
     cols.sessions.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     cols.games.createIndex({ 'players.userId': 1, endedAt: -1 }),
     cols.audit.createIndex({ targetUserId: 1, createdAt: -1 }),
+    cols.friends.createIndex({ pair: 1 }, { unique: true }),
+    cols.friends.createIndex({ requester: 1 }),
+    cols.friends.createIndex({ recipient: 1 }),
   ]);
   return { client, cols };
 }

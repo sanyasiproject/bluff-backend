@@ -1,5 +1,5 @@
 import { GameError } from './game.js';
-import { QUICK_MESSAGES, RANKS, REACTIONS, type ChatKind, type GameConfig, type Rank } from './types.js';
+import { QUICK_MESSAGES, RANKS, REACTIONS, STAKES, type ChatKind, type GameConfig, type Rank } from './types.js';
 
 export type Payload = Record<string, unknown>;
 
@@ -27,8 +27,21 @@ export function parseToken(value: unknown): string {
 export function parseConfig(p: Payload): GameConfig {
   const decks = p.decks === 1 || p.decks === 2 ? p.decks : null;
   const bluffRule = p.bluffRule === 'all' || p.bluffRule === 'one' ? p.bluffRule : null;
-  if (!decks || !bluffRule) throw new GameError('Invalid settings');
-  return { decks, bluffRule };
+  const stake = p.stake === undefined ? 0 : (STAKES as readonly unknown[]).includes(p.stake) ? (p.stake as number) : null;
+  if (!decks || !bluffRule || stake === null) throw new GameError('Invalid settings');
+  return { decks, bluffRule, stake };
+}
+
+/** room member id (12 hex chars) */
+export function parseMemberId(value: unknown): string {
+  if (typeof value !== 'string' || !/^[a-f0-9]{12}$/.test(value)) throw new GameError('Invalid player');
+  return value;
+}
+
+/** account id (MongoDB ObjectId, 24 hex chars) */
+export function parseUserId(value: unknown): string {
+  if (typeof value !== 'string' || !/^[a-f0-9]{24}$/.test(value)) throw new GameError('Invalid user');
+  return value;
 }
 
 /** no per-play limit; 104 (two full decks) is just a sanity cap */

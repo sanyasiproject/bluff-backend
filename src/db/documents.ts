@@ -9,6 +9,7 @@ export interface DbNames {
   sessions: string;
   games: string;
   audit: string;
+  friends: string;
 }
 
 export interface UserDoc {
@@ -23,6 +24,10 @@ export interface UserDoc {
   stats: LifetimeStats;
   createdAt: Date;
   lastLoginAt: Date | null;
+  /** IST day (YYYY-MM-DD) the daily login bonus was last given */
+  lastLoginBonusDay?: string;
+  /** IST day the first-game bonus was last given */
+  lastGameBonusDay?: string;
 }
 
 export interface SessionDoc {
@@ -43,6 +48,11 @@ export interface GamePlayerDoc {
   place: number | null;
   won: boolean;
   loser: boolean;
+  kicked: boolean;
+  /** stake won (+) or paid (-) */
+  coinChange: number;
+  /** first-game-of-the-day bonus */
+  bonus: number;
   stats: PlayerStats;
 }
 
@@ -54,6 +64,9 @@ export interface GameDoc {
   startedAt: Date;
   endedAt: Date;
   durationSec: number;
+  stake: number;
+  /** coins collected from everyone and paid to the winner */
+  pot: number;
   players: GamePlayerDoc[];
   winnerName: string | null;
   loserName: string | null;
@@ -73,11 +86,23 @@ export interface AuditDoc {
   createdAt: Date;
 }
 
+export interface FriendDoc {
+  _id: ObjectId;
+  /** both user ids sorted and joined, unique per pair */
+  pair: string;
+  requester: ObjectId;
+  recipient: ObjectId;
+  status: 'pending' | 'accepted';
+  createdAt: Date;
+  acceptedAt?: Date;
+}
+
 export interface Collections {
   users: Collection<UserDoc>;
   sessions: Collection<SessionDoc>;
   games: Collection<GameDoc>;
   audit: Collection<AuditDoc>;
+  friends: Collection<FriendDoc>;
 }
 
 /** who performed an admin action */

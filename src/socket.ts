@@ -1,8 +1,9 @@
 import type { Server } from 'socket.io';
 import { GameError } from './game.js';
 import type { GameEvent, GameRecord, Member, SocketHooks, SocketUser } from './models.js';
+import { Presence } from './presence.js';
 import type { Room, RoomManager } from './rooms.js';
-import type { Announcement } from './types.js';
+import type { Announcement, InviteEvent } from './types.js';
 import {
   asPayload,
   parseCardIds,
@@ -10,10 +11,12 @@ import {
   parseChat,
   parseCode,
   parseConfig,
+  parseMemberId,
   parseName,
   parsePlayId,
   parseRank,
   parseToken,
+  parseUserId,
   type Payload,
 } from './validate.js';
 
@@ -24,8 +27,16 @@ const SWEEP_EVERY_MS = 30_000;
 type Reply = (res: object) => void;
 type Seat = { room: Room; member: Member };
 
+const formatCoins = (n: number) => n.toLocaleString('en-IN');
+const listNames = (members: Member[]) => members.map((m) => m.name).join(', ');
+
 /** Wires socket events to rooms; returns a stop function for the sweep timer */
-export function registerHandlers(io: Server, rooms: RoomManager, hooks: SocketHooks = {}): () => void {
+export function registerHandlers(
+  io: Server,
+  rooms: RoomManager,
+  hooks: SocketHooks = {},
+  presence: Presence = new Presence(),
+): () => void {
   // every player gets their own view so hands stay private
   const broadcast = (room: Room) => {
     for (const m of room.members) if (m.socketId) io.to(m.socketId).emit('state', room.view(m.id));
@@ -36,13 +47,35 @@ export function registerHandlers(io: Server, rooms: RoomManager, hooks: SocketHo
     for (const note of notes) io.to(room.code).emit('announce', note);
   };
 
-  const saveGame = (record: GameRecord | null) => {
-    if (record) hooks.onGameEnd?.(record);
+  /** saves in the background, then shows everyone the coin changes */
+  const saveGame = (room: Room, record: GameRecord | null) => {
+    if (!record || !hooks.onGameEnd) return;
+    const game = room.game;
+    hooks
+      .onGameEnd(record)
+      .then((results) => {
+        for (const r of results) {
+          const m = room.members.find((x) => x.id === r.playerId);
+          if (m && r.coins !== null) m.coins = r.coins;
+        }
+        if (room.game === game) room.coinResults = results;
+        broadcast(room);
+      })
+      .catch((err: Error) => console.error('[games] could not save game:', err.message));
   };
 
   const afterMove = (room: Room, events: GameEvent[]) => {
     publish(room, room.announce(events));
-    if (events.some((e) => e.kind === 'gameOver')) saveGame(room.snapshot('finished'));
+    if (events.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot(room.game?.aborted ? 'ended_early' : 'finished'));
+  };
+
+  const freshCoins = async (userId: string): Promise<number | null> => {
+    if (!hooks.getCoins) return null;
+    try {
+      return (await hooks.getCoins([userId])).get(userId) ?? null;
+    } catch {
+      return null;
+    }
   };
 
   // a login token in the handshake makes this socket that account; no or bad token means guest
@@ -61,6 +94,7 @@ export function registerHandlers(io: Server, rooms: RoomManager, hooks: SocketHo
   io.on('connection', (socket) => {
     const hits: number[] = [];
     const user = socket.data.user as SocketUser | undefined;
+    if (user) presence.add(user.id, socket.id);
     // logged-in players always use their account name
     const nameFrom = (p: Payload) => user?.displayName ?? parseName(p.name);
     let seat: Seat | null = null;
@@ -95,17 +129,22 @@ export function registerHandlers(io: Server, rooms: RoomManager, hooks: SocketHo
 
     const current = (): Seat => {
       if (!seat) throw new GameError('Join a room first');
+      // the host may have removed this player since
+      if (!seat.room.members.includes(seat.member)) {
+        seat = null;
+        throw new GameError('You were removed from this room');
+      }
       return seat;
     };
 
-    const on = (event: string, handler: (p: Payload) => object | void) => {
-      socket.on(event, (raw: unknown, ack?: unknown) => {
+    const on = (event: string, handler: (p: Payload) => object | void | Promise<object | void>) => {
+      socket.on(event, async (raw: unknown, ack?: unknown) => {
         const reply: Reply = typeof ack === 'function' ? (ack as Reply) : () => {};
         try {
           const now = Date.now();
           while (hits.length > 0 && now - hits[0] > RATE_WINDOW_MS) hits.shift();
           if (hits.push(now) > RATE_MAX_EVENTS) throw new GameError('Too fast, slow down');
-          reply({ ok: true, ...(handler(asPayload(raw)) ?? {}) });
+          reply({ ok: true, ...((await handler(asPayload(raw))) ?? {}) });
         } catch (err) {
           if (!(err instanceof GameError)) console.error(`[${event}]`, err);
           reply({ ok: false, error: err instanceof GameError ? err.message : 'Something went wrong' });
@@ -113,15 +152,20 @@ export function registerHandlers(io: Server, rooms: RoomManager, hooks: SocketHo
       });
     };
 
-    on('room:create', (p) => {
-      const next = rooms.create(nameFrom(p), user?.id ?? null);
+    on('room:create', async (p) => {
+      const name = nameFrom(p);
+      const coins = user ? await freshCoins(user.id) : null;
+      const next = rooms.create(name, user?.id ?? null, coins);
       attach(next);
       publish(next.room, [next.room.note('room', `${next.member.name} created the room`)]);
       return { code: next.room.code, token: next.member.token };
     });
 
-    on('room:join', (p) => {
-      const next = rooms.join(parseCode(p.code), nameFrom(p), user?.id ?? null);
+    on('room:join', async (p) => {
+      const code = parseCode(p.code);
+      const name = nameFrom(p);
+      const coins = user ? await freshCoins(user.id) : null;
+      const next = rooms.join(code, name, user?.id ?? null, coins);
       attach(next);
       const joined = next.member.watching ? `${next.member.name} is watching` : `${next.member.name} joined`;
       publish(next.room, [next.room.note('room', joined)]);
@@ -148,21 +192,71 @@ export function registerHandlers(io: Server, rooms: RoomManager, hooks: SocketHo
       broadcast(room);
     });
 
-    on('room:start', () => {
+    on('room:start', async () => {
       const { room, member } = current();
+      room.assertCanStart(member.id);
+      const stake = room.config.stake;
+      if (stake > 0) {
+        if (room.starting) throw new GameError('Already starting');
+        const seated = room.players();
+        const guests = seated.filter((m) => !m.userId);
+        if (guests.length > 0) {
+          throw new GameError(`${listNames(guests)}: guests can only play Free games. Log in or set the stake to Free`);
+        }
+        if (!hooks.getCoins) throw new GameError('Coins are not available on this server');
+        room.starting = true;
+        try {
+          // coins only move at the end; here we just make sure everyone can pay
+          const balances = await hooks.getCoins(seated.map((m) => m.userId!));
+          for (const m of seated) m.coins = balances.get(m.userId!) ?? 0;
+          const short = seated.filter((m) => (m.coins ?? 0) < stake);
+          if (short.length > 0) {
+            broadcast(room);
+            throw new GameError(`Not enough coins for a ${formatCoins(stake)} stake: ${listNames(short)}`);
+          }
+          const now = room.players();
+          if (now.length !== seated.length || now.some((m, i) => m !== seated[i])) throw new GameError('Players changed, tap Start again');
+        } finally {
+          room.starting = false;
+        }
+      }
       room.start(member.id);
       const first = room.member(room.game!.turnId!).name;
-      publish(room, [room.note('round', `Game started. ${first} goes first`)]);
+      const pot = stake > 0 ? `. Pot: ${formatCoins(stake * room.game!.order.length)} coins` : '';
+      publish(room, [room.note('round', `Game started. ${first} goes first${pot}`)]);
     });
 
     on('room:lobby', () => {
       const { room, member } = current();
       const wasPlaying = room.phase === 'playing';
-      // snapshot before the game is cleared; host-ended games are kept as history only
+      // snapshot before the game is cleared; a stopped game moves no coins
       const record = wasPlaying ? room.snapshot('ended_early') : null;
+      saveGame(room, record);
       room.backToLobby(member.id);
-      saveGame(record);
-      publish(room, wasPlaying ? [room.note('room', `${member.name} ended the game`)] : []);
+      publish(room, wasPlaying ? [room.note('room', `${member.name} stopped the game. No coins moved`)] : []);
+    });
+
+    on('room:kick', (p) => {
+      const { room, member } = current();
+      const { kicked, events } = room.kick(member.id, parseMemberId(p.memberId));
+      if (kicked.socketId) {
+        const target = io.sockets.sockets.get(kicked.socketId);
+        target?.leave(room.code);
+        target?.emit('room:kicked', { code: room.code });
+      }
+      publish(room, [room.note('room', `${kicked.name} was removed by the host`), ...room.announce(events)]);
+      if (events.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot(room.game?.aborted ? 'ended_early' : 'finished'));
+    });
+
+    on('friend:invite', async (p) => {
+      const { room } = current();
+      if (!user) throw new GameError('Log in to invite friends');
+      const friendId = parseUserId(p.userId);
+      if (!hooks.areFriends || !(await hooks.areFriends(user.id, friendId))) throw new GameError('You can only invite friends');
+      const sockets = presence.socketsOf(friendId);
+      if (sockets.length === 0) throw new GameError('Your friend is offline. Send the WhatsApp link instead');
+      const invite: InviteEvent = { fromId: user.id, fromName: user.displayName, code: room.code };
+      for (const id of sockets) io.to(id).emit('invite', invite);
     });
 
     on('game:play', (p) => {
@@ -187,6 +281,7 @@ export function registerHandlers(io: Server, rooms: RoomManager, hooks: SocketHo
     });
 
     socket.on('disconnect', () => {
+      if (user) presence.remove(user.id, socket.id);
       const room = detach();
       if (room) broadcast(room);
     });

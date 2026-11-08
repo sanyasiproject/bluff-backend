@@ -1,17 +1,21 @@
 import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
 import { isAllowedOrigin } from '../config.js';
 import { GameError } from '../game.js';
+import type { Presence } from '../presence.js';
 import type { Store } from '../services/store.js';
 import { ApiError } from './errors.js';
 import { rateLimit } from './middleware.js';
 import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
+import { friendRoutes } from './routes/friends.js';
 import { meRoutes } from './routes/me.js';
 
 export interface ApiOptions {
   adminApiKey: string;
   /** login, register and make-admin attempts per IP per 15 minutes */
   authAttempts?: number;
+  /** who is online, for the friends list */
+  presence: Presence;
 }
 
 /** HTTP side of the server: health check and the /api routes */
@@ -34,6 +38,7 @@ export function createApi(store: Store | null, opts: ApiOptions): express.Expres
     const limited = rateLimit(opts.authAttempts ?? 20, 15 * 60_000);
     app.use('/api/auth', authRoutes(store, limited));
     app.use('/api/me', meRoutes(store));
+    app.use('/api/friends', friendRoutes(store, opts.presence));
     app.use('/api/admin', adminRoutes(store, opts.adminApiKey, limited));
   } else {
     app.use('/api', (_req, _res, next) => next(new ApiError(503, 'Accounts are not set up on this server')));

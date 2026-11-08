@@ -3,7 +3,7 @@ import { computeAwards } from './awards.js';
 import { describeClaim, ordinal } from './cards.js';
 import { Game, GameError } from './game.js';
 import type { GameEvent, GameRecord, Member } from './models.js';
-import type { AnnounceKind, Announcement, ChatEvent, ChatKind, GameConfig, Phase, RoomView } from './types.js';
+import type { AnnounceKind, Announcement, ChatEvent, ChatKind, CoinResult, GameConfig, Phase, RoomView } from './types.js';
 
 export const MAX_PLAYERS = 5;
 /** seated players plus watchers */
@@ -20,9 +20,15 @@ const CHAT_GAP_MS = 700;
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { decks: 1, bluffRule: 'all' };
+  config: GameConfig = { decks: 1, bluffRule: 'all', stake: 0 };
   game: Game | null = null;
   startedAt: Date | null = null;
+  /** coin changes of the last finished game, filled once it's saved */
+  coinResults: CoinResult[] | null = null;
+  /** true while a staked start is checking balances */
+  starting = false;
+  /** players the host removed mid-game, kept so the saved game still has their name */
+  private departed = new Map<string, Member>();
   private announceSeq = 0;
   private lastChat = new Map<string, number>();
 
@@ -44,7 +50,7 @@ export class Room {
     return m;
   }
 
-  addMember(name: string, userId: string | null = null): Member {
+  addMember(name: string, userId: string | null = null, coins: number | null = null): Member {
     if (this.members.length >= MAX_MEMBERS) throw new GameError(`Room is full (max ${MAX_MEMBERS})`);
     if (userId && this.members.some((m) => m.userId === userId)) throw new GameError('Your account is already in this room');
     if (this.members.some((m) => m.name.toLowerCase() === name.toLowerCase())) {
@@ -59,6 +65,7 @@ export class Room {
       // late or extra people watch, and get a seat in the next game
       watching: this.phase === 'playing' || this.players().length >= MAX_PLAYERS,
       userId,
+      coins: userId ? coins : null,
     };
     this.members.push(member);
     if (!this.hostId) this.hostId = member.id;
@@ -74,29 +81,51 @@ export class Room {
     if (this.hostId === id) this.hostId = (this.players()[0] ?? this.members[0])?.id ?? '';
   }
 
+  /** host removes someone; mid-game their cards leave the game. Returns who left and any game events */
+  kick(by: string, targetId: string): { kicked: Member; events: GameEvent[] } {
+    this.assertHost(by);
+    if (targetId === by) throw new GameError("You can't remove yourself");
+    const target = this.member(targetId);
+    let events: GameEvent[] = [];
+    if (this.phase === 'playing' && this.game?.order.includes(targetId)) {
+      events = this.game.removePlayer(targetId);
+      this.departed.set(targetId, target);
+    }
+    this.members = this.members.filter((m) => m.id !== targetId);
+    this.lastChat.delete(targetId);
+    if (this.phase === 'lobby') this.fillSeats();
+    return { kicked: target, events };
+  }
+
   setConfig(by: string, config: GameConfig): void {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Settings can only change in the lobby');
     this.config = config;
   }
 
-  start(by: string): void {
+  /** host, lobby and player-count checks; staked checks need coin balances and run in socket.ts */
+  assertCanStart(by: string): void {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Game already started');
-    const players = this.players();
-    if (players.length < 2) throw new GameError('Need at least 2 players');
+    if (this.players().length < 2) throw new GameError('Need at least 2 players');
+  }
+
+  start(by: string): void {
+    this.assertCanStart(by);
     this.game = new Game(
-      players.map((m) => m.id),
+      this.players().map((m) => m.id),
       this.config,
     );
     this.startedAt = new Date();
+    this.coinResults = null;
+    this.departed.clear();
   }
 
   /** the current game as a record to save; take it before the game is cleared */
   snapshot(status: GameRecord['status']): GameRecord | null {
     const g = this.game;
     if (!g) return null;
-    const member = (id: string) => this.members.find((m) => m.id === id);
+    const member = (id: string) => this.members.find((m) => m.id === id) ?? this.departed.get(id);
     return {
       roomCode: this.code,
       config: g.config,
@@ -109,6 +138,7 @@ export class Room {
         name: member(id)?.name ?? 'Someone',
         place: g.places.indexOf(id) + 1 || null,
         loser: status === 'finished' && g.loserId === id,
+        kicked: g.kicked.has(id),
         stats: { ...g.stats.get(id)! },
       })),
       awards: status === 'finished' ? computeAwards(g.stats) : [],
@@ -121,6 +151,8 @@ export class Room {
       throw new GameError('Only the host can end the game');
     }
     this.game = null;
+    this.coinResults = null;
+    this.departed.clear();
     this.fillSeats();
   }
 
@@ -155,6 +187,8 @@ export class Room {
         connected: m.socketId !== null,
         cardCount: g?.hands.get(m.id)?.length ?? 0,
         place: g ? g.places.indexOf(m.id) + 1 || null : null,
+        registered: m.userId !== null,
+        coins: m.coins,
       })),
       watchers: this.members
         .filter((m) => !seatedIds.has(m.id))
@@ -176,6 +210,8 @@ export class Room {
               lastPlayCards: lp ? [...lp.cards] : null,
             }
           : null,
+      coinResults: this.coinResults,
+      stopped: g?.aborted ?? false,
     };
   }
 
@@ -208,7 +244,8 @@ export class Room {
       case 'finish':
         return ['finish', `${n(e.playerId)} finished ${ordinal(e.place)}`];
       case 'gameOver': {
-        const liar = this.game ? computeAwards(this.game.stats).find((a) => a.title === 'Biggest liar') : undefined;
+        if (this.game?.aborted) return ['over', 'Game stopped, not enough players left. No coins moved'];
+        const liar =this.game ? computeAwards(this.game.stats).find((a) => a.title === 'Biggest liar') : undefined;
         const loser = e.loserId ? `Game over. ${n(e.loserId)} is the loser` : 'Game over';
         return ['over', liar ? `${loser}. Biggest liar: ${liar.playerIds.map(n).join(' and ')}` : loser];
       }
@@ -230,7 +267,7 @@ export class Room {
 export class RoomManager {
   private rooms = new Map<string, Room>();
 
-  create(name: string, userId: string | null = null): { room: Room; member: Member } {
+  create(name: string, userId: string | null = null, coins: number | null = null): { room: Room; member: Member } {
     if (this.rooms.size >= MAX_ROOMS) throw new GameError('Server is busy, try again later');
     let code = '';
     do {
@@ -238,12 +275,12 @@ export class RoomManager {
     } while (this.rooms.has(code));
     const room = new Room(code);
     this.rooms.set(code, room);
-    return { room, member: room.addMember(name, userId) };
+    return { room, member: room.addMember(name, userId, coins) };
   }
 
-  join(code: string, name: string, userId: string | null = null): { room: Room; member: Member } {
+  join(code: string, name: string, userId: string | null = null, coins: number | null = null): { room: Room; member: Member } {
     const room = this.get(code);
-    return { room, member: room.addMember(name, userId) };
+    return { room, member: room.addMember(name, userId, coins) };
   }
 
   rejoin(code: string, token: string): { room: Room; member: Member } {

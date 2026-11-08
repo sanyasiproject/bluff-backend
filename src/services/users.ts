@@ -1,9 +1,10 @@
 import { MongoServerError, ObjectId, type Filter, type WithId } from 'mongodb';
 import { hashPassword, verifyPassword } from '../auth/passwords.js';
 import { hashToken, newToken } from '../auth/tokens.js';
+import { istDay } from '../days.js';
 import type { Actor, Collections, UserDoc } from '../db/documents.js';
 import { ApiError } from '../http/errors.js';
-import type { AuthResponse, LifetimeStats, PublicUser } from '../types.js';
+import { LOGIN_BONUS, type AuthResponse, type LifetimeStats, type PublicUser } from '../types.js';
 
 export interface UserServiceOptions {
   defaultCoins: number;
@@ -51,15 +52,17 @@ export class UserService {
   ) {}
 
   async register(username: string, password: string, displayName: string): Promise<AuthResponse> {
+    // sign-up counts as the first login of the day
     const doc: Omit<UserDoc, '_id'> = {
       username,
       displayName,
       passwordHash: await hashPassword(password),
       role: 'user',
-      coins: this.opts.defaultCoins,
+      coins: this.opts.defaultCoins + LOGIN_BONUS,
       stats: { ...EMPTY_STATS },
       createdAt: new Date(),
       lastLoginAt: new Date(),
+      lastLoginBonusDay: istDay(),
     };
     let insertedId: ObjectId;
     try {
@@ -68,7 +71,11 @@ export class UserService {
       if (err instanceof MongoServerError && err.code === 11000) throw new ApiError(409, 'That username is taken');
       throw err;
     }
-    return { token: await this.createSession(insertedId), user: toPublicUser({ ...doc, _id: insertedId }) };
+    return {
+      token: await this.createSession(insertedId),
+      user: toPublicUser({ ...doc, _id: insertedId }),
+      bonus: LOGIN_BONUS,
+    };
   }
 
   async login(username: string, password: string): Promise<AuthResponse> {
@@ -77,7 +84,26 @@ export class UserService {
     // one message for both cases, so nobody can probe which usernames exist
     if (!user || !ok) throw new ApiError(401, 'Wrong username or password');
     await this.cols.users.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
-    return { token: await this.createSession(user._id), user: toPublicUser(user) };
+    const daily = await this.claimLoginBonus(user);
+    return { token: await this.createSession(user._id), user: toPublicUser(daily.user), bonus: daily.bonus };
+  }
+
+  /** +LOGIN_BONUS once per IST day; the date check is in the update itself, so it can't pay twice */
+  async claimLoginBonus(user: WithId<UserDoc>): Promise<{ user: WithId<UserDoc>; bonus: number }> {
+    const today = istDay();
+    if (user.lastLoginBonusDay === today) return { user, bonus: 0 };
+    const updated = await this.cols.users.findOneAndUpdate(
+      { _id: user._id, lastLoginBonusDay: { $ne: today } },
+      { $inc: { coins: LOGIN_BONUS }, $set: { lastLoginBonusDay: today } },
+      { returnDocument: 'after' },
+    );
+    return updated ? { user: updated, bonus: LOGIN_BONUS } : { user, bonus: 0 };
+  }
+
+  async getCoins(userIds: string[]): Promise<Map<string, number>> {
+    const ids = userIds.filter((id) => /^[a-f0-9]{24}$/i.test(id)).map((id) => new ObjectId(id));
+    const users = await this.cols.users.find({ _id: { $in: ids } }, { projection: { coins: 1 } }).toArray();
+    return new Map(users.map((u) => [u._id.toHexString(), u.coins]));
   }
 
   async logout(token: string): Promise<void> {
