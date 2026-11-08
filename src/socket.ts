@@ -1,6 +1,6 @@
 import type { Server } from 'socket.io';
 import { GameError } from './game.js';
-import type { Member } from './models.js';
+import type { GameEvent, GameRecord, Member, SocketHooks, SocketUser } from './models.js';
 import type { Room, RoomManager } from './rooms.js';
 import type { Announcement } from './types.js';
 import {
@@ -25,7 +25,7 @@ type Reply = (res: object) => void;
 type Seat = { room: Room; member: Member };
 
 /** Wires socket events to rooms; returns a stop function for the sweep timer */
-export function registerHandlers(io: Server, rooms: RoomManager): () => void {
+export function registerHandlers(io: Server, rooms: RoomManager, hooks: SocketHooks = {}): () => void {
   // every player gets their own view so hands stay private
   const broadcast = (room: Room) => {
     for (const m of room.members) if (m.socketId) io.to(m.socketId).emit('state', room.view(m.id));
@@ -36,8 +36,33 @@ export function registerHandlers(io: Server, rooms: RoomManager): () => void {
     for (const note of notes) io.to(room.code).emit('announce', note);
   };
 
+  const saveGame = (record: GameRecord | null) => {
+    if (record) hooks.onGameEnd?.(record);
+  };
+
+  const afterMove = (room: Room, events: GameEvent[]) => {
+    publish(room, room.announce(events));
+    if (events.some((e) => e.kind === 'gameOver')) saveGame(room.snapshot('finished'));
+  };
+
+  // a login token in the handshake makes this socket that account; no or bad token means guest
+  io.use((socket, next) => {
+    const token = (socket.handshake.auth as { token?: unknown } | undefined)?.token;
+    if (typeof token !== 'string' || !token || !hooks.resolveUser) return next();
+    hooks
+      .resolveUser(token)
+      .then((user) => {
+        if (user) socket.data.user = user;
+      })
+      .catch((err: Error) => console.error('[auth] token check failed:', err.message))
+      .finally(() => next());
+  });
+
   io.on('connection', (socket) => {
     const hits: number[] = [];
+    const user = socket.data.user as SocketUser | undefined;
+    // logged-in players always use their account name
+    const nameFrom = (p: Payload) => user?.displayName ?? parseName(p.name);
     let seat: Seat | null = null;
 
     const detach = (): Room | null => {
@@ -89,14 +114,14 @@ export function registerHandlers(io: Server, rooms: RoomManager): () => void {
     };
 
     on('room:create', (p) => {
-      const next = rooms.create(parseName(p.name));
+      const next = rooms.create(nameFrom(p), user?.id ?? null);
       attach(next);
       publish(next.room, [next.room.note('room', `${next.member.name} created the room`)]);
       return { code: next.room.code, token: next.member.token };
     });
 
     on('room:join', (p) => {
-      const next = rooms.join(parseCode(p.code), parseName(p.name));
+      const next = rooms.join(parseCode(p.code), nameFrom(p), user?.id ?? null);
       attach(next);
       const joined = next.member.watching ? `${next.member.name} is watching` : `${next.member.name} joined`;
       publish(next.room, [next.room.note('room', joined)]);
@@ -133,25 +158,26 @@ export function registerHandlers(io: Server, rooms: RoomManager): () => void {
     on('room:lobby', () => {
       const { room, member } = current();
       const wasPlaying = room.phase === 'playing';
+      // snapshot before the game is cleared; host-ended games are kept as history only
+      const record = wasPlaying ? room.snapshot('ended_early') : null;
       room.backToLobby(member.id);
+      saveGame(record);
       publish(room, wasPlaying ? [room.note('room', `${member.name} ended the game`)] : []);
     });
 
     on('game:play', (p) => {
       const { room, member } = current();
-      const events = room.requireGame().play(member.id, parseCardIds(p.cardIds), parseRank(p.rank));
-      publish(room, room.announce(events));
+      afterMove(room, room.requireGame().play(member.id, parseCardIds(p.cardIds), parseRank(p.rank)));
     });
 
     on('game:pass', () => {
       const { room, member } = current();
-      publish(room, room.announce(room.requireGame().pass(member.id)));
+      afterMove(room, room.requireGame().pass(member.id));
     });
 
     on('game:bluff', (p) => {
       const { room, member } = current();
-      const events = room.requireGame().callBluff(member.id, parsePlayId(p.playId), parseCardIndex(p.cardIndex));
-      publish(room, room.announce(events));
+      afterMove(room, room.requireGame().callBluff(member.id, parsePlayId(p.playId), parseCardIndex(p.cardIndex)));
     });
 
     on('chat:send', (p) => {

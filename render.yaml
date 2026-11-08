@@ -11,3 +11,5 @@ services:
         value: "22"
       - key: CLIENT_ORIGIN
         sync: false
+      - key: MONGODB_URI
+        sync: false

@@ -1,4 +1,4 @@
-import type { Card, Rank } from './types.js';
+import type { Award, Card, GameConfig, Rank } from './types.js';
 
 // Server-only shapes, never sent to clients as-is
 export interface Member {
@@ -10,6 +10,31 @@ export interface Member {
   lastSeen: number;
   /** no seat: joined mid-game or the room already had 5 players */
   watching: boolean;
+  /** account id when logged in; null for guests */
+  userId: string | null;
+}
+
+/** logged-in account attached to a socket */
+export interface SocketUser {
+  id: string;
+  displayName: string;
+}
+
+/** a finished (or host-ended) game, ready to be saved */
+export interface GameRecord {
+  roomCode: string;
+  config: GameConfig;
+  status: 'finished' | 'ended_early';
+  startedAt: Date;
+  endedAt: Date;
+  players: { memberId: string; userId: string | null; name: string; place: number | null; loser: boolean; stats: PlayerStats }[];
+  awards: Award[];
+}
+
+/** optional server features wired in by server.ts (accounts, saving games) */
+export interface SocketHooks {
+  resolveUser?: (token: string) => Promise<SocketUser | null>;
+  onGameEnd?: (record: GameRecord) => void;
 }
 
 /** per-player counts behind the end-of-game awards */

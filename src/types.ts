@@ -131,7 +131,48 @@ export interface RoomView {
   watch: WatchView | null;
 }
 
-export type AnnounceKind = 'play' | 'pass' | 'bluff' | 'round' | 'finish' | 'over' | 'room';
+export type Role = 'user' | 'admin';
+
+/** lifetime numbers stored on an account */
+export interface LifetimeStats {
+  gamesPlayed: number;
+  wins: number;
+  losses: number;
+  bluffs: number;
+  bluffsCaught: number;
+  goodCalls: number;
+  wrongCalls: number;
+  cardsPickedUp: number;
+}
+
+/** account data the API returns; never includes the password hash */
+export interface PublicUser {
+  id: string;
+  username: string;
+  displayName: string;
+  role: Role;
+  coins: number;
+  stats: LifetimeStats;
+  createdAt: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: PublicUser;
+}
+
+export interface GameSummary {
+  id: string;
+  roomCode: string;
+  endedAt: string;
+  status: 'finished' | 'ended_early';
+  place: number | null;
+  won: boolean;
+  lost: boolean;
+  players: { name: string; place: number | null; loser: boolean; guest: boolean }[];
+}
+
+export type AnnounceKind ='play' | 'pass' | 'bluff' | 'round' | 'finish' | 'over' | 'room';
 
 export interface Announcement {
   id: number;

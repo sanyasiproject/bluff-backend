@@ -1,0 +1,81 @@
+import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
+import { isAllowedOrigin } from '../config.js';
+import { GameError } from '../game.js';
+import type { Store } from '../services/store.js';
+import { ApiError } from './errors.js';
+import { rateLimit } from './middleware.js';
+import { adminRoutes } from './routes/admin.js';
+import { authRoutes } from './routes/auth.js';
+import { meRoutes } from './routes/me.js';
+
+export interface ApiOptions {
+  adminApiKey: string;
+  /** login, register and make-admin attempts per IP per 15 minutes */
+  authAttempts?: number;
+}
+
+/** HTTP side of the server: health check and the /api routes */
+export function createApi(store: Store | null, opts: ApiOptions): express.Express {
+  const app = express();
+  app.disable('x-powered-by');
+  // Render puts one proxy in front; this makes req.ip the player's address for rate limits
+  app.set('trust proxy', 1);
+  app.use(cors);
+  app.use(express.json({ limit: '10kb' }));
+
+  app.get('/health', (_req, res) => {
+    res.json({ ok: true, accounts: store ? 'on' : 'off' });
+  });
+  app.get('/', (_req, res) => {
+    res.type('text').send('Bluff game server is running');
+  });
+
+  if (store) {
+    const limited = rateLimit(opts.authAttempts ?? 20, 15 * 60_000);
+    app.use('/api/auth', authRoutes(store, limited));
+    app.use('/api/me', meRoutes(store));
+    app.use('/api/admin', adminRoutes(store, opts.adminApiKey, limited));
+  } else {
+    app.use('/api', (_req, _res, next) => next(new ApiError(503, 'Accounts are not set up on this server')));
+  }
+
+  app.use((_req, _res, next) => next(new ApiError(404, 'Not found')));
+  app.use(errorHandler);
+  return app;
+}
+
+// same allowed sites as the game socket; the API uses bearer tokens, not cookies
+const cors: RequestHandler = (req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && isAllowedOrigin(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Max-Age', '600');
+  }
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+};
+
+const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  if (err instanceof ApiError) {
+    res.status(err.status).json({ error: err.message });
+    return;
+  }
+  if (err instanceof GameError) {
+    res.status(400).json({ error: err.message });
+    return;
+  }
+  // express.json() rejects broken or oversized bodies with these
+  const status = (err as { status?: number }).status;
+  if (status === 400 || status === 413) {
+    res.status(status).json({ error: 'Invalid request body' });
+    return;
+  }
+  console.error('[api]', err);
+  res.status(500).json({ error: 'Something went wrong' });
+};

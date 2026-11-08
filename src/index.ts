@@ -1,7 +1,29 @@
-import { CLIENT_ORIGINS, PORT } from './config.js';
+import {
+  ADMIN_API_KEY,
+  CLIENT_ORIGINS,
+  DB_NAMES,
+  DEFAULT_COINS,
+  MONGODB_URI,
+  PORT,
+  SESSION_TTL_DAYS,
+} from './config.js';
 import { createBluffServer } from './server.js';
+import { createStore, type Store } from './services/store.js';
 
-const { httpServer, close } = createBluffServer();
+let store: Store | null = null;
+if (MONGODB_URI) {
+  try {
+    store = await createStore(MONGODB_URI, DB_NAMES, { defaultCoins: DEFAULT_COINS, sessionTtlDays: SESSION_TTL_DAYS });
+    console.log(`MongoDB connected: database "${DB_NAMES.db}"`);
+  } catch (err) {
+    // keep the game playable for guests even if the database is down
+    console.error('MongoDB connection failed, running guest-only:', (err as Error).message);
+  }
+} else {
+  console.log('MONGODB_URI not set: guest-only mode (no accounts)');
+}
+
+const { httpServer, close } = createBluffServer({ store, adminApiKey: ADMIN_API_KEY });
 
 httpServer.listen(PORT, () => {
   console.log(`Bluff server listening on port ${PORT}`);
@@ -10,11 +32,13 @@ httpServer.listen(PORT, () => {
       ? `Allowed origins: ${CLIENT_ORIGINS.join(', ')}`
       : 'CLIENT_ORIGIN not set: only localhost and home-network origins can connect',
   );
+  if (store && !ADMIN_API_KEY) console.log('ADMIN_API_KEY not set: only existing admins can make new admins');
 });
 
-const shutdown = () => {
+const shutdown = async () => {
   close();
+  await store?.close();
   process.exit(0);
 };
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+process.on('SIGTERM', () => void shutdown());
+process.on('SIGINT', () => void shutdown());
