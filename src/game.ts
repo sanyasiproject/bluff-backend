@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { buildDeck, secureRandom, shuffle, sortHand, type RandomInt } from './cards.js';
-import type { GameEvent, PlayRecord } from './models.js';
+import type { GameEvent, PlayerStats, PlayRecord } from './models.js';
 import { RANKS, type Card, type GameConfig, type Rank, type RevealView } from './types.js';
 
 /** Errors safe to show to the player */
@@ -9,6 +9,7 @@ export class GameError extends Error {}
 /** Pure game rules; knows nothing about sockets or rooms */
 export class Game {
   readonly hands = new Map<string, Card[]>();
+  readonly stats = new Map<string, PlayerStats>();
   pile: Card[] = [];
   roundRank: Rank | null = null;
   lastPlay: PlayRecord | null = null;
@@ -22,17 +23,16 @@ export class Game {
   constructor(
     readonly order: string[],
     readonly config: GameConfig,
-    private readonly rand: RandomInt = secureRandom,
+    rand: RandomInt = secureRandom,
   ) {
     if (order.length < 2 || order.length > 5) throw new GameError('Need 2 to 5 players');
-    for (const id of order) this.hands.set(id, []);
+    for (const id of order) {
+      this.hands.set(id, []);
+      this.stats.set(id, { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0 });
+    }
     shuffle(buildDeck(config.decks), rand).forEach((card, i) => this.hand(order[i % order.length]).push(card));
     for (const id of order) sortHand(this.hand(id));
     this.turnId = order[rand(order.length)];
-  }
-
-  get maxPerPlay(): number {
-    return 4 * this.config.decks;
   }
 
   hand(id: string): Card[] {
@@ -45,14 +45,10 @@ export class Game {
     this.assertTurn(playerId);
     const hand = this.hand(playerId);
     const picked = new Set(cardIds);
-    if (picked.size !== cardIds.length || cardIds.length < 1 || cardIds.length > this.maxPerPlay) {
-      throw new GameError(`Play 1 to ${this.maxPerPlay} cards`);
-    }
-    // shuffled so a card's position in the play gives nothing away when the caller picks one
-    const cards = shuffle(
-      hand.filter((c) => picked.has(c.id)),
-      this.rand,
-    );
+    if (cardIds.length < 1) throw new GameError('Put down at least 1 card');
+    if (picked.size !== cardIds.length) throw new GameError('Each card can only be played once');
+    // kept in the order the player tapped them; others see and pick from that same order
+    const cards = cardIds.map((id) => hand.find((c) => c.id === id)).filter((c): c is Card => c !== undefined);
     if (cards.length !== cardIds.length) throw new GameError('You do not have those cards');
     if (this.roundRank && rank && rank !== this.roundRank) throw new GameError(`This round is ${this.roundRank}`);
     const claim = this.roundRank ?? rank;
@@ -61,6 +57,7 @@ export class Game {
     const events = this.settleLastPlay();
     if (this.over) return events;
 
+    if (cards.some((c) => c.rank !== claim)) this.stat(playerId).bluffs++;
     this.hands.set(playerId, hand.filter((c) => !picked.has(c.id)));
     this.pile.push(...cards);
     this.roundRank = claim;
@@ -105,6 +102,13 @@ export class Game {
     const loserId = bluff ? play.playerId : callerId;
     const winnerId = bluff ? callerId : play.playerId;
     const pileCount = this.pile.length;
+    if (bluff) {
+      this.stat(callerId).goodCalls++;
+      this.stat(play.playerId).caught++;
+    } else {
+      this.stat(callerId).wrongCalls++;
+    }
+    this.stat(loserId).pickedUp += pileCount;
     this.hands.set(loserId, sortHand([...this.hand(loserId), ...this.pile]));
     this.pile = [];
     this.reveal = {
@@ -158,6 +162,12 @@ export class Game {
       events.push({ kind: 'gameOver', loserId: this.loserId });
     }
     return events;
+  }
+
+  private stat(id: string): PlayerStats {
+    const s = this.stats.get(id);
+    if (!s) throw new GameError('You are not in this game');
+    return s;
   }
 
   private assertTurn(playerId: string): void {

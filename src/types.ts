@@ -21,6 +21,65 @@ export interface GameConfig {
 
 export type Phase = 'lobby' | 'playing' | 'over';
 
+export const REACTIONS = ['😂', '🤥', '👀', '🔥', '😱', '👏', '🤡', '😎'] as const;
+
+export const QUICK_MESSAGES = [
+  'Bluff hai! 🤥',
+  'Sach bol raha hoon 😇',
+  'Pakka? 🤨',
+  'Jaldi chal bhai! ⏰',
+  'Chehra bata raha hai, jhooth hai 👀',
+  'Itne saare? Pakka jhooth 🤣',
+  'Mujhe sab pata hai 🧐',
+  'Main toh seedha-saadha hoon 😇',
+  'Nice try 😏',
+  'Ab tu gaya 😈',
+  'Bhai tu toh gaya kaam se 💀',
+  'Bach gaya! 😅',
+  'Trust me 😉',
+  'Soch le, phir mat bolna 😏',
+  'Chal jhooth mat bol 🙄',
+  'Sab mile hue hain kya? 🕵️',
+  'Kya chaal hai! 🔥',
+  'Aaj meri raat hai 😎',
+  'Patte dekh ke rona aa gaya 😭',
+  'Kismat kharab hai yaar 🤦',
+  'Hasna mana hai 🤐',
+  'Sorry yaar 🙏',
+  'Bas kar bhai 😂',
+  'Chai break? ☕',
+  'Ek aur round! 🔁',
+  'GG 🎉',
+] as const;
+
+export type ChatKind = 'reaction' | 'message';
+
+/** index points into REACTIONS or QUICK_MESSAGES, so no free text ever goes through the server */
+export interface ChatEvent {
+  from: string;
+  kind: ChatKind;
+  index: number;
+}
+
+export interface WatcherView {
+  id: string;
+  name: string;
+  connected: boolean;
+}
+
+/** sent only to watchers: every hand and the real cards of the last play */
+export interface WatchView {
+  hands: Record<string, Card[]>;
+  lastPlayCards: Card[] | null;
+}
+
+export interface Award {
+  emoji: string;
+  title: string;
+  playerIds: string[];
+  detail: string;
+}
+
 export interface PublicPlayer {
   id: string;
   name: string;
@@ -56,6 +115,8 @@ export interface RoomView {
   phase: Phase;
   config: GameConfig;
   players: PublicPlayer[];
+  /** people in the room without a seat in the current game */
+  watchers: WatcherView[];
   turnId: string | null;
   roundRank: Rank | null;
   pileCount: number;
@@ -64,7 +125,10 @@ export interface RoomView {
   reveal: RevealView | null;
   hand: Card[];
   loserId: string | null;
-  maxPerPlay: number;
+  /** filled once the game is over */
+  awards: Award[];
+  /** null for seated players, so they never receive anyone else's cards */
+  watch: WatchView | null;
 }
 
 export type AnnounceKind = 'play' | 'pass' | 'bluff' | 'round' | 'finish' | 'over' | 'room';

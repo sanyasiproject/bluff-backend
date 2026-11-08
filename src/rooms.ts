@@ -1,16 +1,21 @@
 import { randomBytes, randomInt } from 'node:crypto';
+import { computeAwards } from './awards.js';
 import { describeClaim, ordinal } from './cards.js';
 import { Game, GameError } from './game.js';
 import type { GameEvent, Member } from './models.js';
-import type { AnnounceKind, Announcement, GameConfig, Phase, RoomView } from './types.js';
+import type { AnnounceKind, Announcement, ChatEvent, ChatKind, GameConfig, Phase, RoomView } from './types.js';
 
 export const MAX_PLAYERS = 5;
+/** seated players plus watchers */
+export const MAX_MEMBERS = 12;
 const MAX_ROOMS = 200;
 const CODE_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 /** a disconnected player keeps their lobby seat this long */
 const LOBBY_GRACE_MS = 2 * 60_000;
 /** a room with nobody connected is deleted after this long */
 const ROOM_IDLE_MS = 30 * 60_000;
+/** minimum gap between one person's chat messages */
+const CHAT_GAP_MS = 700;
 
 export class Room {
   members: Member[] = [];
@@ -18,12 +23,18 @@ export class Room {
   config: GameConfig = { decks: 1, bluffRule: 'all' };
   game: Game | null = null;
   private announceSeq = 0;
+  private lastChat = new Map<string, number>();
 
   constructor(readonly code: string) {}
 
   get phase(): Phase {
     if (!this.game) return 'lobby';
     return this.game.over ? 'over' : 'playing';
+  }
+
+  /** members with a seat */
+  players(): Member[] {
+    return this.members.filter((m) => !m.watching);
   }
 
   member(id: string): Member {
@@ -33,8 +44,7 @@ export class Room {
   }
 
   addMember(name: string): Member {
-    if (this.phase === 'playing') throw new GameError('Game already started in this room');
-    if (this.members.length >= MAX_PLAYERS) throw new GameError(`Room is full (max ${MAX_PLAYERS})`);
+    if (this.members.length >= MAX_MEMBERS) throw new GameError(`Room is full (max ${MAX_MEMBERS})`);
     if (this.members.some((m) => m.name.toLowerCase() === name.toLowerCase())) {
       throw new GameError('That name is taken in this room');
     }
@@ -44,6 +54,8 @@ export class Room {
       name,
       socketId: null,
       lastSeen: Date.now(),
+      // late or extra people watch, and get a seat in the next game
+      watching: this.phase === 'playing' || this.players().length >= MAX_PLAYERS,
     };
     this.members.push(member);
     if (!this.hostId) this.hostId = member.id;
@@ -51,9 +63,12 @@ export class Room {
   }
 
   removeMember(id: string): void {
-    if (this.phase === 'playing') throw new GameError('You cannot leave in the middle of a game');
+    const leaving = this.member(id);
+    if (this.phase === 'playing' && !leaving.watching) throw new GameError('You cannot leave in the middle of a game');
     this.members = this.members.filter((m) => m.id !== id);
-    if (this.hostId === id) this.hostId = this.members[0]?.id ?? '';
+    this.lastChat.delete(id);
+    if (this.phase === 'lobby') this.fillSeats();
+    if (this.hostId === id) this.hostId = (this.players()[0] ?? this.members[0])?.id ?? '';
   }
 
   setConfig(by: string, config: GameConfig): void {
@@ -65,9 +80,10 @@ export class Room {
   start(by: string): void {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Game already started');
-    if (this.members.length < 2) throw new GameError('Need at least 2 players');
+    const players = this.players();
+    if (players.length < 2) throw new GameError('Need at least 2 players');
     this.game = new Game(
-      this.members.map((m) => m.id),
+      players.map((m) => m.id),
       this.config,
     );
   }
@@ -78,6 +94,7 @@ export class Room {
       throw new GameError('Only the host can end the game');
     }
     this.game = null;
+    this.fillSeats();
   }
 
   requireGame(): Game {
@@ -85,22 +102,36 @@ export class Room {
     return this.game;
   }
 
+  chat(by: string, kind: ChatKind, index: number): ChatEvent {
+    this.member(by);
+    const now = Date.now();
+    if (now - (this.lastChat.get(by) ?? 0) < CHAT_GAP_MS) throw new GameError('Slow down');
+    this.lastChat.set(by, now);
+    return { from: by, kind, index };
+  }
+
   view(meId: string): RoomView {
     const g = this.game;
     const lp = g?.lastPlay;
+    // during a game the seats are that game's players; everyone else watches
+    const seated = g ? g.order.flatMap((id) => this.members.filter((m) => m.id === id)) : this.players();
+    const seatedIds = new Set(seated.map((m) => m.id));
     return {
       code: this.code,
       meId,
       hostId: this.hostId,
       phase: this.phase,
       config: g?.config ?? this.config,
-      players: this.members.map((m) => ({
+      players: seated.map((m) => ({
         id: m.id,
         name: m.name,
         connected: m.socketId !== null,
         cardCount: g?.hands.get(m.id)?.length ?? 0,
         place: g ? g.places.indexOf(m.id) + 1 || null : null,
       })),
+      watchers: this.members
+        .filter((m) => !seatedIds.has(m.id))
+        .map((m) => ({ id: m.id, name: m.name, connected: m.socketId !== null })),
       turnId: g?.turnId ?? null,
       roundRank: g?.roundRank ?? null,
       pileCount: g?.pile.length ?? 0,
@@ -109,7 +140,15 @@ export class Room {
       reveal: g?.reveal ?? null,
       hand: [...(g?.hands.get(meId) ?? [])],
       loserId: g?.loserId ?? null,
-      maxPerPlay: 4 * (g?.config ?? this.config).decks,
+      awards: g?.over ? computeAwards(g.stats) : [],
+      // only people without a seat see the cards; seated players never get this
+      watch:
+        g && !seatedIds.has(meId)
+          ? {
+              hands: Object.fromEntries(g.order.map((id) => [id, [...(g.hands.get(id) ?? [])]])),
+              lastPlayCards: lp ? [...lp.cards] : null,
+            }
+          : null,
     };
   }
 
@@ -141,8 +180,18 @@ export class Room {
         return ['round', `Everyone passed. ${n(e.starterId)} starts a new round`];
       case 'finish':
         return ['finish', `${n(e.playerId)} finished ${ordinal(e.place)}`];
-      case 'gameOver':
-        return ['over', e.loserId ? `Game over. ${n(e.loserId)} is the loser` : 'Game over'];
+      case 'gameOver': {
+        const liar = this.game ? computeAwards(this.game.stats).find((a) => a.title === 'Biggest liar') : undefined;
+        const loser = e.loserId ? `Game over. ${n(e.loserId)} is the loser` : 'Game over';
+        return ['over', liar ? `${loser}. Biggest liar: ${liar.playerIds.map(n).join(' and ')}` : loser];
+      }
+    }
+  }
+
+  /** watchers take free seats in the order they joined */
+  private fillSeats(): void {
+    for (const m of this.members) {
+      if (m.watching && this.players().length < MAX_PLAYERS) m.watching = false;
     }
   }
 
@@ -183,7 +232,7 @@ export class RoomManager {
     return room;
   }
 
-  /** drops stale lobby seats and idle rooms; returns rooms whose player list changed */
+  /** drops stale lobby seats, stale watchers and idle rooms; returns rooms whose member list changed */
   sweep(now = Date.now()): Room[] {
     const changed: Room[] = [];
     for (const room of this.rooms.values()) {
@@ -191,8 +240,9 @@ export class RoomManager {
         this.rooms.delete(room.code);
         continue;
       }
-      if (room.phase !== 'lobby') continue;
-      const stale = room.members.filter((m) => !m.socketId && now - m.lastSeen > LOBBY_GRACE_MS);
+      const stale = room.members.filter(
+        (m) => !m.socketId && now - m.lastSeen > LOBBY_GRACE_MS && (room.phase === 'lobby' || m.watching),
+      );
       if (stale.length === 0) continue;
       stale.forEach((m) => room.removeMember(m.id));
       changed.push(room);

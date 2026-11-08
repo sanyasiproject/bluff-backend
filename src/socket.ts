@@ -7,6 +7,7 @@ import {
   asPayload,
   parseCardIds,
   parseCardIndex,
+  parseChat,
   parseCode,
   parseConfig,
   parseName,
@@ -97,7 +98,8 @@ export function registerHandlers(io: Server, rooms: RoomManager): () => void {
     on('room:join', (p) => {
       const next = rooms.join(parseCode(p.code), parseName(p.name));
       attach(next);
-      publish(next.room, [next.room.note('room', `${next.member.name} joined`)]);
+      const joined = next.member.watching ? `${next.member.name} is watching` : `${next.member.name} joined`;
+      publish(next.room, [next.room.note('room', joined)]);
       return { code: next.room.code, token: next.member.token };
     });
 
@@ -150,6 +152,12 @@ export function registerHandlers(io: Server, rooms: RoomManager): () => void {
       const { room, member } = current();
       const events = room.requireGame().callBluff(member.id, parsePlayId(p.playId), parseCardIndex(p.cardIndex));
       publish(room, room.announce(events));
+    });
+
+    on('chat:send', (p) => {
+      const { room, member } = current();
+      const { kind, index } = parseChat(p);
+      io.to(room.code).emit('chat', room.chat(member.id, kind, index));
     });
 
     socket.on('disconnect', () => {

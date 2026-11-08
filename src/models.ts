@@ -8,6 +8,17 @@ export interface Member {
   name: string;
   socketId: string | null;
   lastSeen: number;
+  /** no seat: joined mid-game or the room already had 5 players */
+  watching: boolean;
+}
+
+/** per-player counts behind the end-of-game awards */
+export interface PlayerStats {
+  bluffs: number;
+  caught: number;
+  goodCalls: number;
+  wrongCalls: number;
+  pickedUp: number;
 }
 
 export interface PlayRecord {

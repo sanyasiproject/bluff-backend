@@ -25,14 +25,17 @@ npm test         # game rules + socket tests
 - Free instances sleep after 15 min without traffic; the first connection after that takes up to about a minute.
 - Rooms live in memory: a redeploy or restart ends running games, and players land back on the home screen. Don't deploy while friends are playing.
 - Without `CLIENT_ORIGIN` only localhost and home-network (192.168.x / 10.x / 172.16–31.x) pages can connect.
-- Limits: 5 players per room, 200 rooms, 40 events per 10 s per connection, names up to 16 characters.
+- Limits: 5 players + up to 7 watchers per room (12 people), 200 rooms, 40 events per 10 s per connection, one chat message per 0.7 s, names up to 16 characters.
+- People who join mid-game, or when 5 are seated, watch; they take free seats when the room returns to the lobby.
+- Chat only sends an index into the fixed `REACTIONS` / `QUICK_MESSAGES` lists in `src/types.ts`, so there is no free text to moderate.
 
 ## Code map
 
 | File | What it does |
 |---|---|
 | `src/game.ts` | Game rules: deal, play, pass, bluff (both rules), finishing order |
-| `src/rooms.ts` | Rooms, seats, host, lobby settings, spoken announcement text |
+| `src/rooms.ts` | Rooms, seats and watchers, host, lobby settings, chat throttle, spoken announcement text |
+| `src/awards.ts` | End-of-game awards (Biggest liar, Best detective, …) from per-player stats |
 | `src/socket.ts` | Socket events, per-player state, rate limit, rejoin |
 | `src/validate.ts` | Checks every incoming payload |
 | `src/types.ts` | Shapes shared with the frontend (copy kept in `bluff-frontend/src/types.ts`) |
@@ -49,5 +52,6 @@ npm test         # game rules + socket tests
 | `game:play` | `{ cardIds, rank? }` (rank only when starting a round) |
 | `game:pass` | – |
 | `game:bluff` | `{ playId, cardIndex? }` (`cardIndex` for the "pick one" rule) |
+| `chat:send` | `{ kind: 'reaction' \| 'message', index }` |
 
-Server → client: `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud by the app), `session:replaced`.
+Server → client: `state` (that player's `RoomView`, with `watchers` and end-of-game `awards`), `announce` (`{ kind, text }`, read aloud by the app), `chat` (`{ from, kind, index }`), `session:replaced`.

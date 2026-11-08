@@ -1,5 +1,5 @@
 import { GameError } from './game.js';
-import { RANKS, type GameConfig, type Rank } from './types.js';
+import { QUICK_MESSAGES, RANKS, REACTIONS, type ChatKind, type GameConfig, type Rank } from './types.js';
 
 export type Payload = Record<string, unknown>;
 
@@ -31,8 +31,9 @@ export function parseConfig(p: Payload): GameConfig {
   return { decks, bluffRule };
 }
 
+/** no per-play limit; 104 (two full decks) is just a sanity cap */
 export function parseCardIds(value: unknown): string[] {
-  const valid = Array.isArray(value) && value.length <= 8 && value.every((id) => typeof id === 'string' && id.length <= 8);
+  const valid = Array.isArray(value) && value.length <= 104 && value.every((id) => typeof id === 'string' && id.length <= 8);
   if (!valid) throw new GameError('Invalid cards');
   return value as string[];
 }
@@ -46,6 +47,17 @@ export function parseRank(value: unknown): Rank | undefined {
 export function parsePlayId(value: unknown): string {
   if (typeof value !== 'string' || value.length > 64) throw new GameError('Invalid play');
   return value;
+}
+
+/** only picks from the fixed lists, never free text */
+export function parseChat(p: Payload): { kind: ChatKind; index: number } {
+  const kind = p.kind === 'reaction' || p.kind === 'message' ? p.kind : null;
+  const size = kind === 'reaction' ? REACTIONS.length : QUICK_MESSAGES.length;
+  const index = p.index;
+  if (!kind || typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= size) {
+    throw new GameError('Invalid message');
+  }
+  return { kind, index };
 }
 
 export function parseCardIndex(value: unknown): number | undefined {

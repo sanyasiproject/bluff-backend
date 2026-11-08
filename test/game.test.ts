@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { computeAwards } from '../src/awards.js';
 import { Game } from '../src/game.js';
 import type { Card, GameConfig, Rank, Suit } from '../src/types.js';
 
@@ -25,11 +26,10 @@ describe('dealing', () => {
     expect(players).toContain(g.turnId);
   });
 
-  it('deals 104 cards with two decks and allows 8 per play', () => {
+  it('deals 104 cards with two decks', () => {
     const g = new Game(['a', 'b', 'c'], { decks: 2, bluffRule: 'one' });
     expect(['a', 'b', 'c'].map((p) => g.hand(p).length)).toEqual([35, 35, 34]);
     expect(new Set([...g.hands.values()].flat().map((c) => c.id)).size).toBe(104);
-    expect(g.maxPerPlay).toBe(8);
   });
 
   it('needs 2 to 5 players', () => {
@@ -57,10 +57,20 @@ describe('turns', () => {
     expect(() => g.play('b', ids(b1), 'K')).toThrow('Not your turn');
     expect(() => g.pass('a')).toThrow('You start this round');
     expect(() => g.play('a', ['nope'], 'A')).toThrow('do not have');
-    expect(() => g.play('a', ids(a[0], a[0]), 'A')).toThrow('Play 1 to 4');
-    expect(() => g.play('a', ids(...a), 'A')).toThrow('Play 1 to 4');
+    expect(() => g.play('a', [], 'A')).toThrow('at least 1 card');
+    expect(() => g.play('a', ids(a[0], a[0]), 'A')).toThrow('only be played once');
     g.play('a', ids(a[0]), 'A');
     expect(() => g.play('b', ids(b1), 'K')).toThrow('This round is A');
+  });
+
+  it('allows any number of cards and keeps the order they were tapped', () => {
+    const hand = [card('A'), card('2'), card('3'), card('4'), card('5'), card('6'), card('7')];
+    const g = setup(['a', 'b'], { a: [...hand, card('K')], b: [card('9')] });
+    const tapped = [hand[4], hand[0], hand[6], hand[2], hand[1], hand[5], hand[3]];
+    expect(g.play('a', ids(...tapped), '7')).toEqual([{ kind: 'play', playerId: 'a', count: 7, rank: '7' }]);
+    expect(g.lastPlay!.cards).toEqual(tapped);
+    expect(g.pile).toEqual(tapped);
+    expect(g.hand('a').map((c) => c.rank)).toEqual(['K']);
   });
 
   it('when everyone else passes the pile is discarded and the last player starts', () => {
@@ -138,14 +148,12 @@ describe('bluff rule: caller picks one card', () => {
     expect(g.reveal).toMatchObject({ bluff: false, loserId: 'b', pickedIndex: 0, cards: [q, null] });
   });
 
-  it('shuffles played cards so their position gives nothing away', () => {
+  it('card positions follow the order the player tapped', () => {
     const [q, five] = [card('Q'), card('5')];
-    const g = new Game(['a', 'b'], { decks: 1, bluffRule: 'one' }, () => 0);
-    g.hands.set('a', [q, five]);
-    g.hands.set('b', [card('2')]);
-    g.turnId = 'a';
-    g.play('a', ids(q, five), 'Q');
-    expect(g.lastPlay!.cards).toEqual([five, q]);
+    const g = setup(['a', 'b'], { a: [q, five, card('9')], b: [card('2')] }, { bluffRule: 'one' });
+    g.play('a', ids(five, q), 'Q');
+    g.callBluff('b', g.lastPlay!.id, 0);
+    expect(g.reveal).toMatchObject({ bluff: true, loserId: 'a', pickedIndex: 0, cards: [five, null] });
   });
 
   it('picking the lie catches the bluffer', () => {
@@ -155,6 +163,37 @@ describe('bluff rule: caller picks one card', () => {
     g.callBluff('b', g.lastPlay!.id, 1);
     expect(g.reveal).toMatchObject({ bluff: true, loserId: 'a', cards: [null, five] });
     expect(g.hand('a')).toHaveLength(3);
+  });
+});
+
+describe('end-of-game awards', () => {
+  it('counts bluffs, calls and pickups', () => {
+    const [q, five, k1, k2] = [card('Q'), card('5'), card('K'), card('K', 'H')];
+    const g = setup(['a', 'b', 'c'], { a: [q, five, card('9')], b: [k1, k2, card('8')], c: [card('3'), card('4')] });
+    g.play('a', ids(five), 'Q');
+    g.callBluff('b', g.lastPlay!.id);
+    g.play('b', ids(k1, k2), 'K');
+    g.callBluff('c', g.lastPlay!.id);
+    expect(g.stats.get('a')).toEqual({ bluffs: 1, caught: 1, goodCalls: 0, wrongCalls: 0, pickedUp: 1 });
+    expect(g.stats.get('b')).toEqual({ bluffs: 0, caught: 0, goodCalls: 1, wrongCalls: 0, pickedUp: 0 });
+    expect(g.stats.get('c')).toEqual({ bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 1, pickedUp: 2 });
+    expect(computeAwards(g.stats)).toEqual([
+      { emoji: '🤥', title: 'Biggest liar', playerIds: ['a'], detail: '1 bluff' },
+      { emoji: '🕵️', title: 'Best detective', playerIds: ['b'], detail: 'caught 1 bluff' },
+      { emoji: '🙈', title: 'Trust issues', playerIds: ['c'], detail: '1 wrong call' },
+      { emoji: '🧲', title: 'Card collector', playerIds: ['c'], detail: 'picked up 2 cards' },
+    ]);
+  });
+
+  it('shares an award on a tie and credits bluffs nobody caught', () => {
+    const [a5, b5] = [card('5'), card('5', 'H')];
+    const g = setup(['a', 'b', 'c'], { a: [a5, card('9')], b: [b5, card('8')], c: [card('3')] });
+    g.play('a', ids(a5), 'Q');
+    g.play('b', ids(b5));
+    const liar = computeAwards(g.stats).find((x) => x.title === 'Biggest liar');
+    const smooth = computeAwards(g.stats).find((x) => x.title === 'Smoothest liar');
+    expect(liar).toMatchObject({ playerIds: ['a', 'b'], detail: '1 bluff' });
+    expect(smooth).toMatchObject({ playerIds: ['a', 'b'], detail: '1 bluff never caught' });
   });
 });
 

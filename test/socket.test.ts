@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 import { io as connect, type Socket } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBluffServer } from '../src/server.js';
-import type { Announcement, RoomView } from '../src/types.js';
+import type { Announcement, ChatEvent, RoomView } from '../src/types.js';
 
 type Client = { socket: Socket; state: RoomView | null; notes: Announcement[] };
 type Res = { ok: boolean; error?: string; code?: string; token?: string };
@@ -105,17 +105,68 @@ describe('socket server', () => {
     expect(a2.state!.hostId).toBe(a2.state!.meId);
   });
 
-  it('rejects a sixth player and bad input', async () => {
+  it('seats five players, lets the next people watch, and caps the room at 12', async () => {
     const host = await client();
     const { code } = await send(host, 'room:create', { name: 'P1' });
     for (const name of ['P2', 'P3', 'P4', 'P5']) {
       expect(await send(await client(), 'room:join', { code, name })).toMatchObject({ ok: true });
     }
+    const sixth = await client();
+    expect(await send(sixth, 'room:join', { code, name: 'P6' })).toMatchObject({ ok: true });
+    await until(() => sixth.state?.watchers.some((w) => w.name === 'P6') === true);
+    expect(sixth.state!.players).toHaveLength(5);
+    for (const name of ['W2', 'W3', 'W4', 'W5', 'W6', 'W7']) {
+      expect(await send(await client(), 'room:join', { code, name })).toMatchObject({ ok: true });
+    }
     const extra = await client();
-    expect(await send(extra, 'room:join', { code, name: 'P6' })).toEqual({ ok: false, error: 'Room is full (max 5)' });
+    expect(await send(extra, 'room:join', { code, name: 'X' })).toEqual({ ok: false, error: 'Room is full (max 12)' });
     expect(await send(extra, 'room:join', { code, name: '   ' })).toMatchObject({ ok: false });
     expect(await send(extra, 'room:join', { code: 'AB', name: 'X' })).toEqual({ ok: false, error: 'Room code is 4 letters' });
     expect(await send(extra, 'game:pass')).toEqual({ ok: false, error: 'Join a room first' });
+  });
+
+  it('lets late friends watch and chat, then seats them for the next game', async () => {
+    const [a, b, late] = [await client(), await client(), await client()];
+    const { code } = await send(a, 'room:create', { name: 'Host' });
+    await send(b, 'room:join', { code, name: 'Guest' });
+    await send(a, 'room:start');
+    expect(await send(late, 'room:join', { code, name: 'Late' })).toMatchObject({ ok: true });
+    await until(() => late.state?.phase === 'playing');
+    expect(late.state!.players.map((p) => p.name)).toEqual(['Host', 'Guest']);
+    expect(late.state!.watchers.map((w) => w.name)).toEqual(['Late']);
+    expect(late.state!.hand).toEqual([]);
+    expect(await send(late, 'game:pass')).toEqual({ ok: false, error: 'Not your turn' });
+    expect(a.notes.at(-1)?.text).toBe('Late is watching');
+
+    // the watcher sees every hand; seated players only ever get their own
+    expect(late.state!.watch!.hands[a.state!.meId]).toEqual(a.state!.hand);
+    expect(late.state!.watch!.hands[b.state!.meId]).toEqual(b.state!.hand);
+    expect(a.state!.watch).toBeNull();
+    expect(b.state!.watch).toBeNull();
+    expect(b.state!.hand.some((c) => JSON.stringify(a.state).includes(`"${c.id}"`))).toBe(false);
+
+    // ...and the real cards of each play, in the order they were tapped
+    const mover = [a, b].find((x) => x.state!.turnId === x.state!.meId)!;
+    const played = [mover.state!.hand[3], mover.state!.hand[0]];
+    await send(mover, 'game:play', { cardIds: played.map((c) => c.id), rank: 'Q' });
+    await until(() => late.state?.lastPlay?.count === 2);
+    expect(late.state!.watch!.lastPlayCards).toEqual(played);
+    await until(() => a.state?.lastPlay?.count === 2 && b.state?.lastPlay?.count === 2);
+    expect(a.state!.watch).toBeNull();
+    expect(JSON.stringify(a.state === mover.state ? b.state : a.state)).not.toContain(`"${played[0].id}"`);
+
+    const chats: ChatEvent[] = [];
+    a.socket.on('chat', (c: ChatEvent) => chats.push(c));
+    expect(await send(late, 'chat:send', { kind: 'reaction', index: 1 })).toEqual({ ok: true });
+    expect(await send(late, 'chat:send', { kind: 'message', index: 0 })).toEqual({ ok: false, error: 'Slow down' });
+    expect(await send(late, 'chat:send', { kind: 'message', index: 999 })).toEqual({ ok: false, error: 'Invalid message' });
+    await until(() => chats.length === 1);
+    expect(chats[0]).toEqual({ from: late.state!.meId, kind: 'reaction', index: 1 });
+
+    expect(await send(a, 'room:lobby')).toEqual({ ok: true });
+    await until(() => late.state?.phase === 'lobby');
+    expect(late.state!.players.map((p) => p.name)).toEqual(['Host', 'Guest', 'Late']);
+    expect(late.state!.watchers).toEqual([]);
   });
 
   it('blocks browser connections from unknown sites', async () => {
