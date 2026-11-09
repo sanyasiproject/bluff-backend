@@ -2,7 +2,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import { computeAwards } from './awards.js';
 import { describeClaim, ordinal } from './cards.js';
 import { Game, GameError } from './game.js';
-import type { GameEvent, GameRecord, Member } from './models.js';
+import type { GameEvent, GameRecord, Member, MemberAccount } from './models.js';
 import type { AnnounceKind, Announcement, ChatEvent, ChatKind, CoinResult, GameConfig, Phase, RoomView } from './types.js';
 
 export const MAX_PLAYERS = 5;
@@ -52,9 +52,9 @@ export class Room {
     return m;
   }
 
-  addMember(name: string, userId: string | null = null, coins: number | null = null): Member {
+  addMember(name: string, account: MemberAccount | null = null): Member {
     if (this.members.length >= MAX_MEMBERS) throw new GameError(`Room is full (max ${MAX_MEMBERS})`);
-    if (userId && this.members.some((m) => m.userId === userId)) throw new GameError('Your account is already in this room');
+    if (account && this.members.some((m) => m.userId === account.userId)) throw new GameError('Your account is already in this room');
     if (this.members.some((m) => m.name.toLowerCase() === name.toLowerCase())) {
       throw new GameError('That name is taken in this room');
     }
@@ -66,8 +66,10 @@ export class Room {
       lastSeen: Date.now(),
       // late or extra people watch, and get a seat in the next game
       watching: this.phase === 'playing' || this.players().length >= MAX_PLAYERS,
-      userId,
-      coins: userId ? coins : null,
+      userId: account?.userId ?? null,
+      coins: account?.coins ?? null,
+      username: account?.username ?? null,
+      level: account?.level ?? null,
     };
     this.members.push(member);
     if (!this.hostId) this.hostId = member.id;
@@ -198,10 +200,12 @@ export class Room {
         place: g ? g.places.indexOf(m.id) + 1 || null : null,
         registered: m.userId !== null,
         coins: m.coins,
+        username: m.username,
+        level: m.level,
       })),
       watchers: this.members
         .filter((m) => !seatedIds.has(m.id))
-        .map((m) => ({ id: m.id, name: m.name, connected: m.socketId !== null })),
+        .map((m) => ({ id: m.id, name: m.name, connected: m.socketId !== null, username: m.username, level: m.level })),
       turnId: g?.turnId ?? null,
       roundRank: g?.roundRank ?? null,
       pileCount: g?.pile.length ?? 0,
@@ -277,7 +281,7 @@ export class Room {
 export class RoomManager {
   private rooms = new Map<string, Room>();
 
-  create(name: string, userId: string | null = null, coins: number | null = null): { room: Room; member: Member } {
+  create(name: string, account: MemberAccount | null = null): { room: Room; member: Member } {
     if (this.rooms.size >= MAX_ROOMS) throw new GameError('Server is busy, try again later');
     let code = '';
     do {
@@ -285,12 +289,12 @@ export class RoomManager {
     } while (this.rooms.has(code));
     const room = new Room(code);
     this.rooms.set(code, room);
-    return { room, member: room.addMember(name, userId, coins) };
+    return { room, member: room.addMember(name, account) };
   }
 
-  join(code: string, name: string, userId: string | null = null, coins: number | null = null): { room: Room; member: Member } {
+  join(code: string, name: string, account: MemberAccount | null = null): { room: Room; member: Member } {
     const room = this.get(code);
-    return { room, member: room.addMember(name, userId, coins) };
+    return { room, member: room.addMember(name, account) };
   }
 
   rejoin(code: string, token: string): { room: Room; member: Member } {

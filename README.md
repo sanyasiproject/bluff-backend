@@ -36,7 +36,8 @@ Everything else has a built-in default: database `bluff`; collections `users`, `
 ## Coins
 
 - New accounts get 1000 coins. **+200** on the first login (or app open) of each India-time day, sign-up day included.
-- **+500** for the first *finished* game of each day, win or lose.
+- **Daily games ladder** (IST day, win or lose): reaching 1 / 3 / 5 / 10 / 20 / 50 finished games pays +100 / +300 / +500 / +1,000 / +2,000 / +5,000 (up to 8,900 a day). Only games of 1 minute or more count (`DAILY_GAME_REWARDS`, `MIN_REWARD_GAME_SEC` in `src/types.ts`).
+- **Levels** come from lifetime stats (`levelOf` in `src/types.ts`) and are shown next to every logged-in player.
 - **Stakes** (host picks in the lobby): Free, 50, 100, 250, 500, 1K, 5K, 10K, 50K, 1L, 5L, 10L per player. Start checks everyone can pay; guests can only play Free games.
 - Coins move only when a game **finishes**: every logged-in player pays the stake and the winner (1st place) gets the whole pot. A game stopped by the host, or by kicks leaving one player before anyone finished, moves nothing. A kicked player pays nothing and wins nothing.
 - Every finished game stores the stake, pot and each player's coin change in `games`.

@@ -6,6 +6,7 @@ import type { Actor, AuditDoc, Collections, UserDoc } from '../db/documents.js';
 import { ApiError } from '../http/errors.js';
 import {
   HISTORY_PAGE_SIZE,
+  levelOf,
   LOGIN_BONUS,
   type AdminUser,
   type AuditEntry,
@@ -32,6 +33,9 @@ const EMPTY_STATS: LifetimeStats = {
   cardsPickedUp: 0,
 };
 
+/** lifetime stats, with zeros for any an older account is missing */
+export const statsOf = (u: Pick<UserDoc, 'stats'>): LifetimeStats => ({ ...EMPTY_STATS, ...u.stats });
+
 export function toPublicUser(u: WithId<UserDoc>): PublicUser {
   return {
     id: u._id.toHexString(),
@@ -39,7 +43,7 @@ export function toPublicUser(u: WithId<UserDoc>): PublicUser {
     displayName: u.displayName,
     role: u.role,
     coins: u.coins,
-    stats: { ...EMPTY_STATS, ...u.stats },
+    stats: statsOf(u),
     createdAt: u.createdAt.toISOString(),
   };
 }
@@ -124,10 +128,10 @@ export class UserService {
     return updated ? { user: updated, bonus: LOGIN_BONUS } : { user, bonus: 0 };
   }
 
-  async getCoins(userIds: string[]): Promise<Map<string, number>> {
+  async getAccounts(userIds: string[]): Promise<Map<string, { coins: number; level: number }>> {
     const ids = userIds.filter((id) => /^[a-f0-9]{24}$/i.test(id)).map((id) => new ObjectId(id));
-    const users = await this.cols.users.find({ _id: { $in: ids } }, { projection: { coins: 1 } }).toArray();
-    return new Map(users.map((u) => [u._id.toHexString(), u.coins]));
+    const users = await this.cols.users.find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1 } }).toArray();
+    return new Map(users.map((u) => [u._id.toHexString(), { coins: u.coins, level: levelOf(statsOf(u)) }]));
   }
 
   async logout(token: string): Promise<void> {
@@ -160,7 +164,7 @@ export class UserService {
       coinRank: richer + 1,
       players,
       loginBonusToday: user.lastLoginBonusDay === today,
-      gameBonusToday: user.lastGameBonusDay === today,
+      gamesToday: user.gamesTodayDay === today ? (user.gamesToday ?? 0) : 0,
     };
   }
 

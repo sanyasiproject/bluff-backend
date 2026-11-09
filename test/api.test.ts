@@ -4,6 +4,7 @@ import { io as connect, type Socket } from 'socket.io-client';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBluffServer } from '../src/server.js';
+import type { GameRecord } from '../src/models.js';
 import { createStore, type Store } from '../src/services/store.js';
 import type { AuditEntry, FriendsResponse, GameSummary, InviteEvent, PublicUser, RoomView } from '../src/types.js';
 
@@ -195,7 +196,7 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     const raja = await register('rank_raja');
     const auth = bearer(raja.body.token);
     const before = await api().get('/api/me/overview').set(auth);
-    expect(before.body).toMatchObject({ friends: 0, loginBonusToday: true, gameBonusToday: false });
+    expect(before.body).toMatchObject({ friends: 0, loginBonusToday: true, gamesToday: 0 });
     expect(before.body.coinRank).toBeGreaterThan(1);
     await api().post('/api/admin/make-admin').set('X-Admin-Key', ADMIN_KEY).send({ username: 'rank_raja' });
     await api().post(`/api/admin/users/${raja.body.user.id}/coins`).set(auth).send({ amount: 1_000_000 });
@@ -212,6 +213,8 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     await send(guest, 'room:join', { code, name: 'Guesty' });
     await until(() => player.state?.players.length === 2);
     expect(player.state!.players.map((p) => p.name)).toEqual(['Asha', 'Guesty']);
+    // logged-in players show a username (for friend requests) and a level; guests show neither
+    expect(player.state!.players.map((p) => [p.username, p.level])).toEqual([['asha', 1], [null, null]]);
 
     await send(player, 'room:start');
     await until(() => player.state?.phase === 'playing' && guest.state?.phase === 'playing');
@@ -250,9 +253,10 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     return { host, other, code: code!, tokens: [ra.body.token as string, rb.body.token as string] };
   }
 
-  /** whoever starts plays their whole hand, the other passes: the starter wins */
-  async function playToEnd(x: Client, y: Client) {
+  /** whoever starts plays their whole hand, the other passes: the starter wins; a long game counts for daily rewards */
+  async function playToEnd(x: Client, y: Client, code: string, longGame = true) {
     await until(() => x.state?.phase === 'playing' && y.state?.phase === 'playing');
+    if (longGame) server.rooms.get(code).startedAt = new Date(Date.now() - 2 * 60_000);
     const [mover, other] = x.state!.turnId === x.state!.meId ? [x, y] : [y, x];
     await send(mover, 'game:play', { cardIds: mover.state!.hand.map((c) => c.id), rank: 'A' });
     await until(() => other.state?.turnId === other.state?.meId);
@@ -278,8 +282,8 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect((await api().get('/api/me').set(bearer(reg.body.token))).body.bonus).toBe(0);
   });
 
-  it('checks balances at start, moves the stake only when the game finishes, and pays the first-game bonus once', async () => {
-    const { host, other, tokens } = await stakedRoom('stake_a', 'stake_b');
+  it('checks balances at start, moves the stake only when the game finishes, and pays the daily game ladder', async () => {
+    const { host, other, tokens, code } = await stakedRoom('stake_a', 'stake_b');
     expect(await send(host, 'room:config', { decks: 1, bluffRule: 'all', stake: 5000 })).toEqual({ ok: true });
     const tooRich = await send(host, 'room:start');
     expect(tooRich.error).toMatch(/Not enough coins for a 5,000 stake: stake_a, stake_b/);
@@ -292,27 +296,63 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     await send(host, 'room:lobby');
     expect([await coinsOf(tokens[0]), await coinsOf(tokens[1])]).toEqual([1200, 1200]);
 
+    // first game of the day: stake moves and both get the 1-game reward (+100)
     await send(host, 'room:start');
-    const { winner, loser } = await playToEnd(host, other);
+    const { winner, loser } = await playToEnd(host, other, code);
     await until(() => winner.state?.coinResults != null);
     const results = new Map(winner.state!.coinResults!.map((r) => [r.playerId, r]));
-    expect(results.get(winner.state!.meId)).toMatchObject({ change: 100, bonus: 500, coins: 1800 });
-    expect(results.get(loser.state!.meId)).toMatchObject({ change: -100, bonus: 500, coins: 1600 });
-    expect(winner.state!.players.find((p) => p.id === winner.state!.meId)?.coins).toBe(1800);
+    expect(results.get(winner.state!.meId)).toMatchObject({ change: 100, bonus: 100, coins: 1400, gamesToday: 1, counted: true });
+    expect(results.get(loser.state!.meId)).toMatchObject({ change: -100, bonus: 100, coins: 1200, gamesToday: 1, counted: true });
+    expect(winner.state!.players.find((p) => p.id === winner.state!.meId)?.coins).toBe(1400);
 
-    // second game the same day: stake moves again, no bonus
-    await send(host, 'room:lobby');
-    await send(host, 'room:start');
-    const second = await playToEnd(host, other);
+    // second game the same day: stake moves again, 2 games is not a reward step
+    await send(host, 'room:rematch');
+    const second = await playToEnd(host, other, code);
     await until(() => second.winner.state?.coinResults != null);
-    expect(second.winner.state!.coinResults!.every((r) => r.bonus === 0)).toBe(true);
+    expect(second.winner.state!.coinResults!.map((r) => [r.bonus, r.gamesToday])).toEqual([
+      [0, 2],
+      [0, 2],
+    ]);
 
     const games = (await api().get('/api/me/games').set(bearer(tokens[0]))).body.games as GameSummary[];
     expect(games.map((g) => g.status)).toEqual(['finished', 'finished', 'ended_early']);
-    expect(games[1]).toMatchObject({ stake: 100, bonus: 500, coinChange: winner === host ? 100 : -100 });
+    expect(games[1]).toMatchObject({ stake: 100, bonus: 100, coinChange: winner === host ? 100 : -100 });
     expect(games[1].my).toEqual(expect.objectContaining({ bluffs: expect.any(Number), pickedUp: 0 }));
     host.socket.disconnect();
     other.socket.disconnect();
+  });
+
+  it('pays the daily game ladder at 1, 3, 5… games, skips games under a minute, and restarts each day', async () => {
+    const reg = await register('ladder_l');
+    const userId = reg.body.user.id as string;
+    const zero = { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0 };
+    const game = (seconds: number): GameRecord => ({
+      roomCode: 'LADR',
+      config: { decks: 1, bluffRule: 'one', stake: 0 },
+      status: 'finished',
+      startedAt: new Date(Date.now() - seconds * 1000),
+      endedAt: new Date(),
+      players: [
+        { memberId: 'm1', userId, name: 'ladder_l', place: 1, loser: false, kicked: false, stats: zero },
+        { memberId: 'm2', userId: null, name: 'Guest', place: null, loser: true, kicked: false, stats: zero },
+      ],
+      awards: [],
+    });
+    const save = async (seconds: number) => new Map((await store.games.save(game(seconds))).map((r) => [r.playerId, r]));
+
+    expect((await save(90)).get('m1')).toMatchObject({ bonus: 100, gamesToday: 1, counted: true, coins: 1300 });
+    expect((await save(30)).get('m1')).toMatchObject({ bonus: 0, gamesToday: 1, counted: false, coins: 1300 });
+    expect((await save(90)).get('m1')).toMatchObject({ bonus: 0, gamesToday: 2, counted: true });
+    const third = await save(90);
+    expect(third.get('m1')).toMatchObject({ bonus: 300, gamesToday: 3, coins: 1600, level: expect.any(Number) });
+    expect(third.get('m2')).toMatchObject({ bonus: 0, gamesToday: null, counted: false, coins: null, level: null });
+    expect((await api().get('/api/me/overview').set(bearer(reg.body.token))).body.gamesToday).toBe(3);
+
+    const client = new MongoClient(MONGO!);
+    await client.connect();
+    await client.db(DB).collection('users').updateOne({ username: 'ladder_l' }, { $set: { gamesTodayDay: '2000-01-01' } });
+    await client.close();
+    expect((await save(90)).get('m1')).toMatchObject({ bonus: 100, gamesToday: 1, coins: 1700 });
   });
 
   it('keeps guests out of staked games', async () => {

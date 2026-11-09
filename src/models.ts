@@ -14,11 +14,24 @@ export interface Member {
   userId: string | null;
   /** coin balance as last seen (display only); null for guests */
   coins: number | null;
+  /** null for guests */
+  username: string | null;
+  /** account level as last seen; null for guests */
+  level: number | null;
+}
+
+/** the account behind a logged-in member */
+export interface MemberAccount {
+  userId: string;
+  username: string;
+  coins: number | null;
+  level: number | null;
 }
 
 /** logged-in account attached to a socket */
 export interface SocketUser {
   id: string;
+  username: string;
   displayName: string;
 }
 
@@ -47,9 +60,9 @@ export interface GameRecord {
 /** optional server features wired in by server.ts (accounts, coins, friends) */
 export interface SocketHooks {
   resolveUser?: (token: string) => Promise<SocketUser | null>;
-  /** current balances by user id */
-  getCoins?: (userIds: string[]) => Promise<Map<string, number>>;
-  /** saves the game, moves stake coins, adds daily bonuses; resolves with each player's coin change */
+  /** current balance and level by user id */
+  getAccounts?: (userIds: string[]) => Promise<Map<string, { coins: number; level: number }>>;
+  /** saves the game, moves stake coins, pays daily game rewards; resolves with each player's coin change */
   onGameEnd?: (record: GameRecord) => Promise<CoinResult[]>;
   areFriends?: (a: string, b: string) => Promise<boolean>;
 }

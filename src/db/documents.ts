@@ -26,8 +26,10 @@ export interface UserDoc {
   lastLoginAt: Date | null;
   /** IST day (YYYY-MM-DD) the daily login bonus was last given */
   lastLoginBonusDay?: string;
-  /** IST day the first-game bonus was last given */
-  lastGameBonusDay?: string;
+  /** IST day that gamesToday counts */
+  gamesTodayDay?: string;
+  /** finished games counted towards the daily game rewards on gamesTodayDay */
+  gamesToday?: number;
   /** set by an admin: no login, existing sessions are revoked */
   blocked?: boolean;
 }
@@ -53,7 +55,7 @@ export interface GamePlayerDoc {
   kicked: boolean;
   /** stake won (+) or paid (-) */
   coinChange: number;
-  /** first-game-of-the-day bonus */
+  /** daily games reward this game reached */
   bonus: number;
   stats: PlayerStats;
 }

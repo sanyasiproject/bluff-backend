@@ -2,14 +2,18 @@ import { ObjectId, type AnyBulkWriteOperation } from 'mongodb';
 import { istDay } from '../days.js';
 import type { Collections, GameDoc, GamePlayerDoc, UserDoc } from '../db/documents.js';
 import type { GameRecord } from '../models.js';
-import { FIRST_GAME_BONUS, type CoinResult, type GameSummary } from '../types.js';
+import { DAILY_GAME_REWARDS, levelOf, MIN_REWARD_GAME_SEC, type CoinResult, type GameSummary } from '../types.js';
+import { statsOf } from './users.js';
 
-/** saves games, settles stakes, pays the first-game bonus, and adds to lifetime stats */
+/** saves games, settles stakes, pays daily game rewards, and adds to lifetime stats */
 export class GameRecorder {
   constructor(private readonly cols: Collections) {}
 
   async save(record: GameRecord): Promise<CoinResult[]> {
     const finished = record.status === 'finished';
+    const durationSec = Math.round((record.endedAt.getTime() - record.startedAt.getTime()) / 1000);
+    // only real games count towards the daily rewards: finished and long enough
+    const counts = finished && durationSec >= MIN_REWARD_GAME_SEC;
     const nameOf = new Map(record.players.map((p) => [p.memberId, p.name]));
     const players: (GamePlayerDoc & { memberId: string })[] = record.players.map((p) => ({
       memberId: p.memberId,
@@ -27,7 +31,7 @@ export class GameRecorder {
 
     // coins only move when the game really finished; a stopped game costs nobody anything
     const pot = finished ? await this.settleStake(players, record.config.stake) : 0;
-    if (finished) await this.payFirstGameBonus(players);
+    if (counts) await this.payDailyGameRewards(players);
 
     await this.cols.games.insertOne({
       _id: new ObjectId(),
@@ -36,7 +40,7 @@ export class GameRecorder {
       status: record.status,
       startedAt: record.startedAt,
       endedAt: record.endedAt,
-      durationSec: Math.round((record.endedAt.getTime() - record.startedAt.getTime()) / 1000),
+      durationSec,
       stake: record.config.stake,
       pot,
       players: players.map(({ memberId: _memberId, ...p }) => p),
@@ -52,16 +56,26 @@ export class GameRecorder {
 
     if (finished) await this.addLifetimeStats(players);
 
-    const balances = await this.cols.users
-      .find({ _id: { $in: players.flatMap((p) => (p.userId ? [p.userId] : [])) } }, { projection: { coins: 1 } })
+    const today = istDay();
+    const accounts = await this.cols.users
+      .find(
+        { _id: { $in: players.flatMap((p) => (p.userId ? [p.userId] : [])) } },
+        { projection: { coins: 1, stats: 1, gamesToday: 1, gamesTodayDay: 1 } },
+      )
       .toArray();
-    const coinsOf = new Map(balances.map((u) => [u._id.toHexString(), u.coins]));
-    return players.map((p) => ({
-      playerId: p.memberId,
-      change: p.coinChange,
-      bonus: p.bonus,
-      coins: p.userId ? (coinsOf.get(p.userId.toHexString()) ?? null) : null,
-    }));
+    const byId = new Map(accounts.map((u) => [u._id.toHexString(), u]));
+    return players.map((p) => {
+      const u = p.userId ? byId.get(p.userId.toHexString()) : undefined;
+      return {
+        playerId: p.memberId,
+        change: p.coinChange,
+        bonus: p.bonus,
+        coins: u?.coins ?? null,
+        level: u ? levelOf(statsOf(u)) : null,
+        gamesToday: u ? (u.gamesTodayDay === today ? (u.gamesToday ?? 0) : 0) : null,
+        counted: counts && !!u && !p.kicked,
+      };
+    });
   }
 
   /** every logged-in, non-kicked player pays the stake; the winner gets the whole pot */
@@ -88,16 +102,29 @@ export class GameRecorder {
     return pot;
   }
 
-  /** +FIRST_GAME_BONUS for the first finished game of the IST day, win or lose */
-  private async payFirstGameBonus(players: GamePlayerDoc[]): Promise<void> {
+  /** adds one to each player's games today (IST); reaching a DAILY_GAME_REWARDS step pays its coins, win or lose */
+  private async payDailyGameRewards(players: GamePlayerDoc[]): Promise<void> {
     const today = istDay();
     for (const p of players) {
       if (!p.userId || p.kicked) continue;
-      const res = await this.cols.users.updateOne(
-        { _id: p.userId, lastGameBonusDay: { $ne: today } },
-        { $inc: { coins: FIRST_GAME_BONUS }, $set: { lastGameBonusDay: today } },
+      // one atomic step: a new day restarts the count, so each count is reached once a day
+      const user = await this.cols.users.findOneAndUpdate(
+        { _id: p.userId },
+        [
+          {
+            $set: {
+              gamesToday: { $cond: [{ $eq: ['$gamesTodayDay', today] }, { $add: [{ $ifNull: ['$gamesToday', 0] }, 1] }, 1] },
+              gamesTodayDay: today,
+            },
+          },
+        ],
+        { returnDocument: 'after', projection: { gamesToday: 1 } },
       );
-      if (res.modifiedCount === 1) p.bonus = FIRST_GAME_BONUS;
+      const reward = DAILY_GAME_REWARDS.find((r) => r.games === user?.gamesToday)?.coins ?? 0;
+      if (reward > 0) {
+        await this.cols.users.updateOne({ _id: p.userId }, { $inc: { coins: reward } });
+        p.bonus = reward;
+      }
     }
   }
 

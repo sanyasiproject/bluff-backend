@@ -35,9 +35,9 @@ export function createBluffServer(deps: ServerDeps = {}) {
       ? {
           resolveUser: async (token) => {
             const user = await store.users.userForToken(token);
-            return user ? { id: user._id.toHexString(), displayName: user.displayName } : null;
+            return user ? { id: user._id.toHexString(), username: user.username, displayName: user.displayName } : null;
           },
-          getCoins: (userIds) => store.users.getCoins(userIds),
+          getAccounts: (userIds) => store.users.getAccounts(userIds),
           // the socket layer runs this in the background; a DB hiccup must never break the game
           onGameEnd: (record) => store.games.save(record),
           areFriends: (a, b) => store.friends.areFriends(a, b),

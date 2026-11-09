@@ -22,7 +22,18 @@ export const MAX_BLUFF_CALLS_IN_A_ROW = 2;
 
 /** daily rewards, counted per India (IST) calendar day */
 export const LOGIN_BONUS = 200;
-export const FIRST_GAME_BONUS = 500;
+/** daily game rewards (IST day): reaching this many finished games today pays these coins once */
+export const DAILY_GAME_REWARDS: readonly { games: number; coins: number }[] = [
+  { games: 1, coins: 100 },
+  { games: 3, coins: 300 },
+  { games: 5, coins: 500 },
+  { games: 10, coins: 1_000 },
+  { games: 20, coins: 2_000 },
+  { games: 50, coins: 5_000 },
+];
+
+/** shorter games don't count towards the daily rewards, so quick games can't farm coins */
+export const MIN_REWARD_GAME_SEC = 60;
 
 export interface GameConfig {
   decks: 1 | 2;
@@ -76,6 +87,10 @@ export interface WatcherView {
   id: string;
   name: string;
   connected: boolean;
+  /** for friend requests; null for guests */
+  username: string | null;
+  /** account level; null for guests */
+  level: number | null;
 }
 
 /** sent only to watchers: every hand and the real cards of the last play */
@@ -101,6 +116,10 @@ export interface PublicPlayer {
   registered: boolean;
   /** coin balance as last seen by the server; null for guests */
   coins: number | null;
+  /** for friend requests; null for guests */
+  username: string | null;
+  /** account level; null for guests */
+  level: number | null;
 }
 
 /** how one player's coins changed when a game ended */
@@ -108,9 +127,14 @@ export interface CoinResult {
   playerId: string;
   /** stake won or lost */
   change: number;
-  /** first-game-of-the-day bonus, 0 if already claimed today */
+  /** daily games reward this game reached, 0 if none */
   bonus: number;
   coins: number | null;
+  level: number | null;
+  /** games counted today including this one; null for guests */
+  gamesToday: number | null;
+  /** this game counted towards today's games (finished, long enough, not removed) */
+  counted: boolean;
 }
 
 export interface LastPlayView {
@@ -176,6 +200,21 @@ export interface LifetimeStats {
   cardsPickedUp: number;
 }
 
+/** XP from lifetime numbers; wins and caught bluffs count most */
+export function xpOf(s: LifetimeStats): number {
+  return s.gamesPlayed * 20 + s.wins * 50 + s.goodCalls * 5 + Math.max(0, s.bluffs - s.bluffsCaught) * 3;
+}
+
+/** XP needed to reach a level: each level needs 100 more than the last (0, 100, 300, 600, 1000…) */
+export const xpForLevel = (level: number) => 50 * (level - 1) * level;
+
+export function levelOf(s: LifetimeStats): number {
+  const xp = xpOf(s);
+  let level = 1;
+  while (xp >= xpForLevel(level + 1)) level++;
+  return level;
+}
+
 /** account data the API returns; never includes the password hash */
 export interface PublicUser {
   id: string;
@@ -228,9 +267,10 @@ export interface ProfileOverview {
   coinRank: number;
   players: number;
   friends: number;
-  /** today's daily rewards already received */
+  /** today's daily login reward already received */
   loginBonusToday: boolean;
-  gameBonusToday: boolean;
+  /** games counted towards today's game rewards */
+  gamesToday: number;
 }
 
 /** what an admin sees about an account */
@@ -276,6 +316,7 @@ export interface FriendView {
   username: string;
   displayName: string;
   online: boolean;
+  level: number;
 }
 
 export interface FriendsResponse {

@@ -1,7 +1,8 @@
 import { MongoServerError, ObjectId, type WithId } from 'mongodb';
 import type { Collections, FriendDoc, UserDoc } from '../db/documents.js';
 import { ApiError } from '../http/errors.js';
-import type { FriendView } from '../types.js';
+import { levelOf, type FriendView } from '../types.js';
+import { statsOf } from './users.js';
 
 const pairOf = (a: ObjectId, b: ObjectId) => [a.toHexString(), b.toHexString()].sort().join('_');
 
@@ -14,12 +15,14 @@ export class FriendService {
     const links = await this.cols.friends.find({ $or: [{ requester: me }, { recipient: me }] }).toArray();
     const otherOf = (f: FriendDoc) => (f.requester.equals(me) ? f.recipient : f.requester);
     const users = await this.cols.users
-      .find({ _id: { $in: links.map(otherOf) } }, { projection: { username: 1, displayName: 1 } })
+      .find({ _id: { $in: links.map(otherOf) } }, { projection: { username: 1, displayName: 1, stats: 1 } })
       .toArray();
     const byId = new Map(users.map((u) => [u._id.toHexString(), u]));
     const view = (f: FriendDoc): FriendView[] => {
       const u = byId.get(otherOf(f).toHexString());
-      return u ? [{ id: u._id.toHexString(), username: u.username, displayName: u.displayName, online: false }] : [];
+      return u
+        ? [{ id: u._id.toHexString(), username: u.username, displayName: u.displayName, online: false, level: levelOf(statsOf(u)) }]
+        : [];
     };
     const byName = (a: FriendView, b: FriendView) => a.displayName.localeCompare(b.displayName);
     return {

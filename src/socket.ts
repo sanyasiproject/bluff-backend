@@ -1,6 +1,6 @@
 import type { Server } from 'socket.io';
 import { GameError } from './game.js';
-import type { GameEvent, GameRecord, Member, SocketHooks, SocketUser } from './models.js';
+import type { GameEvent, GameRecord, Member, MemberAccount, SocketHooks, SocketUser } from './models.js';
 import { Presence } from './presence.js';
 import type { Room, RoomManager } from './rooms.js';
 import type { Announcement, InviteEvent } from './types.js';
@@ -58,6 +58,7 @@ export function registerHandlers(
         for (const r of results) {
           const m = room.members.find((x) => x.id === r.playerId);
           if (m && r.coins !== null) m.coins = r.coins;
+          if (m && r.level !== null) m.level = r.level;
         }
         if (room.game === game) room.coinResults = results;
         broadcast(room);
@@ -80,13 +81,13 @@ export function registerHandlers(
       if (guests.length > 0) {
         throw new GameError(`${listNames(guests)}: guests can only play Free games. Log in or set the stake to Free`);
       }
-      if (!hooks.getCoins) throw new GameError('Coins are not available on this server');
+      if (!hooks.getAccounts) throw new GameError('Coins are not available on this server');
       room.starting = true;
       try {
         await room.saving;
         // coins only move at the end; here we just make sure everyone can pay
-        const balances = await hooks.getCoins(seated.map((m) => m.userId!));
-        for (const m of seated) m.coins = balances.get(m.userId!) ?? 0;
+        const accounts = await hooks.getAccounts(seated.map((m) => m.userId!));
+        for (const m of seated) m.coins = accounts.get(m.userId!)?.coins ?? 0;
         const short = seated.filter((m) => (m.coins ?? 0) < stake);
         if (short.length > 0) {
           broadcast(room);
@@ -104,13 +105,16 @@ export function registerHandlers(
     publish(room, [room.note('round', `${label}. ${first} goes first${pot}`)]);
   };
 
-  const freshCoins = async (userId: string): Promise<number | null> => {
-    if (!hooks.getCoins) return null;
+  /** the account a logged-in socket joins with; balance and level are read fresh */
+  const accountOf = async (u: SocketUser | undefined): Promise<MemberAccount | null> => {
+    if (!u) return null;
+    let fresh: { coins: number; level: number } | undefined;
     try {
-      return (await hooks.getCoins([userId])).get(userId) ?? null;
+      fresh = (await hooks.getAccounts?.([u.id]))?.get(u.id);
     } catch {
-      return null;
+      // shown as unknown until the next game ends
     }
+    return { userId: u.id, username: u.username, coins: fresh?.coins ?? null, level: fresh?.level ?? null };
   };
 
   // a login token in the handshake makes this socket that account; no or bad token means guest
@@ -189,8 +193,7 @@ export function registerHandlers(
 
     on('room:create', async (p) => {
       const name = nameFrom(p);
-      const coins = user ? await freshCoins(user.id) : null;
-      const next = rooms.create(name, user?.id ?? null, coins);
+      const next = rooms.create(name, await accountOf(user));
       attach(next);
       // nobody else is in a new room yet, so there is nothing to announce
       publish(next.room, []);
@@ -200,8 +203,7 @@ export function registerHandlers(
     on('room:join', async (p) => {
       const code = parseCode(p.code);
       const name = nameFrom(p);
-      const coins = user ? await freshCoins(user.id) : null;
-      const next = rooms.join(code, name, user?.id ?? null, coins);
+      const next = rooms.join(code, name, await accountOf(user));
       attach(next);
       const joined = next.member.watching ? `${next.member.name} is watching` : `${next.member.name} joined`;
       publish(next.room, [next.room.note('room', joined)]);
