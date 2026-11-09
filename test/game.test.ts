@@ -166,6 +166,24 @@ describe('bluff rule: caller picks one card', () => {
   });
 });
 
+describe('host ends the game after a winner', () => {
+  it('needs a winner first; then 1st place wins and everyone else loses', () => {
+    const q = card('Q');
+    const g = setup(['a', 'b', 'c'], { a: [q], b: [card('2'), card('3')], c: [card('4'), card('5')] });
+    expect(() => g.endEarly()).toThrow('Nobody has won yet');
+    g.play('a', ids(q), 'Q');
+    g.pass('b');
+    g.pass('c');
+    expect(g.places).toEqual(['a']);
+    expect(g.over).toBe(false);
+
+    expect(g.endEarly()).toEqual([{ kind: 'gameOver', loserId: null }]);
+    expect(g).toMatchObject({ over: true, endedEarly: true, turnId: null });
+    expect(g.losers()).toEqual(['b', 'c']);
+    expect(() => g.endEarly()).toThrow('Game is over');
+  });
+});
+
 describe('end-of-game awards', () => {
   it('counts bluffs, calls and pickups', () => {
     const [q, five, k1, k2] = [card('Q'), card('5'), card('K'), card('K', 'H')];

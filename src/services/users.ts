@@ -61,7 +61,7 @@ export interface UserChanges {
 
 const roleName = (r: Role) => (r === 'admin' ? 'admin' : 'player');
 
-const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function objectId(id: string): ObjectId {
   if (!/^[a-f0-9]{24}$/i.test(id)) throw new ApiError(404, 'User not found');

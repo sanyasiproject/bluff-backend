@@ -14,7 +14,8 @@ export function meRoutes(store: Store): Router {
     '/',
     ah(async (_req, res) => {
       const daily = await store.users.claimLoginBonus(currentUser(res));
-      res.json({ user: toPublicUser(daily.user), bonus: daily.bonus });
+      const friendRequests = await store.friends.incomingCount(daily.user._id);
+      res.json({ user: toPublicUser(daily.user), bonus: daily.bonus, friendRequests });
     }),
   );
 

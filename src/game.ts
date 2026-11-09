@@ -23,6 +23,8 @@ export class Game {
   readonly kicked = new Set<string>();
   /** ended because too few players were left before anyone finished; no coins move */
   aborted = false;
+  /** the host ended it after someone won: 1st place wins, everyone else loses */
+  endedEarly = false;
   /** bluff calls each player made since their last play or pass */
   private callStreak = new Map<string, number>();
 
@@ -145,6 +147,23 @@ export class Game {
     this.turnId = this.hand(winnerId).length > 0 ? winnerId : this.nextActive(winnerId);
     if (this.turnId) events.push({ kind: 'newRound', starterId: this.turnId });
     return events;
+  }
+
+  /** host's End game once someone has finished 1st; an unsettled last play is not counted */
+  endEarly(): GameEvent[] {
+    if (this.over) throw new GameError('Game is over');
+    if (this.places.length === 0) throw new GameError('Nobody has won yet. Use Stop game instead');
+    this.over = true;
+    this.endedEarly = true;
+    this.turnId = null;
+    this.loserId = null;
+    return [{ kind: 'gameOver', loserId: null }];
+  }
+
+  /** the last player holding cards, or everyone but the winner when the host ended the game */
+  losers(): string[] {
+    if (this.endedEarly) return this.order.filter((id) => id !== this.places[0] && !this.kicked.has(id));
+    return this.loserId ? [this.loserId] : [];
   }
 
   bluffCallsLeft(playerId: string): number {

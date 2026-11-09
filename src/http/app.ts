@@ -7,8 +7,9 @@ import { ApiError } from './errors.js';
 import { rateLimit } from './middleware.js';
 import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
-import { friendRoutes } from './routes/friends.js';
+import { friendRoutes, type NotifyFriends, type RoomOfUser } from './routes/friends.js';
 import { meRoutes } from './routes/me.js';
+import { playerRoutes } from './routes/players.js';
 
 export interface ApiOptions {
   adminApiKey: string;
@@ -16,6 +17,10 @@ export interface ApiOptions {
   authAttempts?: number;
   /** who is online, for the friends list */
   presence: Presence;
+  /** live update to a user's open apps when their friends or requests change */
+  notifyFriends?: NotifyFriends;
+  /** which room a user is in, so friends already playing aren't offered an invite */
+  roomOfUser?: RoomOfUser;
 }
 
 /** HTTP side of the server: health check and the /api routes */
@@ -38,7 +43,8 @@ export function createApi(store: Store | null, opts: ApiOptions): express.Expres
     const limited = rateLimit(opts.authAttempts ?? 20, 15 * 60_000);
     app.use('/api/auth', authRoutes(store, limited));
     app.use('/api/me', meRoutes(store));
-    app.use('/api/friends', friendRoutes(store, opts.presence));
+    app.use('/api/friends', friendRoutes(store, opts.presence, opts.notifyFriends ?? (() => {}), opts.roomOfUser ?? (() => null)));
+    app.use('/api/players', playerRoutes(store, opts.presence));
     app.use('/api/admin', adminRoutes(store, opts.adminApiKey, limited));
   } else {
     app.use('/api', (_req, _res, next) => next(new ApiError(503, 'Accounts are not set up on this server')));

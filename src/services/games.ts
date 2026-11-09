@@ -2,8 +2,28 @@ import { ObjectId, type AnyBulkWriteOperation } from 'mongodb';
 import { istDay } from '../days.js';
 import type { Collections, GameDoc, GamePlayerDoc, UserDoc } from '../db/documents.js';
 import type { GameRecord } from '../models.js';
-import { DAILY_GAME_REWARDS, levelOf, MIN_REWARD_GAME_SEC, type CoinResult, type GameSummary } from '../types.js';
+import {
+  DAILY_GAME_REWARDS,
+  levelOf,
+  MIN_REWARD_GAME_SEC,
+  xpOf,
+  type CoinResult,
+  type GameSummary,
+  type LifetimeStats,
+} from '../types.js';
 import { statsOf } from './users.js';
+
+/** one game's numbers in the shape of lifetime stats */
+const asLifetime = (p: GamePlayerDoc): LifetimeStats => ({
+  gamesPlayed: 1,
+  wins: p.won ? 1 : 0,
+  losses: p.loser ? 1 : 0,
+  bluffs: p.stats.bluffs,
+  bluffsCaught: p.stats.caught,
+  goodCalls: p.stats.goodCalls,
+  wrongCalls: p.stats.wrongCalls,
+  cardsPickedUp: p.stats.pickedUp,
+});
 
 /** saves games, settles stakes, pays daily game rewards, and adds to lifetime stats */
 export class GameRecorder {
@@ -74,6 +94,8 @@ export class GameRecorder {
         level: u ? levelOf(statsOf(u)) : null,
         gamesToday: u ? (u.gamesTodayDay === today ? (u.gamesToday ?? 0) : 0) : null,
         counted: counts && !!u && !p.kicked,
+        // same rule as addLifetimeStats: finished games of logged-in players who weren't removed
+        xp: finished && u && !p.kicked ? xpOf(asLifetime(p)) : 0,
       };
     });
   }

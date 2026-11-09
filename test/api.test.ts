@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBluffServer } from '../src/server.js';
 import type { GameRecord } from '../src/models.js';
 import { createStore, type Store } from '../src/services/store.js';
-import type { AuditEntry, FriendsResponse, GameSummary, InviteEvent, PublicUser, RoomView } from '../src/types.js';
+import type { AuditEntry, FriendsResponse, GameSummary, InviteEvent, PlayerSearchResult, PublicUser, RoomView } from '../src/types.js';
 
 // run with TEST_MONGODB_URI=mongodb://127.0.0.1:27017 (a throwaway database is created and dropped)
 const MONGO = process.env.TEST_MONGODB_URI;
@@ -340,12 +340,13 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     });
     const save = async (seconds: number) => new Map((await store.games.save(game(seconds))).map((r) => [r.playerId, r]));
 
-    expect((await save(90)).get('m1')).toMatchObject({ bonus: 100, gamesToday: 1, counted: true, coins: 1300 });
+    // winning a game with no bluffs or calls: +20 for playing, +50 for winning
+    expect((await save(90)).get('m1')).toMatchObject({ bonus: 100, gamesToday: 1, counted: true, coins: 1300, xp: 70 });
     expect((await save(30)).get('m1')).toMatchObject({ bonus: 0, gamesToday: 1, counted: false, coins: 1300 });
     expect((await save(90)).get('m1')).toMatchObject({ bonus: 0, gamesToday: 2, counted: true });
     const third = await save(90);
     expect(third.get('m1')).toMatchObject({ bonus: 300, gamesToday: 3, coins: 1600, level: expect.any(Number) });
-    expect(third.get('m2')).toMatchObject({ bonus: 0, gamesToday: null, counted: false, coins: null, level: null });
+    expect(third.get('m2')).toMatchObject({ bonus: 0, gamesToday: null, counted: false, coins: null, level: null, xp: 0 });
     expect((await api().get('/api/me/overview').set(bearer(reg.body.token))).body.gamesToday).toBe(3);
 
     const client = new MongoClient(MONGO!);
@@ -413,11 +414,84 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect(await send(aSocket, 'friend:invite', { userId: b.body.user.id })).toEqual({ ok: true });
     await until(() => invites.length === 1);
     expect(invites[0]).toEqual({ fromId: a.body.user.id, fromName: 'Fa', code });
+    const friendB = async () => ((await api().get('/api/friends').set(authA)).body as FriendsResponse).friends[0];
+    expect((await friendB()).inRoom).toBeNull();
+
+    // nobody already in a room can be invited: this room...
+    await send(bSocket, 'room:join', { code });
+    expect((await friendB()).inRoom).toBe('here');
+    expect((await send(aSocket, 'friend:invite', { userId: b.body.user.id })).error).toBe('Your friend is already in this room');
+
+    // ...or another one
+    await send(bSocket, 'room:leave');
+    await send(bSocket, 'room:create', {});
+    expect((await friendB()).inRoom).toBe('other');
+    expect((await send(aSocket, 'friend:invite', { userId: b.body.user.id })).error).toBe('Your friend is already in another room');
+    await send(bSocket, 'room:leave');
+    expect((await friendB()).inRoom).toBeNull();
+    expect(invites).toHaveLength(1);
 
     expect((await api().post(`/api/friends/${b.body.user.id}/remove`).set(authA)).status).toBe(204);
     expect((await send(aSocket, 'friend:invite', { userId: b.body.user.id })).error).toBe('You can only invite friends');
     aSocket.socket.disconnect();
     bSocket.socket.disconnect();
+  });
+
+  it('finds players by name, counts friend requests, and tells the other player straight away', async () => {
+    const sam = await register('sam_find', 'secret-pass-1', 'Sam');
+    const tia = await register('tia_find', 'secret-pass-1', 'Tia Sharma');
+    const [samAuth, tiaAuth] = [bearer(sam.body.token), bearer(tia.body.token)];
+    const search = async (q: string, auth = samAuth) =>
+      (await api().get(`/api/friends/search?q=${encodeURIComponent(q)}`).set(auth)).body.players as PlayerSearchResult[];
+
+    expect(await search('t')).toEqual([]);
+    expect((await search('tia_f')).map((p) => [p.username, p.displayName, p.status, p.level])).toEqual([
+      ['tia_find', 'Tia Sharma', 'none', 1],
+    ]);
+    expect((await search('SHARMA')).map((p) => p.username)).toEqual(['tia_find']);
+    expect(await search('sam_find')).toEqual([]);
+    expect(await search('nobody_here_zz')).toEqual([]);
+    expect(await search('.*')).toEqual([]);
+    expect((await api().get('/api/friends/search?q=tia')).status).toBe(401);
+
+    const tiaApp = await socketClient(tia.body.token);
+    let changed = 0;
+    tiaApp.socket.on('friends:changed', () => changed++);
+    await api().post('/api/friends/request').set(samAuth).send({ username: 'tia_find' });
+    await until(() => changed === 1);
+    expect((await api().get('/api/me').set(tiaAuth)).body.friendRequests).toBe(1);
+    expect((await search('tia_f'))[0].status).toBe('sent');
+    expect((await search('sam_f', tiaAuth))[0].status).toBe('incoming');
+
+    await api().post(`/api/friends/${sam.body.user.id}/accept`).set(tiaAuth);
+    expect((await api().get('/api/me').set(tiaAuth)).body.friendRequests).toBe(0);
+    expect((await search('tia_f'))[0].status).toBe('friend');
+    tiaApp.socket.disconnect();
+  });
+
+  it('shows a basic public profile of any player, with nothing private', async () => {
+    const pia = await register('pia_pub', 'secret-pass-1', 'Pia');
+    const raj = await register('raj_pub', 'secret-pass-1', 'Raj');
+    const [piaAuth, rajAuth] = [bearer(pia.body.token), bearer(raj.body.token)];
+    const card = async (username: string, auth = piaAuth) => (await api().get(`/api/players/${username}`).set(auth)).body.profile;
+
+    expect((await api().get('/api/players/raj_pub')).status).toBe(401);
+    const raju = await card('raj_pub');
+    expect(raju).toMatchObject({ username: 'raj_pub', displayName: 'Raj', level: 1, online: false, status: 'none' });
+    expect(raju.stats).toMatchObject({ gamesPlayed: 0, wins: 0 });
+    // no coins, role, login times or password hash
+    expect(Object.keys(raju).sort()).toEqual(['displayName', 'id', 'joinedAt', 'level', 'online', 'stats', 'status', 'username']);
+    expect((await card('pia_pub')).status).toBe('me');
+
+    await api().post('/api/friends/request').set(piaAuth).send({ username: 'raj_pub' });
+    expect((await card('raj_pub')).status).toBe('sent');
+    expect((await card('pia_pub', rajAuth)).status).toBe('incoming');
+    expect((await api().get('/api/players/nobody_xyz').set(piaAuth)).status).toBe(404);
+
+    // blocked accounts are hidden
+    await api().post('/api/admin/make-admin').set('X-Admin-Key', ADMIN_KEY).send({ username: 'pia_pub' });
+    await api().post(`/api/admin/users/${raj.body.user.id}`).set(piaAuth).send({ blocked: true });
+    expect((await api().get('/api/players/raj_pub').set(piaAuth)).status).toBe(404);
   });
 
   it('allows API calls only from allowed sites', async () => {

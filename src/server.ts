@@ -17,7 +17,15 @@ export interface ServerDeps {
 export function createBluffServer(deps: ServerDeps = {}) {
   const store = deps.store ?? null;
   const presence = new Presence();
-  const app = createApi(store, { adminApiKey: deps.adminApiKey ?? '', authAttempts: deps.authAttempts, presence });
+  // set once Socket.IO exists; the API is created first because the http server needs it
+  let notifyFriends = (_userId: string) => {};
+  const app = createApi(store, {
+    adminApiKey: deps.adminApiKey ?? '',
+    authAttempts: deps.authAttempts,
+    presence,
+    notifyFriends: (userId) => notifyFriends(userId),
+    roomOfUser: (userId) => rooms.roomOfUser(userId)?.code ?? null,
+  });
   const httpServer = createServer(app);
 
   const io = new Server(httpServer, {
@@ -26,6 +34,10 @@ export function createBluffServer(deps: ServerDeps = {}) {
     allowRequest: (req, cb) => cb(null, isAllowedOrigin(req.headers.origin)),
     maxHttpBufferSize: 16 * 1024,
   });
+
+  notifyFriends = (userId) => {
+    for (const id of presence.socketsOf(userId)) io.to(id).emit('friends:changed');
+  };
 
   const rooms = new RoomManager();
   const stopSweep = registerHandlers(

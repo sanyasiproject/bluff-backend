@@ -101,6 +101,17 @@ export class Room {
     return { kicked: target, events };
   }
 
+  /** host hands the host role to someone else who is here, in the lobby */
+  transferHost(by: string, targetId: string): Member {
+    this.assertHost(by);
+    if (this.phase !== 'lobby') throw new GameError('The host can only be changed in the lobby');
+    if (targetId === by) throw new GameError("You're already the host");
+    const target = this.member(targetId);
+    if (!target.socketId) throw new GameError(`${target.name} is offline`);
+    this.hostId = target.id;
+    return target;
+  }
+
   setConfig(by: string, config: GameConfig): void {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Settings can only change in the lobby');
@@ -141,7 +152,7 @@ export class Room {
         userId: member(id)?.userId ?? null,
         name: member(id)?.name ?? 'Someone',
         place: g.places.indexOf(id) + 1 || null,
-        loser: status === 'finished' && g.loserId === id,
+        loser: status === 'finished' && g.losers().includes(id),
         kicked: g.kicked.has(id),
         stats: { ...g.stats.get(id)! },
       })),
@@ -158,6 +169,12 @@ export class Room {
     this.coinResults = null;
     this.departed.clear();
     this.fillSeats();
+  }
+
+  /** host ends the game once someone has won; 1st place wins and everyone else loses */
+  endGame(by: string): GameEvent[] {
+    this.assertHost(by);
+    return this.requireGame().endEarly();
   }
 
   /** host clears the finished game so the same table can be dealt again */
@@ -214,6 +231,8 @@ export class Room {
       reveal: g?.reveal ?? null,
       hand: [...(g?.hands.get(meId) ?? [])],
       loserId: g?.loserId ?? null,
+      loserIds: g?.over ? g.losers() : [],
+      endedEarly: g?.endedEarly ?? false,
       awards: g?.over ? computeAwards(g.stats) : [],
       // only people without a seat see the cards; seated players never get this
       watch:
@@ -259,6 +278,7 @@ export class Room {
         return ['finish', `${n(e.playerId)} finished ${ordinal(e.place)}`];
       case 'gameOver': {
         if (this.game?.aborted) return ['over', 'Game stopped, not enough players left. No coins moved'];
+        if (this.game?.endedEarly) return ['over', `The host ended the game. ${n(this.game.places[0])} wins`];
         const liar =this.game ? computeAwards(this.game.stats).find((a) => a.title === 'Biggest liar') : undefined;
         const loser = e.loserId ? `Game over. ${n(e.loserId)} is the loser` : 'Game over';
         return ['over', liar ? `${loser}. Biggest liar: ${liar.playerIds.map(n).join(' and ')}` : loser];
@@ -302,6 +322,14 @@ export class RoomManager {
     const member = room.members.find((m) => m.token === token);
     if (!member) throw new GameError('Your seat in this room is gone');
     return { room, member };
+  }
+
+  /** the room a logged-in player is in (seated, watching, or holding a seat while offline) */
+  roomOfUser(userId: string): Room | null {
+    for (const room of this.rooms.values()) {
+      if (room.members.some((m) => m.userId === userId)) return room;
+    }
+    return null;
   }
 
   get(code: string): Room {

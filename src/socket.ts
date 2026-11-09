@@ -259,6 +259,17 @@ export function registerHandlers(
       publish(room, wasPlaying ? [room.note('room', `${member.name} stopped the game. No coins moved`)] : []);
     });
 
+    on('room:host', (p) => {
+      const { room, member } = current();
+      const target = room.transferHost(member.id, parseMemberId(p.memberId));
+      publish(room, [room.note('room', `${member.name} made ${target.name} the host`)]);
+    });
+
+    on('room:end', () => {
+      const { room, member } = current();
+      afterMove(room, room.endGame(member.id));
+    });
+
     on('room:kick', (p) => {
       const { room, member } = current();
       const { kicked, events } = room.kick(member.id, parseMemberId(p.memberId));
@@ -276,6 +287,10 @@ export function registerHandlers(
       if (!user) throw new GameError('Log in to invite friends');
       const friendId = parseUserId(p.userId);
       if (!hooks.areFriends || !(await hooks.areFriends(user.id, friendId))) throw new GameError('You can only invite friends');
+      // someone already in a room is never invited, whether it's this room or another one
+      const theirRoom = rooms.roomOfUser(friendId);
+      if (theirRoom === room) throw new GameError('Your friend is already in this room');
+      if (theirRoom) throw new GameError('Your friend is already in another room');
       const sockets = presence.socketsOf(friendId);
       if (sockets.length === 0) throw new GameError('Your friend is offline. Send the WhatsApp link instead');
       const invite: InviteEvent = { fromId: user.id, fromName: user.displayName, code: room.code };

@@ -135,6 +135,8 @@ export interface CoinResult {
   gamesToday: number | null;
   /** this game counted towards today's games (finished, long enough, not removed) */
   counted: boolean;
+  /** XP this game earned; 0 for guests, stopped games and removed players */
+  xp: number;
 }
 
 export interface LastPlayView {
@@ -174,6 +176,10 @@ export interface RoomView {
   reveal: RevealView | null;
   hand: Card[];
   loserId: string | null;
+  /** everyone who lost: the last player with cards, or all but 1st when the host ended the game */
+  loserIds: string[];
+  /** the host ended the game once someone had won */
+  endedEarly: boolean;
   /** filled once the game is over */
   awards: Award[];
   /** null for seated players, so they never receive anyone else's cards */
@@ -200,9 +206,16 @@ export interface LifetimeStats {
   cardsPickedUp: number;
 }
 
-/** XP from lifetime numbers; wins and caught bluffs count most */
+/** XP from each finished game: playing it, winning, catching a liar, and each bluff nobody caught */
+export const XP_RULES = { game: 20, win: 50, goodCall: 5, cleanBluff: 3 } as const;
+
 export function xpOf(s: LifetimeStats): number {
-  return s.gamesPlayed * 20 + s.wins * 50 + s.goodCalls * 5 + Math.max(0, s.bluffs - s.bluffsCaught) * 3;
+  return (
+    s.gamesPlayed * XP_RULES.game +
+    s.wins * XP_RULES.win +
+    s.goodCalls * XP_RULES.goodCall +
+    Math.max(0, s.bluffs - s.bluffsCaught) * XP_RULES.cleanBluff
+  );
 }
 
 /** XP needed to reach a level: each level needs 100 more than the last (0, 100, 300, 600, 1000…) */
@@ -317,6 +330,32 @@ export interface FriendView {
   displayName: string;
   online: boolean;
   level: number;
+  /** already in a room: 'here' is the room I'm in; such friends can't be invited */
+  inRoom: 'here' | 'other' | null;
+}
+
+/** a player found by name in the Friends search */
+export interface PlayerSearchResult {
+  id: string;
+  username: string;
+  displayName: string;
+  level: number;
+  online: boolean;
+  /** how they relate to me */
+  status: 'friend' | 'sent' | 'incoming' | 'none';
+}
+
+/** what anyone logged in can see about a player: name, level and game record, nothing private */
+export interface PublicProfile {
+  id: string;
+  username: string;
+  displayName: string;
+  level: number;
+  joinedAt: string;
+  online: boolean;
+  stats: LifetimeStats;
+  /** how they relate to me */
+  status: 'me' | 'friend' | 'sent' | 'incoming' | 'none';
 }
 
 export interface FriendsResponse {

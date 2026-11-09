@@ -195,6 +195,57 @@ describe('socket server', () => {
     await until(() => a.notes.at(-1)?.text.startsWith('Rematch. ') === true);
   });
 
+  it('lets the host end the game once someone has won, and everyone else loses', async () => {
+    const [a, b, c] = [await client(), await client(), await client()];
+    const { code } = await send(a, 'room:create', { name: 'Host' });
+    await send(b, 'room:join', { code, name: 'Bee' });
+    await send(c, 'room:join', { code, name: 'Cee' });
+    await send(a, 'room:start');
+    await until(() => c.state?.phase === 'playing');
+    expect(await send(a, 'room:end')).toEqual({ ok: false, error: 'Nobody has won yet. Use Stop game instead' });
+
+    // Bee empties their hand and finishes 1st
+    const room = server.rooms.get(code!);
+    const beeId = b.state!.meId;
+    room.game!.hands.set(beeId, []);
+    room.game!.places.push(beeId);
+    expect(await send(c, 'room:end')).toEqual({ ok: false, error: 'Only the host can do that' });
+    expect(await send(a, 'room:end')).toEqual({ ok: true });
+    await until(() => c.state?.phase === 'over');
+    expect(c.state!.endedEarly).toBe(true);
+    expect([...c.state!.loserIds].sort()).toEqual([a.state!.meId, c.state!.meId].sort());
+    expect(room.snapshot('finished')!.players.map((p) => [p.name, p.place, p.loser])).toEqual([
+      ['Host', null, true],
+      ['Bee', 1, false],
+      ['Cee', null, true],
+    ]);
+    await until(() => a.notes.at(-1)?.text === 'The host ended the game. Bee wins');
+  });
+
+  it('lets the host hand the host role to someone else in the lobby', async () => {
+    const [a, b, c] = [await client(), await client(), await client()];
+    const { code } = await send(a, 'room:create', { name: 'Host' });
+    await send(b, 'room:join', { code, name: 'Bee' });
+    await send(c, 'room:join', { code, name: 'Cee' });
+    await until(() => [a, b, c].every((x) => x.state?.players.length === 3));
+    const [aId, bId, cId] = [a, b, c].map((x) => x.state!.meId);
+
+    expect(await send(b, 'room:host', { memberId: cId })).toEqual({ ok: false, error: 'Only the host can do that' });
+    expect(await send(a, 'room:host', { memberId: aId })).toEqual({ ok: false, error: "You're already the host" });
+    c.socket.disconnect();
+    await until(() => a.state!.players.find((p) => p.id === cId)?.connected === false);
+    expect(await send(a, 'room:host', { memberId: cId })).toEqual({ ok: false, error: 'Cee is offline' });
+
+    expect(await send(a, 'room:host', { memberId: bId })).toEqual({ ok: true });
+    await until(() => a.state?.hostId === bId && b.state?.hostId === bId);
+    await until(() => a.notes.at(-1)?.text === 'Host made Bee the host');
+    // the old host lost the controls, the new one has them
+    expect(await send(a, 'room:config', { decks: 2, bluffRule: 'all' })).toEqual({ ok: false, error: 'Only the host can do that' });
+    expect(await send(b, 'room:config', { decks: 2, bluffRule: 'all' })).toEqual({ ok: true });
+    expect(await send(b, 'room:start')).toEqual({ ok: true });
+    expect(await send(b, 'room:host', { memberId: aId })).toEqual({ ok: false, error: 'The host can only be changed in the lobby' });
+  });
+
   it('blocks browser connections from unknown sites', async () => {
     const evil = connect(url, {
       transports: ['websocket'],

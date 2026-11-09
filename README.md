@@ -37,7 +37,7 @@ Everything else has a built-in default: database `bluff`; collections `users`, `
 
 - New accounts get 1000 coins. **+200** on the first login (or app open) of each India-time day, sign-up day included.
 - **Daily games ladder** (IST day, win or lose): reaching 1 / 3 / 5 / 10 / 20 / 50 finished games pays +100 / +300 / +500 / +1,000 / +2,000 / +5,000 (up to 8,900 a day). Only games of 1 minute or more count (`DAILY_GAME_REWARDS`, `MIN_REWARD_GAME_SEC` in `src/types.ts`).
-- **Levels** come from lifetime stats (`levelOf` in `src/types.ts`) and are shown next to every logged-in player.
+- **Levels** come from lifetime XP (`XP_RULES`, `levelOf` in `src/types.ts`): +20 per finished game, +50 for a win, +5 per caught liar, +3 per bluff nobody caught. Level *n* needs 50 × (*n*−1) × *n* XP; titles run from Rookie (1) to Legend (50, 122,500 XP) and live in the frontend's `src/lib/progress.ts`.
 - **Stakes** (host picks in the lobby): Free, 50, 100, 250, 500, 1K, 5K, 10K, 50K, 1L, 5L, 10L per player. Start checks everyone can pay; guests can only play Free games.
 - Coins move only when a game **finishes**: every logged-in player pays the stake and the winner (1st place) gets the whole pot. A game stopped by the host, or by kicks leaving one player before anyone finished, moves nothing. A kicked player pays nothing and wins nothing.
 - Every finished game stores the stake, pot and each player's coin change in `games`.
@@ -58,10 +58,12 @@ All bodies are JSON. Protected routes need `Authorization: Bearer <token>` (the 
 | `POST /api/auth/register` | anyone | `{ username, password, displayName? }` | `{ token, user }` (201) |
 | `POST /api/auth/login` | anyone | `{ username, password }` | `{ token, user, bonus }` |
 | `POST /api/auth/logout` | logged in | – | 204, token revoked |
-| `GET /api/me` | logged in | – | `{ user, bonus }` (bonus = daily +200 if just paid) |
+| `GET /api/me` | logged in | – | `{ user, bonus, friendRequests }` (bonus = daily +200 if just paid) |
 | `GET /api/me/games` | logged in | `?limit=20` | `{ games }` most recent first, with per-game stats and coins |
 | `GET /api/me/overview` | logged in | – | `{ coinRank, players, friends, loginBonusToday, gameBonusToday }` for the profile page |
 | `GET /api/friends` | logged in | – | `{ friends, incoming, outgoing }` with `online` |
+| `GET /api/players/:username` | logged in | – | `{ profile }`: name, level, joined date, online, game stats and friend status; never coins, role or login times |
+| `GET /api/friends/search` | logged in | `?q=` (2+ letters; username start or display name) | `{ players }` with `level`, `online`, `status` |
 | `POST /api/friends/request` | logged in | `{ username }` | `{ result: 'sent' \| 'accepted' }` |
 | `POST /api/friends/:id/accept` | logged in | – | 204 |
 | `POST /api/friends/:id/remove` | logged in | – | 204 (decline, cancel or unfriend) |
@@ -119,6 +121,8 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `room:config` | `{ decks: 1 \| 2, bluffRule: 'all' \| 'one' }` (host, lobby) |
 | `room:start` / `room:lobby` / `room:leave` | – |
 | `room:rematch` | – (host, after game over: same table, same settings, dealt again) |
+| `room:end` | – (host, once someone finished 1st: game over, 1st wins and everyone else loses) |
+| `room:host` | `{ memberId }` (host, lobby only: make an online member the host) |
 | `game:play` | `{ cardIds, rank? }` (rank only when starting a round) |
 | `game:pass` | – |
 | `game:bluff` | `{ playId, cardIndex? }` (`cardIndex` for the "pick one" rule) |
@@ -126,4 +130,4 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `room:kick` | `{ memberId }` (host only; mid-game the player's cards leave the game) |
 | `friend:invite` | `{ userId }` (logged in, friends only, friend must be online) |
 
-Connect with `io(url, { auth: { token } })` to play as a logged-in account. Server → client: `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud), `chat` (`{ from, kind, index }`), `invite` (`{ fromId, fromName, code }`), `room:kicked`, `session:replaced`.
+Connect with `io(url, { auth: { token } })` to play as a logged-in account. Server → client: `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud), `chat` (`{ from, kind, index }`), `invite` (`{ fromId, fromName, code }`), `friends:changed` (someone sent, accepted or removed a friend request), `room:kicked`, `session:replaced`.
