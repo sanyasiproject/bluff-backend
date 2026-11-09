@@ -7,7 +7,6 @@ import type { Announcement, InviteEvent } from './types.js';
 import {
   asPayload,
   parseCardIds,
-  parseCardIndex,
   parseChat,
   parseCode,
   parseConfig,
@@ -51,7 +50,8 @@ export function registerHandlers(
   const saveGame = (room: Room, record: GameRecord | null) => {
     if (!record || !hooks.onGameEnd) return;
     const game = room.game;
-    hooks
+    // a quick rematch waits for this, so coin balances are settled before they're checked
+    room.saving = hooks
       .onGameEnd(record)
       .then((results) => {
         for (const r of results) {
@@ -67,6 +67,40 @@ export function registerHandlers(
   const afterMove = (room: Room, events: GameEvent[]) => {
     publish(room, room.announce(events));
     if (events.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot(room.game?.aborted ? 'ended_early' : 'finished'));
+  };
+
+  /** coin checks for a staked game, then deal; shared by Start and Play again */
+  const startGame = async (room: Room, member: Member, label: string) => {
+    const stake = room.config.stake;
+    if (stake > 0) {
+      if (room.starting) throw new GameError('Already starting');
+      const seated = room.players();
+      const guests = seated.filter((m) => !m.userId);
+      if (guests.length > 0) {
+        throw new GameError(`${listNames(guests)}: guests can only play Free games. Log in or set the stake to Free`);
+      }
+      if (!hooks.getCoins) throw new GameError('Coins are not available on this server');
+      room.starting = true;
+      try {
+        await room.saving;
+        // coins only move at the end; here we just make sure everyone can pay
+        const balances = await hooks.getCoins(seated.map((m) => m.userId!));
+        for (const m of seated) m.coins = balances.get(m.userId!) ?? 0;
+        const short = seated.filter((m) => (m.coins ?? 0) < stake);
+        if (short.length > 0) {
+          broadcast(room);
+          throw new GameError(`Not enough coins for a ${formatCoins(stake)} stake: ${listNames(short)}`);
+        }
+        const now = room.players();
+        if (now.length !== seated.length || now.some((m, i) => m !== seated[i])) throw new GameError('Players changed, tap Start again');
+      } finally {
+        room.starting = false;
+      }
+    }
+    room.start(member.id);
+    const first = room.member(room.game!.turnId!).name;
+    const pot = stake > 0 ? `. Pot: ${formatCoins(stake * room.game!.order.length)} coins` : '';
+    publish(room, [room.note('round', `${label}. ${first} goes first${pot}`)]);
   };
 
   const freshCoins = async (userId: string): Promise<number | null> => {
@@ -157,7 +191,8 @@ export function registerHandlers(
       const coins = user ? await freshCoins(user.id) : null;
       const next = rooms.create(name, user?.id ?? null, coins);
       attach(next);
-      publish(next.room, [next.room.note('room', `${next.member.name} created the room`)]);
+      // nobody else is in a new room yet, so there is nothing to announce
+      publish(next.room, []);
       return { code: next.room.code, token: next.member.token };
     });
 
@@ -195,35 +230,20 @@ export function registerHandlers(
     on('room:start', async () => {
       const { room, member } = current();
       room.assertCanStart(member.id);
-      const stake = room.config.stake;
-      if (stake > 0) {
-        if (room.starting) throw new GameError('Already starting');
-        const seated = room.players();
-        const guests = seated.filter((m) => !m.userId);
-        if (guests.length > 0) {
-          throw new GameError(`${listNames(guests)}: guests can only play Free games. Log in or set the stake to Free`);
-        }
-        if (!hooks.getCoins) throw new GameError('Coins are not available on this server');
-        room.starting = true;
-        try {
-          // coins only move at the end; here we just make sure everyone can pay
-          const balances = await hooks.getCoins(seated.map((m) => m.userId!));
-          for (const m of seated) m.coins = balances.get(m.userId!) ?? 0;
-          const short = seated.filter((m) => (m.coins ?? 0) < stake);
-          if (short.length > 0) {
-            broadcast(room);
-            throw new GameError(`Not enough coins for a ${formatCoins(stake)} stake: ${listNames(short)}`);
-          }
-          const now = room.players();
-          if (now.length !== seated.length || now.some((m, i) => m !== seated[i])) throw new GameError('Players changed, tap Start again');
-        } finally {
-          room.starting = false;
-        }
+      await startGame(room, member, 'Game started');
+    });
+
+    on('room:rematch', async () => {
+      const { room, member } = current();
+      room.rematch(member.id);
+      try {
+        room.assertCanStart(member.id);
+        await startGame(room, member, 'Rematch');
+      } catch (err) {
+        // can't deal again (e.g. someone is short of coins): everyone lands in the lobby instead
+        broadcast(room);
+        throw err;
       }
-      room.start(member.id);
-      const first = room.member(room.game!.turnId!).name;
-      const pot = stake > 0 ? `. Pot: ${formatCoins(stake * room.game!.order.length)} coins` : '';
-      publish(room, [room.note('round', `Game started. ${first} goes first${pot}`)]);
     });
 
     on('room:lobby', () => {
@@ -271,7 +291,7 @@ export function registerHandlers(
 
     on('game:bluff', (p) => {
       const { room, member } = current();
-      afterMove(room, room.requireGame().callBluff(member.id, parsePlayId(p.playId), parseCardIndex(p.cardIndex)));
+      afterMove(room, room.requireGame().callBluff(member.id, parsePlayId(p.playId)));
     });
 
     on('chat:send', (p) => {

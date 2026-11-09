@@ -169,6 +169,29 @@ describe('socket server', () => {
     expect(late.state!.watchers).toEqual([]);
   });
 
+  it('lets the host deal the same table again from the game-over screen', async () => {
+    const [a, b] = [await client(), await client()];
+    const { code } = await send(a, 'room:create', { name: 'Host' });
+    await send(b, 'room:join', { code, name: 'Guest' });
+    await send(a, 'room:start');
+    await until(() => b.state?.phase === 'playing');
+    expect(await send(a, 'room:rematch')).toEqual({ ok: false, error: 'The game is not over yet' });
+
+    // finish fast: the mover is down to one card, plays it, and the other player passes
+    const game = server.rooms.get(code!).game!;
+    const [mover, other] = game.turnId === a.state!.meId ? [a, b] : [b, a];
+    const last = game.hand(mover.state!.meId).slice(0, 1);
+    game.hands.set(mover.state!.meId, last);
+    await send(mover, 'game:play', { cardIds: [last[0].id], rank: 'A' });
+    await send(other, 'game:pass');
+    await until(() => a.state?.phase === 'over' && b.state?.phase === 'over');
+
+    expect(await send(b, 'room:rematch')).toEqual({ ok: false, error: 'Only the host can do that' });
+    expect(await send(a, 'room:rematch')).toEqual({ ok: true });
+    await until(() => b.state?.phase === 'playing' && b.state.hand.length === 26);
+    await until(() => a.notes.at(-1)?.text.startsWith('Rematch. ') === true);
+  });
+
   it('blocks browser connections from unknown sites', async () => {
     const evil = connect(url, {
       transports: ['websocket'],

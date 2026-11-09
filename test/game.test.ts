@@ -137,32 +137,24 @@ describe('bluff rule: check all cards', () => {
   });
 });
 
-describe('bluff rule: caller picks one card', () => {
-  it('only the picked card decides', () => {
+describe('bluff rule: one random card', () => {
+  // keepOrder makes the random pick the last card of the play
+
+  it('a lie in the picked card catches the bluffer', () => {
     const [q, five] = [card('Q'), card('5')];
     const g = setup(['a', 'b'], { a: [q, five, card('9')], b: [card('2')] }, { bluffRule: 'one' });
     g.play('a', ids(q, five), 'Q');
-    expect(() => g.callBluff('b', g.lastPlay!.id)).toThrow('Pick one');
-    expect(() => g.callBluff('b', g.lastPlay!.id, 2)).toThrow('Pick one');
-    g.callBluff('b', g.lastPlay!.id, 0);
-    expect(g.reveal).toMatchObject({ bluff: false, loserId: 'b', pickedIndex: 0, cards: [q, null] });
+    g.callBluff('b', g.lastPlay!.id);
+    expect(g.reveal).toMatchObject({ bluff: true, loserId: 'a', pickedIndex: 1, cards: [null, five] });
+    expect(g.hand('a')).toHaveLength(3);
   });
 
-  it('card positions follow the order the player tapped', () => {
+  it('only the picked card decides, in the order the player tapped', () => {
     const [q, five] = [card('Q'), card('5')];
     const g = setup(['a', 'b'], { a: [q, five, card('9')], b: [card('2')] }, { bluffRule: 'one' });
     g.play('a', ids(five, q), 'Q');
-    g.callBluff('b', g.lastPlay!.id, 0);
-    expect(g.reveal).toMatchObject({ bluff: true, loserId: 'a', pickedIndex: 0, cards: [five, null] });
-  });
-
-  it('picking the lie catches the bluffer', () => {
-    const [q, five] = [card('Q'), card('5')];
-    const g = setup(['a', 'b'], { a: [q, five, card('9')], b: [card('2')] }, { bluffRule: 'one' });
-    g.play('a', ids(q, five), 'Q');
-    g.callBluff('b', g.lastPlay!.id, 1);
-    expect(g.reveal).toMatchObject({ bluff: true, loserId: 'a', cards: [null, five] });
-    expect(g.hand('a')).toHaveLength(3);
+    g.callBluff('b', g.lastPlay!.id);
+    expect(g.reveal).toMatchObject({ bluff: false, loserId: 'b', pickedIndex: 1, cards: [null, q] });
   });
 });
 
@@ -194,6 +186,29 @@ describe('end-of-game awards', () => {
     const smooth = computeAwards(g.stats).find((x) => x.title === 'Smoothest liar');
     expect(liar).toMatchObject({ playerIds: ['a', 'b'], detail: '1 bluff' });
     expect(smooth).toMatchObject({ playerIds: ['a', 'b'], detail: '1 bluff never caught' });
+  });
+});
+
+describe('bluff call limit', () => {
+  it('allows 2 calls in a row, then locks until the caller plays or passes', () => {
+    const qs = [card('Q', 'S'), card('Q', 'H'), card('Q', 'D'), card('Q', 'C')];
+    const c1 = card('5');
+    const g = setup(['a', 'b', 'c'], { a: [...qs, card('9')], b: [card('2'), card('3')], c: [c1, card('6'), card('7')] });
+    // a plays real Queens and c keeps calling bluff (wrongly), so a starts every new round
+    g.play('a', ids(qs[0]), 'Q');
+    g.callBluff('c', g.lastPlay!.id);
+    expect(g.bluffCallsLeft('c')).toBe(1);
+    g.play('a', ids(qs[1]), 'Q');
+    g.callBluff('c', g.lastPlay!.id);
+    expect(g.bluffCallsLeft('c')).toBe(0);
+    g.play('a', ids(qs[2]), 'Q');
+    expect(() => g.callBluff('c', g.lastPlay!.id)).toThrow('called bluff 2 times in a row');
+    expect(g.bluffCallsLeft('b')).toBe(2);
+
+    // b passes, then c plays on their turn: c may call again
+    g.pass('b');
+    g.play('c', ids(c1));
+    expect(g.bluffCallsLeft('c')).toBe(2);
   });
 });
 

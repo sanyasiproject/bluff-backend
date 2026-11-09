@@ -17,6 +17,9 @@ export type BluffRule = 'all' | 'one';
 /** coins each player puts in; 0 = free game. Up to 10 lakh */
 export const STAKES = [0, 50, 100, 250, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000] as const;
 
+/** a player may call bluff this many times in a row; playing or passing their turn resets it */
+export const MAX_BLUFF_CALLS_IN_A_ROW = 2;
+
 /** daily rewards, counted per India (IST) calendar day */
 export const LOGIN_BONUS = 200;
 export const FIRST_GAME_BONUS = 500;
@@ -155,6 +158,8 @@ export interface RoomView {
   coinResults: CoinResult[] | null;
   /** game ended because too few players were left (after kicks); no coins moved */
   stopped: boolean;
+  /** how many more times I can call bluff before I must play or pass */
+  bluffCallsLeft: number;
 }
 
 export type Role = 'user' | 'admin';

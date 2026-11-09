@@ -27,6 +27,8 @@ export class Room {
   coinResults: CoinResult[] | null = null;
   /** true while a staked start is checking balances */
   starting = false;
+  /** the last game's save, still settling coins */
+  saving: Promise<void> | null = null;
   /** players the host removed mid-game, kept so the saved game still has their name */
   private departed = new Map<string, Member>();
   private announceSeq = 0;
@@ -156,6 +158,13 @@ export class Room {
     this.fillSeats();
   }
 
+  /** host clears the finished game so the same table can be dealt again */
+  rematch(by: string): void {
+    this.assertHost(by);
+    if (this.phase !== 'over') throw new GameError('The game is not over yet');
+    this.backToLobby(by);
+  }
+
   requireGame(): Game {
     if (!this.game || this.game.over) throw new GameError('No game in progress');
     return this.game;
@@ -212,6 +221,7 @@ export class Room {
           : null,
       coinResults: this.coinResults,
       stopped: g?.aborted ?? false,
+      bluffCallsLeft: g && seatedIds.has(meId) ? g.bluffCallsLeft(meId) : 0,
     };
   }
 

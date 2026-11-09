@@ -41,6 +41,11 @@ Everything else has a built-in default: database `bluff`; collections `users`, `
 - Coins move only when a game **finishes**: every logged-in player pays the stake and the winner (1st place) gets the whole pot. A game stopped by the host, or by kicks leaving one player before anyone finished, moves nothing. A kicked player pays nothing and wins nothing.
 - Every finished game stores the stake, pot and each player's coin change in `games`.
 
+## Rules worth knowing
+
+- A player can call **Bluff at most 2 times in a row**; after that the call is refused until they play or pass on their own turn (`MAX_BLUFF_CALLS_IN_A_ROW` in `src/types.ts`).
+- With the **one card** rule the server turns over one random card of the challenged play; nobody chooses it.
+
 `/health` answers `{"ok":true,"accounts":"on"}` when the database is connected.
 
 ## Accounts API
@@ -107,9 +112,10 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `room:rejoin` | `{ code, token }` |
 | `room:config` | `{ decks: 1 \| 2, bluffRule: 'all' \| 'one' }` (host, lobby) |
 | `room:start` / `room:lobby` / `room:leave` | – |
+| `room:rematch` | – (host, after game over: same table, same settings, dealt again) |
 | `game:play` | `{ cardIds, rank? }` (rank only when starting a round) |
 | `game:pass` | – |
-| `game:bluff` | `{ playId, cardIndex? }` (`cardIndex` for the "pick one" rule) |
+| `game:bluff` | `{ playId }` (the "one" rule turns over one random card of that play) |
 | `chat:send` | `{ kind: 'reaction' \| 'message', index }` |
 | `room:kick` | `{ memberId }` (host only; mid-game the player's cards leave the game) |
 | `friend:invite` | `{ userId }` (logged in, friends only, friend must be online) |

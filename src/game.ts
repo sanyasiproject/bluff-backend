@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { buildDeck, secureRandom, shuffle, sortHand, type RandomInt } from './cards.js';
 import type { GameEvent, PlayerStats, PlayRecord } from './models.js';
-import { RANKS, type Card, type GameConfig, type Rank, type RevealView } from './types.js';
+import { MAX_BLUFF_CALLS_IN_A_ROW, RANKS, type Card, type GameConfig, type Rank, type RevealView } from './types.js';
 
 /** Errors safe to show to the player */
 export class GameError extends Error {}
@@ -23,11 +23,13 @@ export class Game {
   readonly kicked = new Set<string>();
   /** ended because too few players were left before anyone finished; no coins move */
   aborted = false;
+  /** bluff calls each player made since their last play or pass */
+  private callStreak = new Map<string, number>();
 
   constructor(
     readonly order: string[],
     readonly config: GameConfig,
-    rand: RandomInt = secureRandom,
+    private readonly rand: RandomInt = secureRandom,
   ) {
     if (order.length < 2 || order.length > 5) throw new GameError('Need 2 to 5 players');
     for (const id of order) {
@@ -66,6 +68,7 @@ export class Game {
     this.pile.push(...cards);
     this.roundRank = claim;
     this.lastPlay = { id: randomUUID(), playerId, cards, rank: claim };
+    this.callStreak.delete(playerId);
     this.passed.clear();
     this.reveal = null;
     this.turnId = this.nextActive(playerId) ?? playerId;
@@ -78,6 +81,7 @@ export class Game {
     const play = this.lastPlay;
     if (!play) throw new GameError(this.roundRank ? 'Put down cards to keep the round going' : 'You start this round, play some cards');
     this.passed.add(playerId);
+    this.callStreak.delete(playerId);
     const events: GameEvent[] = [{ kind: 'pass', playerId }];
     const others = this.order.filter((id) => id !== play.playerId && this.hand(id).length > 0);
     if (others.every((id) => this.passed.has(id))) return [...events, ...this.endRound()];
@@ -85,23 +89,26 @@ export class Game {
     return events;
   }
 
-  callBluff(callerId: string, playId: string, cardIndex?: number): GameEvent[] {
+  callBluff(callerId: string, playId: string): GameEvent[] {
     if (this.over) throw new GameError('Game is over');
     const play = this.lastPlay;
     if (!play || play.id !== playId) throw new GameError('Too late, that play is closed');
     if (play.playerId === callerId) throw new GameError('You cannot call bluff on yourself');
     if (this.hand(callerId).length === 0) throw new GameError('You are already out');
+    if (this.bluffCallsLeft(callerId) === 0) {
+      throw new GameError(`You called bluff ${MAX_BLUFF_CALLS_IN_A_ROW} times in a row. Play or pass your turn first`);
+    }
 
     let pickedIndex: number | null = null;
     let checked = play.cards;
     if (this.config.bluffRule === 'one') {
-      if (cardIndex === undefined || !Number.isInteger(cardIndex) || cardIndex < 0 || cardIndex >= play.cards.length) {
-        throw new GameError('Pick one of the played cards');
-      }
-      pickedIndex = cardIndex;
-      checked = [play.cards[cardIndex]];
+      // the server picks the card at random, so nobody can choose or guess it
+      pickedIndex = this.rand(play.cards.length);
+      checked = [play.cards[pickedIndex]];
     }
 
+    // counted only once the call is valid
+    this.callStreak.set(callerId, (this.callStreak.get(callerId) ?? 0) + 1);
     const bluff = checked.some((c) => c.rank !== play.rank);
     const loserId = bluff ? play.playerId : callerId;
     const winnerId = bluff ? callerId : play.playerId;
@@ -136,6 +143,10 @@ export class Game {
     this.turnId = this.hand(winnerId).length > 0 ? winnerId : this.nextActive(winnerId);
     if (this.turnId) events.push({ kind: 'newRound', starterId: this.turnId });
     return events;
+  }
+
+  bluffCallsLeft(playerId: string): number {
+    return Math.max(0, MAX_BLUFF_CALLS_IN_A_ROW - (this.callStreak.get(playerId) ?? 0));
   }
 
   /** the host removed a player: their cards leave the game and they get no place */

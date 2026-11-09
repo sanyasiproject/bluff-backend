@@ -108,9 +108,3 @@ export function parseQueryInt(value: unknown, fallback: number, max: number): nu
 export function parseSearch(value: unknown): string {
   return typeof value === 'string' ? value.trim().slice(0, 40) : '';
 }
-
-export function parseCardIndex(value: unknown): number | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== 'number' || !Number.isInteger(value)) throw new GameError('Invalid card');
-  return value;
-}
