@@ -11,6 +11,7 @@ import {
   parseChat,
   parseCode,
   parseConfig,
+  parseFlag,
   parseMemberId,
   parseName,
   parsePlayId,
@@ -257,6 +258,17 @@ export function registerHandlers(
       saveGame(room, record);
       room.backToLobby(member.id);
       publish(room, wasPlaying ? [room.note('room', `${member.name} stopped the game. No coins moved`)] : []);
+    });
+
+    // yourself, or (host only) anyone else in the room
+    on('room:watch', (p) => {
+      const { room, member } = current();
+      const watching = parseFlag(p.watching, 'Watching');
+      const targetId = p.memberId === undefined ? member.id : parseMemberId(p.memberId);
+      const target = room.setWatching(member.id, targetId, watching);
+      const now = watching ? 'watching' : 'playing';
+      const text = target === member ? `${target.name} is ${now}` : `${member.name} moved ${target.name} to ${now}`;
+      publish(room, [room.note('room', text)]);
     });
 
     on('room:host', (p) => {

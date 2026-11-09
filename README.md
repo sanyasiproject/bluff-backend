@@ -123,6 +123,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `room:rematch` | – (host, after game over: same table, same settings, dealt again) |
 | `room:end` | – (host, once someone finished 1st: game over, 1st wins and everyone else loses) |
 | `room:host` | `{ memberId }` (host, lobby only: make an online member the host) |
+| `room:watch` | `{ watching: boolean, memberId? }` (lobby only: sit out and watch, or take a free seat; with `memberId` the host moves someone else; chosen watchers aren't seated automatically) |
 | `game:play` | `{ cardIds, rank? }` (rank only when starting a round) |
 | `game:pass` | – |
 | `game:bluff` | `{ playId, cardIndex? }` (`cardIndex` for the "pick one" rule) |

@@ -91,6 +91,8 @@ export interface WatcherView {
   username: string | null;
   /** account level; null for guests */
   level: number | null;
+  /** chose to watch, rather than waiting for a free seat */
+  byChoice: boolean;
 }
 
 /** sent only to watchers: every hand and the real cards of the last play */

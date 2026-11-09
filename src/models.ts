@@ -8,8 +8,10 @@ export interface Member {
   name: string;
   socketId: string | null;
   lastSeen: number;
-  /** no seat: joined mid-game or the room already had 5 players */
+  /** no seat: joined mid-game, the room already had 5 players, or chose to watch */
   watching: boolean;
+  /** chose to watch in the lobby; stays a watcher until they switch back, even when a seat frees up */
+  watchByChoice: boolean;
   /** account id when logged in; null for guests */
   userId: string | null;
   /** coin balance as last seen (display only); null for guests */

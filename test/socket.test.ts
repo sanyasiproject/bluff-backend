@@ -246,6 +246,55 @@ describe('socket server', () => {
     expect(await send(b, 'room:host', { memberId: aId })).toEqual({ ok: false, error: 'The host can only be changed in the lobby' });
   });
 
+  it('lets anyone switch between playing and watching in the lobby', async () => {
+    const people: Client[] = [];
+    for (let i = 0; i < 6; i++) people.push(await client());
+    const [host, p2, , , , p6] = people;
+    const { code } = await send(host, 'room:create', { name: 'P1' });
+    for (let i = 1; i < 6; i++) await send(people[i], 'room:join', { code, name: `P${i + 1}` });
+    await until(() => host.state?.players.length === 5 && host.state.watchers.length === 1);
+    const names = (list: { name: string }[]) => list.map((p) => p.name);
+
+    // P6 waits for a seat; P2 chooses to watch, so P6 gets that seat
+    expect(await send(p2, 'room:watch', { watching: true })).toEqual({ ok: true });
+    await until(() => names(host.state!.watchers).join() === 'P2');
+    expect(names(host.state!.players)).toEqual(['P1', 'P3', 'P4', 'P5', 'P6']);
+    expect(host.state!.watchers[0].byChoice).toBe(true);
+    expect(await send(p2, 'room:watch', { watching: false })).toEqual({ ok: false, error: 'All 5 seats are taken' });
+
+    // a seat frees up, but someone who chose to watch isn't seated until they switch back
+    await send(p6, 'room:leave');
+    await until(() => host.state!.players.length === 4);
+    expect(names(host.state!.watchers)).toEqual(['P2']);
+    expect(await send(p2, 'room:watch', { watching: false })).toEqual({ ok: true });
+    await until(() => host.state!.players.length === 5 && host.state!.watchers.length === 0);
+    await until(() => host.notes.at(-1)?.text === 'P2 is playing');
+
+    // the host can move anyone; nobody else can
+    const p3 = people[2];
+    const p3Id = p3.state!.meId;
+    expect(await send(p2, 'room:watch', { watching: true, memberId: p3Id })).toEqual({ ok: false, error: 'Only the host can do that' });
+    expect(await send(host, 'room:watch', { watching: true, memberId: p3Id })).toEqual({ ok: true });
+    await until(() => names(host.state!.watchers).join() === 'P3');
+    await until(() => host.notes.at(-1)?.text === 'P1 moved P3 to watching');
+    expect(await send(host, 'room:watch', { watching: false, memberId: p3Id })).toEqual({ ok: true });
+    await until(() => host.state!.watchers.length === 0);
+
+    // the host can watch and still start the game; switching waits for the lobby
+    expect(await send(host, 'room:watch', { watching: true })).toEqual({ ok: true });
+    expect(await send(host, 'room:start')).toEqual({ ok: true });
+    await until(() => host.state?.phase === 'playing');
+    expect(host.state!.hand).toEqual([]);
+    expect(host.state!.watch).not.toBeNull();
+    expect(await send(host, 'room:watch', { watching: false })).toEqual({
+      ok: false,
+      error: 'You can switch between playing and watching in the lobby',
+    });
+    await send(host, 'room:lobby');
+    await until(() => host.state?.phase === 'lobby');
+    expect(names(host.state!.watchers)).toEqual(['P1']);
+  });
+
   it('blocks browser connections from unknown sites', async () => {
     const evil = connect(url, {
       transports: ['websocket'],

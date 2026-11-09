@@ -66,6 +66,7 @@ export class Room {
       lastSeen: Date.now(),
       // late or extra people watch, and get a seat in the next game
       watching: this.phase === 'playing' || this.players().length >= MAX_PLAYERS,
+      watchByChoice: false,
       userId: account?.userId ?? null,
       coins: account?.coins ?? null,
       username: account?.username ?? null,
@@ -110,6 +111,24 @@ export class Room {
     if (!target.socketId) throw new GameError(`${target.name} is offline`);
     this.hostId = target.id;
     return target;
+  }
+
+  /** in the lobby anyone can sit out and watch, or take a free seat again; the host can move anyone */
+  setWatching(by: string, targetId: string, watching: boolean): Member {
+    if (targetId !== by) this.assertHost(by);
+    if (this.phase !== 'lobby') throw new GameError('You can switch between playing and watching in the lobby');
+    const m = this.member(targetId);
+    if (watching) {
+      m.watching = true;
+      m.watchByChoice = true;
+      // someone waiting for a seat gets the one just freed
+      this.fillSeats();
+      return m;
+    }
+    if (m.watching && this.players().length >= MAX_PLAYERS) throw new GameError(`All ${MAX_PLAYERS} seats are taken`);
+    m.watching = false;
+    m.watchByChoice = false;
+    return m;
   }
 
   setConfig(by: string, config: GameConfig): void {
@@ -222,7 +241,14 @@ export class Room {
       })),
       watchers: this.members
         .filter((m) => !seatedIds.has(m.id))
-        .map((m) => ({ id: m.id, name: m.name, connected: m.socketId !== null, username: m.username, level: m.level })),
+        .map((m) => ({
+          id: m.id,
+          name: m.name,
+          connected: m.socketId !== null,
+          username: m.username,
+          level: m.level,
+          byChoice: m.watchByChoice,
+        })),
       turnId: g?.turnId ?? null,
       roundRank: g?.roundRank ?? null,
       pileCount: g?.pile.length ?? 0,
@@ -286,10 +312,10 @@ export class Room {
     }
   }
 
-  /** watchers take free seats in the order they joined */
+  /** watchers waiting for a seat take free ones in the order they joined; those who chose to watch stay put */
   private fillSeats(): void {
     for (const m of this.members) {
-      if (m.watching && this.players().length < MAX_PLAYERS) m.watching = false;
+      if (m.watching && !m.watchByChoice && this.players().length < MAX_PLAYERS) m.watching = false;
     }
   }
 
