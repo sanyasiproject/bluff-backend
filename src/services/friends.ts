@@ -71,6 +71,10 @@ export class FriendService {
     await this.cols.friends.deleteOne({ pair: pairOf(me, otherId) });
   }
 
+  async countFor(me: ObjectId): Promise<number> {
+    return this.cols.friends.countDocuments({ status: 'accepted', $or: [{ requester: me }, { recipient: me }] });
+  }
+
   async areFriends(a: string, b: string): Promise<boolean> {
     const pair = [a, b].sort().join('_');
     return (await this.cols.friends.countDocuments({ pair, status: 'accepted' }, { limit: 1 })) === 1;

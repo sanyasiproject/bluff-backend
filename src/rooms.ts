@@ -20,7 +20,7 @@ const CHAT_GAP_MS = 700;
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { decks: 1, bluffRule: 'all', stake: 0 };
+  config: GameConfig = { decks: 1, bluffRule: 'one', stake: 0 };
   game: Game | null = null;
   startedAt: Date | null = null;
   /** coin changes of the last finished game, filled once it's saved */

@@ -222,6 +222,55 @@ export interface GameSummary {
   players: { name: string; place: number | null; loser: boolean; guest: boolean; kicked: boolean }[];
 }
 
+/** extra numbers for the player's own profile page */
+export interface ProfileOverview {
+  /** place by coins among all accounts, 1 = most coins */
+  coinRank: number;
+  players: number;
+  friends: number;
+  /** today's daily rewards already received */
+  loginBonusToday: boolean;
+  gameBonusToday: boolean;
+}
+
+/** what an admin sees about an account */
+export interface AdminUser extends PublicUser {
+  lastLoginAt: string | null;
+  blocked: boolean;
+}
+
+export type AuditAction = 'coins' | 'make_admin' | 'update' | 'password';
+
+/** one admin change to an account */
+export interface AuditEntry {
+  id: string;
+  action: AuditAction;
+  /** the admin's display name; null when done with the admin key */
+  by: string | null;
+  amount?: number;
+  balanceAfter?: number;
+  reason?: string;
+  /** what changed, e.g. "Name: Ravi → Ravi K" */
+  detail?: string;
+  createdAt: string;
+}
+
+/** admin changes per page on a user's admin page */
+export const HISTORY_PAGE_SIZE = 10;
+
+/** everything the admin page for one user shows */
+export interface AdminUserDetail {
+  user: AdminUser;
+  games: GameSummary[];
+  /** first page of admin changes, newest first */
+  history: AuditEntry[];
+  /** all admin changes, for the page count */
+  historyTotal: number;
+  friends: number;
+  /** devices currently logged in */
+  activeSessions: number;
+}
+
 export interface FriendView {
   id: string;
   username: string;

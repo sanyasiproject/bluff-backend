@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Store } from '../../services/store.js';
 import { toPublicUser } from '../../services/users.js';
+import type { ProfileOverview } from '../../types.js';
 import { parseQueryInt } from '../../validate.js';
 import { ah, currentUser, requireUser } from '../middleware.js';
 
@@ -14,6 +15,16 @@ export function meRoutes(store: Store): Router {
     ah(async (_req, res) => {
       const daily = await store.users.claimLoginBonus(currentUser(res));
       res.json({ user: toPublicUser(daily.user), bonus: daily.bonus });
+    }),
+  );
+
+  r.get(
+    '/overview',
+    ah(async (_req, res) => {
+      const me = currentUser(res);
+      const [overview, friends] = await Promise.all([store.users.overview(me), store.friends.countFor(me._id)]);
+      const body: ProfileOverview = { ...overview, friends };
+      res.json(body);
     }),
   );
 

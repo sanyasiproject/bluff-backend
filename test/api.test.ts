@@ -5,7 +5,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBluffServer } from '../src/server.js';
 import { createStore, type Store } from '../src/services/store.js';
-import type { FriendsResponse, GameSummary, InviteEvent, PublicUser, RoomView } from '../src/types.js';
+import type { AuditEntry, FriendsResponse, GameSummary, InviteEvent, PublicUser, RoomView } from '../src/types.js';
 
 // run with TEST_MONGODB_URI=mongodb://127.0.0.1:27017 (a throwaway database is created and dropped)
 const MONGO = process.env.TEST_MONGODB_URI;
@@ -134,6 +134,74 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
       ['coins', 'admin', -200],
       ['make_admin', 'admin', null],
     ]);
+  });
+
+  it('gives admins a full user page and lets them rename, block and reset passwords', async () => {
+    const chief = await register('chief_1');
+    const meena = await register('meena_1', 'secret-pass-1', 'Meena');
+    const chiefAuth = bearer(chief.body.token);
+    const [chiefId, meenaId] = [chief.body.user.id as string, meena.body.user.id as string];
+    await api().post('/api/admin/make-admin').set('X-Admin-Key', ADMIN_KEY).send({ username: 'chief_1' });
+    expect((await api().get(`/api/admin/users/${chiefId}`).set(bearer(meena.body.token))).status).toBe(403);
+
+    await api().post(`/api/admin/users/${meenaId}/coins`).set(chiefAuth).send({ amount: 300, reason: 'Won the bet' });
+    const renamed = await api().post(`/api/admin/users/${meenaId}`).set(chiefAuth).send({ displayName: 'Meena K', role: 'admin' });
+    expect(renamed.body.user).toMatchObject({ displayName: 'Meena K', role: 'admin', blocked: false });
+    expect((await api().post(`/api/admin/users/${meenaId}`).set(chiefAuth).send({})).status).toBe(400);
+    expect((await api().post(`/api/admin/users/${meenaId}`).set(chiefAuth).send({ role: 'king' })).status).toBe(400);
+    expect((await api().post(`/api/admin/users/${chiefId}`).set(chiefAuth).send({ blocked: true })).status).toBe(400);
+    expect((await api().post(`/api/admin/users/${chiefId}`).set(chiefAuth).send({ displayName: 'Chief' })).body.user.displayName).toBe('Chief');
+
+    // blocking logs them out everywhere and stops new logins
+    expect((await api().post(`/api/admin/users/${meenaId}`).set(chiefAuth).send({ blocked: true })).body.user.blocked).toBe(true);
+    expect((await api().get('/api/me').set(bearer(meena.body.token))).status).toBe(401);
+    expect((await api().post('/api/auth/login').send({ username: 'meena_1', password: 'secret-pass-1' })).status).toBe(403);
+    await api().post(`/api/admin/users/${meenaId}`).set(chiefAuth).send({ blocked: false });
+
+    // a reset password works at once and the old one stops working
+    expect((await api().post(`/api/admin/users/${meenaId}/password`).set(chiefAuth).send({ password: 'short' })).status).toBe(400);
+    expect((await api().post(`/api/admin/users/${meenaId}/password`).set(chiefAuth).send({ password: 'fresh-pass-22' })).status).toBe(204);
+    expect((await api().post('/api/auth/login').send({ username: 'meena_1', password: 'secret-pass-1' })).status).toBe(401);
+    expect((await api().post('/api/auth/login').send({ username: 'meena_1', password: 'fresh-pass-22' })).status).toBe(200);
+
+    const page = await api().get(`/api/admin/users/${meenaId}`).set(chiefAuth);
+    expect(page.body.user).toMatchObject({ username: 'meena_1', displayName: 'Meena K', coins: 1500, blocked: false });
+    expect(page.body.user.passwordHash).toBeUndefined();
+    expect(page.body.user.lastLoginAt).toEqual(expect.any(String));
+    expect(page.body).toMatchObject({ activeSessions: 1, friends: 0, games: [] });
+    expect(page.body.history.map((h: AuditEntry) => [h.action, h.by, h.amount ?? h.detail])).toEqual([
+      ['password', 'Chief', 'Password reset, logged out everywhere'],
+      ['update', 'Chief', 'Unblocked'],
+      ['update', 'Chief', 'Blocked'],
+      ['update', 'Chief', 'Name: Meena → Meena K · Role: player → admin'],
+      ['coins', 'Chief', 300],
+    ]);
+    expect((await api().get('/api/admin/users/nope').set(chiefAuth)).status).toBe(404);
+
+    // 12 changes after these: the page shows the newest 10, page 2 has the oldest 2
+    for (let i = 1; i <= 7; i++) await api().post(`/api/admin/users/${meenaId}/coins`).set(chiefAuth).send({ amount: i });
+    const first = (await api().get(`/api/admin/users/${meenaId}`).set(chiefAuth)).body;
+    expect(first.history).toHaveLength(10);
+    expect(first.historyTotal).toBe(12);
+    expect(first.history.slice(0, 2).map((h: AuditEntry) => h.amount)).toEqual([7, 6]);
+    const second = (await api().get(`/api/admin/users/${meenaId}/history?page=2`).set(chiefAuth)).body;
+    expect(second.total).toBe(12);
+    expect(second.history.map((h: AuditEntry) => h.amount ?? h.detail)).toEqual(['Name: Meena → Meena K · Role: player → admin', 300]);
+    expect((await api().get(`/api/admin/users/${meenaId}/history?page=3`).set(chiefAuth)).body.history).toEqual([]);
+    expect((await api().get(`/api/admin/users/${meenaId}/history`).set(bearer(meena.body.token))).status).toBe(401);
+  });
+
+  it('shows coin rank, friends and today\'s rewards on the profile', async () => {
+    const raja = await register('rank_raja');
+    const auth = bearer(raja.body.token);
+    const before = await api().get('/api/me/overview').set(auth);
+    expect(before.body).toMatchObject({ friends: 0, loginBonusToday: true, gameBonusToday: false });
+    expect(before.body.coinRank).toBeGreaterThan(1);
+    await api().post('/api/admin/make-admin').set('X-Admin-Key', ADMIN_KEY).send({ username: 'rank_raja' });
+    await api().post(`/api/admin/users/${raja.body.user.id}/coins`).set(auth).send({ amount: 1_000_000 });
+    const after = await api().get('/api/me/overview').set(auth);
+    expect(after.body).toMatchObject({ coinRank: 1, players: before.body.players });
+    expect((await api().get('/api/me/overview')).status).toBe(401);
   });
 
   it('saves a finished game and adds it to the logged-in player stats', async () => {

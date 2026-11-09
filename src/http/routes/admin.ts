@@ -1,10 +1,26 @@
-import { Router, type Request } from 'express';
+import { Router, type Request, type Response } from 'express';
+import { ObjectId } from 'mongodb';
 import { sameSecret } from '../../auth/tokens.js';
 import type { Actor } from '../../db/documents.js';
 import type { Store } from '../../services/store.js';
-import { asPayload, parseCoinAmount, parseQueryInt, parseReason, parseSearch, parseUsername } from '../../validate.js';
+import type { UserChanges } from '../../services/users.js';
+import type { AdminUserDetail } from '../../types.js';
+import {
+  asPayload,
+  parseCoinAmount,
+  parseFlag,
+  parseName,
+  parsePassword,
+  parseQueryInt,
+  parseReason,
+  parseRole,
+  parseSearch,
+  parseUsername,
+} from '../../validate.js';
 import { ApiError } from '../errors.js';
 import { ah, bearerToken, currentUser, requireAdmin, type rateLimit } from '../middleware.js';
+
+const actorOf = (res: Response): Actor => ({ userId: currentUser(res)._id, via: 'admin' });
 
 export function adminRoutes(store: Store, adminApiKey: string, limited: ReturnType<typeof rateLimit>): Router {
   const r = Router();
@@ -19,15 +35,57 @@ export function adminRoutes(store: Store, adminApiKey: string, limited: ReturnTy
     }),
   );
 
+  r.get(
+    '/users/:id',
+    ...admin,
+    ah(async (req, res) => {
+      const { user, history, historyTotal, activeSessions } = await store.users.adminView(String(req.params.id));
+      const id = new ObjectId(user.id);
+      const [games, friends] = await Promise.all([store.games.recentFor(id, 10), store.friends.countFor(id)]);
+      const detail: AdminUserDetail = { user, games, history, historyTotal, friends, activeSessions };
+      res.json(detail);
+    }),
+  );
+
+  r.get(
+    '/users/:id/history',
+    ...admin,
+    ah(async (req, res) => {
+      const page = parseQueryInt(req.query.page, 1, 100_000) || 1;
+      res.json(await store.users.history(String(req.params.id), page));
+    }),
+  );
+
+  // only the fields sent are changed
+  r.post(
+    '/users/:id',
+    ...admin,
+    ah(async (req, res) => {
+      const b = asPayload(req.body);
+      const changes: UserChanges = {};
+      if (b.displayName !== undefined) changes.displayName = parseName(b.displayName);
+      if (b.role !== undefined) changes.role = parseRole(b.role);
+      if (b.blocked !== undefined) changes.blocked = parseFlag(b.blocked, 'Blocked');
+      if (Object.keys(changes).length === 0) throw new ApiError(400, 'Nothing to change');
+      res.json({ user: await store.users.update(String(req.params.id), changes, actorOf(res)) });
+    }),
+  );
+
+  r.post(
+    '/users/:id/password',
+    ...admin,
+    ah(async (req, res) => {
+      await store.users.setPassword(String(req.params.id), parsePassword(asPayload(req.body).password), actorOf(res));
+      res.status(204).end();
+    }),
+  );
+
   r.post(
     '/users/:id/coins',
     ...admin,
     ah(async (req, res) => {
       const b = asPayload(req.body);
-      const user = await store.users.adjustCoins(String(req.params.id), parseCoinAmount(b.amount), parseReason(b.reason), {
-        userId: currentUser(res)._id,
-        via: 'admin',
-      });
+      const user = await store.users.adjustCoins(String(req.params.id), parseCoinAmount(b.amount), parseReason(b.reason), actorOf(res));
       res.json({ user });
     }),
   );

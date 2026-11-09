@@ -7,6 +7,7 @@ import type { Announcement, InviteEvent } from './types.js';
 import {
   asPayload,
   parseCardIds,
+  parseCardIndex,
   parseChat,
   parseCode,
   parseConfig,
@@ -291,7 +292,7 @@ export function registerHandlers(
 
     on('game:bluff', (p) => {
       const { room, member } = current();
-      afterMove(room, room.requireGame().callBluff(member.id, parsePlayId(p.playId)));
+      afterMove(room, room.requireGame().callBluff(member.id, parsePlayId(p.playId), parseCardIndex(p.cardIndex)));
     });
 
     on('chat:send', (p) => {

@@ -1,6 +1,6 @@
 import type { Collection, ObjectId } from 'mongodb';
 import type { PlayerStats } from '../models.js';
-import type { GameConfig, LifetimeStats, Role } from '../types.js';
+import type { AuditAction, GameConfig, LifetimeStats, Role } from '../types.js';
 
 /** database and collection names, all overridable from env */
 export interface DbNames {
@@ -28,6 +28,8 @@ export interface UserDoc {
   lastLoginBonusDay?: string;
   /** IST day the first-game bonus was last given */
   lastGameBonusDay?: string;
+  /** set by an admin: no login, existing sessions are revoked */
+  blocked?: boolean;
 }
 
 export interface SessionDoc {
@@ -75,7 +77,7 @@ export interface GameDoc {
 
 export interface AuditDoc {
   _id: ObjectId;
-  action: 'coins' | 'make_admin';
+  action: AuditAction;
   targetUserId: ObjectId;
   /** null when done with the ADMIN_API_KEY */
   byUserId: ObjectId | null;
@@ -83,6 +85,8 @@ export interface AuditDoc {
   amount?: number;
   balanceAfter?: number;
   reason?: string;
+  /** what changed, e.g. "Name: Ravi → Ravi K" */
+  detail?: string;
   createdAt: Date;
 }
 

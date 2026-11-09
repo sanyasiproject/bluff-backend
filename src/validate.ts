@@ -1,5 +1,5 @@
 import { GameError } from './game.js';
-import { QUICK_MESSAGES, RANKS, REACTIONS, STAKES, type ChatKind, type GameConfig, type Rank } from './types.js';
+import { QUICK_MESSAGES, RANKS, REACTIONS, STAKES, type ChatKind, type GameConfig, type Rank, type Role } from './types.js';
 
 export type Payload = Record<string, unknown>;
 
@@ -86,6 +86,16 @@ export function parsePassword(value: unknown): string {
   return value;
 }
 
+export function parseRole(value: unknown): Role {
+  if (value !== 'user' && value !== 'admin') throw new GameError('Role must be user or admin');
+  return value;
+}
+
+export function parseFlag(value: unknown, what: string): boolean {
+  if (typeof value !== 'boolean') throw new GameError(`${what} must be true or false`);
+  return value;
+}
+
 export function parseCoinAmount(value: unknown): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value === 0 || Math.abs(value) > 1_000_000) {
     throw new GameError('Amount must be a whole number between -1,000,000 and 1,000,000 (not 0)');
@@ -107,4 +117,10 @@ export function parseQueryInt(value: unknown, fallback: number, max: number): nu
 
 export function parseSearch(value: unknown): string {
   return typeof value === 'string' ? value.trim().slice(0, 40) : '';
+}
+
+export function parseCardIndex(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value)) throw new GameError('Invalid card');
+  return value;
 }

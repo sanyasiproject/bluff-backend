@@ -2,9 +2,19 @@ import { MongoServerError, ObjectId, type Filter, type WithId } from 'mongodb';
 import { hashPassword, verifyPassword } from '../auth/passwords.js';
 import { hashToken, newToken } from '../auth/tokens.js';
 import { istDay } from '../days.js';
-import type { Actor, Collections, UserDoc } from '../db/documents.js';
+import type { Actor, AuditDoc, Collections, UserDoc } from '../db/documents.js';
 import { ApiError } from '../http/errors.js';
-import { LOGIN_BONUS, type AuthResponse, type LifetimeStats, type PublicUser } from '../types.js';
+import {
+  HISTORY_PAGE_SIZE,
+  LOGIN_BONUS,
+  type AdminUser,
+  type AuditEntry,
+  type AuthResponse,
+  type LifetimeStats,
+  type ProfileOverview,
+  type PublicUser,
+  type Role,
+} from '../types.js';
 
 export interface UserServiceOptions {
   defaultCoins: number;
@@ -33,6 +43,19 @@ export function toPublicUser(u: WithId<UserDoc>): PublicUser {
     createdAt: u.createdAt.toISOString(),
   };
 }
+
+export function toAdminUser(u: WithId<UserDoc>): AdminUser {
+  return { ...toPublicUser(u), lastLoginAt: u.lastLoginAt?.toISOString() ?? null, blocked: u.blocked ?? false };
+}
+
+/** fields an admin can change on an account */
+export interface UserChanges {
+  displayName?: string;
+  role?: Role;
+  blocked?: boolean;
+}
+
+const roleName = (r: Role) => (r === 'admin' ? 'admin' : 'player');
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -83,6 +106,7 @@ export class UserService {
     const ok = await verifyPassword(password, user?.passwordHash ?? (await this.dummyHash));
     // one message for both cases, so nobody can probe which usernames exist
     if (!user || !ok) throw new ApiError(401, 'Wrong username or password');
+    if (user.blocked) throw new ApiError(403, 'This account is blocked. Ask an admin');
     await this.cols.users.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
     const daily = await this.claimLoginBonus(user);
     return { token: await this.createSession(user._id), user: toPublicUser(daily.user), bonus: daily.bonus };
@@ -112,17 +136,116 @@ export class UserService {
 
   async userForToken(token: string): Promise<WithId<UserDoc> | null> {
     const session = await this.cols.sessions.findOne({ tokenHash: hashToken(token), expiresAt: { $gt: new Date() } });
-    return session ? this.cols.users.findOne({ _id: session.userId }) : null;
+    return session ? this.cols.users.findOne({ _id: session.userId, blocked: { $ne: true } }) : null;
   }
 
-  async list(q: { search: string; limit: number; skip: number }): Promise<{ users: PublicUser[]; total: number }> {
+  async list(q: { search: string; limit: number; skip: number }): Promise<{ users: AdminUser[]; total: number }> {
     const re = { $regex: escapeRegex(q.search), $options: 'i' };
     const filter: Filter<UserDoc> = q.search ? { $or: [{ username: re }, { displayName: re }] } : {};
     const [users, total] = await Promise.all([
       this.cols.users.find(filter).sort({ createdAt: -1 }).skip(q.skip).limit(q.limit).toArray(),
       this.cols.users.countDocuments(filter),
     ]);
-    return { users: users.map(toPublicUser), total };
+    return { users: users.map(toAdminUser), total };
+  }
+
+  /** coin rank and today's rewards, for the player's own profile page */
+  async overview(user: WithId<UserDoc>): Promise<Omit<ProfileOverview, 'friends'>> {
+    const today = istDay();
+    const [richer, players] = await Promise.all([
+      this.cols.users.countDocuments({ coins: { $gt: user.coins } }),
+      this.cols.users.estimatedDocumentCount(),
+    ]);
+    return {
+      coinRank: richer + 1,
+      players,
+      loginBonusToday: user.lastLoginBonusDay === today,
+      gameBonusToday: user.lastGameBonusDay === today,
+    };
+  }
+
+  /** an account as admins see it, with its admin history and logged-in devices */
+  async adminView(
+    userId: string,
+  ): Promise<{ user: AdminUser; history: AuditEntry[]; historyTotal: number; activeSessions: number }> {
+    const _id = objectId(userId);
+    const [user, page, activeSessions] = await Promise.all([
+      this.cols.users.findOne({ _id }),
+      this.history(userId, 1),
+      this.cols.sessions.countDocuments({ userId: _id, expiresAt: { $gt: new Date() } }),
+    ]);
+    if (!user) throw new ApiError(404, 'User not found');
+    return { user: toAdminUser(user), history: page.history, historyTotal: page.total, activeSessions };
+  }
+
+  /** one page of admin changes to an account, newest first; page 1 is the newest */
+  async history(userId: string, page: number): Promise<{ history: AuditEntry[]; total: number }> {
+    const _id = objectId(userId);
+    const [audit, total] = await Promise.all([
+      this.cols.audit
+        .find({ targetUserId: _id })
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * HISTORY_PAGE_SIZE)
+        .limit(HISTORY_PAGE_SIZE)
+        .toArray(),
+      this.cols.audit.countDocuments({ targetUserId: _id }),
+    ]);
+    const adminIds = [...new Set(audit.flatMap((a) => (a.byUserId ? [a.byUserId.toHexString()] : [])))].map((id) => new ObjectId(id));
+    const admins = await this.cols.users.find({ _id: { $in: adminIds } }, { projection: { displayName: 1 } }).toArray();
+    const nameOf = new Map(admins.map((a) => [a._id.toHexString(), a.displayName]));
+    const history = audit.map((a: AuditDoc) => ({
+      id: a._id.toHexString(),
+      action: a.action,
+      by: a.byUserId ? (nameOf.get(a.byUserId.toHexString()) ?? 'Deleted admin') : null,
+      amount: a.amount,
+      balanceAfter: a.balanceAfter,
+      reason: a.reason,
+      detail: a.detail,
+      createdAt: a.createdAt.toISOString(),
+    }));
+    return { history, total };
+  }
+
+  /** rename, change role, block or unblock; blocking logs the user out everywhere */
+  async update(userId: string, changes: UserChanges, by: Actor): Promise<AdminUser> {
+    const _id = objectId(userId);
+    const self = by.userId?.equals(_id) ?? false;
+    if (self && (changes.role !== undefined || changes.blocked !== undefined)) {
+      throw new ApiError(400, "You can't change your own role or block yourself");
+    }
+    const user = await this.cols.users.findOne({ _id });
+    if (!user) throw new ApiError(404, 'User not found');
+
+    const set: Partial<UserDoc> = {};
+    const notes: string[] = [];
+    if (changes.displayName !== undefined && changes.displayName !== user.displayName) {
+      set.displayName = changes.displayName;
+      notes.push(`Name: ${user.displayName} → ${changes.displayName}`);
+    }
+    if (changes.role !== undefined && changes.role !== user.role) {
+      set.role = changes.role;
+      notes.push(`Role: ${roleName(user.role)} → ${roleName(changes.role)}`);
+    }
+    if (changes.blocked !== undefined && changes.blocked !== (user.blocked ?? false)) {
+      set.blocked = changes.blocked;
+      notes.push(changes.blocked ? 'Blocked' : 'Unblocked');
+    }
+    if (notes.length === 0) return toAdminUser(user);
+
+    const updated = await this.cols.users.findOneAndUpdate({ _id }, { $set: set }, { returnDocument: 'after' });
+    if (!updated) throw new ApiError(404, 'User not found');
+    if (set.blocked) await this.cols.sessions.deleteMany({ userId: _id });
+    await this.audit(_id, 'update', by, { detail: notes.join(' · ') });
+    return toAdminUser(updated);
+  }
+
+  /** for players who forgot theirs; every device is logged out */
+  async setPassword(userId: string, password: string, by: Actor): Promise<void> {
+    const _id = objectId(userId);
+    const res = await this.cols.users.updateOne({ _id }, { $set: { passwordHash: await hashPassword(password) } });
+    if (res.matchedCount === 0) throw new ApiError(404, 'User not found');
+    await this.cols.sessions.deleteMany({ userId: _id });
+    await this.audit(_id, 'password', by, { detail: 'Password reset, logged out everywhere' });
   }
 
   /** positive gives coins, negative takes them; never below zero; every change is audited */
@@ -160,6 +283,18 @@ export class UserService {
       createdAt: new Date(),
     });
     return toPublicUser(user);
+  }
+
+  private async audit(targetUserId: ObjectId, action: AuditDoc['action'], by: Actor, extra: Partial<AuditDoc> = {}) {
+    await this.cols.audit.insertOne({
+      _id: new ObjectId(),
+      action,
+      targetUserId,
+      byUserId: by.userId,
+      via: by.via,
+      ...extra,
+      createdAt: new Date(),
+    });
   }
 
   private async createSession(userId: ObjectId): Promise<string> {

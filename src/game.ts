@@ -29,7 +29,7 @@ export class Game {
   constructor(
     readonly order: string[],
     readonly config: GameConfig,
-    private readonly rand: RandomInt = secureRandom,
+    rand: RandomInt = secureRandom,
   ) {
     if (order.length < 2 || order.length > 5) throw new GameError('Need 2 to 5 players');
     for (const id of order) {
@@ -89,7 +89,7 @@ export class Game {
     return events;
   }
 
-  callBluff(callerId: string, playId: string): GameEvent[] {
+  callBluff(callerId: string, playId: string, cardIndex?: number): GameEvent[] {
     if (this.over) throw new GameError('Game is over');
     const play = this.lastPlay;
     if (!play || play.id !== playId) throw new GameError('Too late, that play is closed');
@@ -102,9 +102,11 @@ export class Game {
     let pickedIndex: number | null = null;
     let checked = play.cards;
     if (this.config.bluffRule === 'one') {
-      // the server picks the card at random, so nobody can choose or guess it
-      pickedIndex = this.rand(play.cards.length);
-      checked = [play.cards[pickedIndex]];
+      if (cardIndex === undefined || !Number.isInteger(cardIndex) || cardIndex < 0 || cardIndex >= play.cards.length) {
+        throw new GameError('Pick one of the played cards');
+      }
+      pickedIndex = cardIndex;
+      checked = [play.cards[cardIndex]];
     }
 
     // counted only once the call is valid

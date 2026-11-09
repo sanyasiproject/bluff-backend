@@ -44,7 +44,7 @@ Everything else has a built-in default: database `bluff`; collections `users`, `
 ## Rules worth knowing
 
 - A player can call **Bluff at most 2 times in a row**; after that the call is refused until they play or pass on their own turn (`MAX_BLUFF_CALLS_IN_A_ROW` in `src/types.ts`).
-- With the **one card** rule the server turns over one random card of the challenged play; nobody chooses it.
+- New rooms start on the **pick one card** bluff rule; the host can switch to show all in the lobby.
 
 `/health` answers `{"ok":true,"accounts":"on"}` when the database is connected.
 
@@ -59,11 +59,16 @@ All bodies are JSON. Protected routes need `Authorization: Bearer <token>` (the 
 | `POST /api/auth/logout` | logged in | – | 204, token revoked |
 | `GET /api/me` | logged in | – | `{ user, bonus }` (bonus = daily +200 if just paid) |
 | `GET /api/me/games` | logged in | `?limit=20` | `{ games }` most recent first, with per-game stats and coins |
+| `GET /api/me/overview` | logged in | – | `{ coinRank, players, friends, loginBonusToday, gameBonusToday }` for the profile page |
 | `GET /api/friends` | logged in | – | `{ friends, incoming, outgoing }` with `online` |
 | `POST /api/friends/request` | logged in | `{ username }` | `{ result: 'sent' \| 'accepted' }` |
 | `POST /api/friends/:id/accept` | logged in | – | 204 |
 | `POST /api/friends/:id/remove` | logged in | – | 204 (decline, cancel or unfriend) |
 | `GET /api/admin/users` | admin | `?search=&limit=50&skip=0` | `{ users, total }` |
+| `GET /api/admin/users/:id` | admin | – | `{ user, games, history, historyTotal, friends, activeSessions }` (last 10 games, first page of admin changes) |
+| `GET /api/admin/users/:id/history` | admin | `?page=1` | `{ history, total }`, 10 admin changes per page, newest first |
+| `POST /api/admin/users/:id` | admin | any of `{ displayName, role: 'user' \| 'admin', blocked }` | `{ user }`; blocking logs them out everywhere; not on yourself |
+| `POST /api/admin/users/:id/password` | admin | `{ password }` | 204; logs them out everywhere |
 | `POST /api/admin/users/:id/coins` | admin | `{ amount, reason? }` (negative takes coins) | `{ user }` |
 | `POST /api/admin/make-admin` | admin, or header `X-Admin-Key` | `{ username }` | `{ user }` |
 
@@ -115,7 +120,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `room:rematch` | – (host, after game over: same table, same settings, dealt again) |
 | `game:play` | `{ cardIds, rank? }` (rank only when starting a round) |
 | `game:pass` | – |
-| `game:bluff` | `{ playId }` (the "one" rule turns over one random card of that play) |
+| `game:bluff` | `{ playId, cardIndex? }` (`cardIndex` for the "pick one" rule) |
 | `chat:send` | `{ kind: 'reaction' \| 'message', index }` |
 | `room:kick` | `{ memberId }` (host only; mid-game the player's cards leave the game) |
 | `friend:invite` | `{ userId }` (logged in, friends only, friend must be online) |
