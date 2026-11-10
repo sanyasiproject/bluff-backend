@@ -320,6 +320,11 @@ export class UserService {
     return { from, to };
   }
 
+  /** an app-wide setting change goes in the admin's own history */
+  async logSetting(by: Actor, detail: string): Promise<void> {
+    if (by.userId) await this.audit(by.userId, 'settings', by, { detail });
+  }
+
   async makeAdmin(username: string, by: Actor): Promise<PublicUser> {
     const user = await this.cols.users.findOneAndUpdate({ username }, { $set: { role: 'admin' } }, { returnDocument: 'after' });
     if (!user) throw new ApiError(404, 'User not found');

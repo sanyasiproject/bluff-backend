@@ -10,6 +10,7 @@ export interface DbNames {
   games: string;
   audit: string;
   friends: string;
+  settings: string;
 }
 
 export interface UserDoc {
@@ -110,12 +111,21 @@ export interface FriendDoc {
   acceptedAt?: Date;
 }
 
+/** the one app-wide settings document */
+export interface SettingsDoc {
+  _id: 'app';
+  guestsAllowed: boolean;
+  updatedBy: ObjectId | null;
+  updatedAt: Date;
+}
+
 export interface Collections {
   users: Collection<UserDoc>;
   sessions: Collection<SessionDoc>;
   games: Collection<GameDoc>;
   audit: Collection<AuditDoc>;
   friends: Collection<FriendDoc>;
+  settings: Collection<SettingsDoc>;
 }
 
 /** who performed an admin action */

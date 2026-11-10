@@ -38,7 +38,7 @@ describe('guest-only server', () => {
     const server = createBluffServer();
     const res = await request(server.app).post('/api/auth/login').send({ username: 'a', password: 'b' });
     expect(res.status).toBe(503);
-    expect((await request(server.app).get('/health')).body).toEqual({ ok: true, accounts: 'off' });
+    expect((await request(server.app).get('/health')).body).toEqual({ ok: true, accounts: 'off', guests: true });
     server.close();
   });
 });
@@ -51,7 +51,7 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
   beforeAll(async () => {
     store = await createStore(
       MONGO!,
-      { db: DB, users: 'users', sessions: 'sessions', games: 'games', audit: 'audit_log', friends: 'friends' },
+      { db: DB, users: 'users', sessions: 'sessions', games: 'games', audit: 'audit_log', friends: 'friends', settings: 'settings' },
       { defaultCoins: 1000, sessionTtlDays: 30 },
     );
     server = createBluffServer({ store, adminApiKey: ADMIN_KEY, authAttempts: 1000, limits: { createsPerIp: 10_000, liveRoomsPerIp: 10_000 } });
@@ -613,6 +613,50 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect((await api().get('/api/me').set(bearer(tokens[1]))).body.user.giftLeft).toBe(100);
     host.socket.disconnect();
     other.socket.disconnect();
+  });
+
+  it('lets an admin turn guest play off and on; guests then must log in to create or join', async () => {
+    const boss = await register('switch_boss');
+    await api().post('/api/admin/make-admin').set('X-Admin-Key', ADMIN_KEY).send({ username: 'switch_boss' });
+    const player = await register('switch_player');
+    const bossAuth = bearer(boss.body.token);
+    // players can't see or change it
+    expect((await api().get('/api/admin/settings').set(bearer(player.body.token))).status).toBe(403);
+    expect((await api().post('/api/admin/settings').set(bearer(player.body.token)).send({ guestsAllowed: false })).status).toBe(403);
+    expect((await api().get('/api/admin/settings').set(bossAuth)).body.settings).toMatchObject({ guestsAllowed: true });
+
+    const guest = await socketClient();
+    const changes: { guestsAllowed: boolean }[] = [];
+    guest.socket.on('settings:changed', (s: { guestsAllowed: boolean }) => changes.push(s));
+    const host = await socketClient(player.body.token);
+    const { code } = await send(host, 'room:create', {});
+
+    const off = await api().post('/api/admin/settings').set(bossAuth).send({ guestsAllowed: false });
+    expect(off.body.settings).toMatchObject({ guestsAllowed: false, updatedBy: 'switch_boss' });
+    await until(() => changes.length === 1);
+    expect(changes[0]).toEqual({ guestsAllowed: false });
+    expect((await api().get('/health')).body).toMatchObject({ guests: false });
+    const refused = { ok: false, error: 'Guest play is off right now. Log in to play' };
+    expect(await send(guest, 'room:create', { name: 'Guesty' })).toEqual(refused);
+    expect(await send(guest, 'room:join', { code, name: 'Guesty' })).toEqual(refused);
+    // logged-in players are not affected
+    const member = await socketClient((await register('switch_member')).body.token);
+    expect((await send(member, 'room:join', { code })).ok).toBe(true);
+    // the change is saved: a fresh start of the server still has guest play off
+    const again = await createStore(
+      MONGO!,
+      { db: DB, users: 'users', sessions: 'sessions', games: 'games', audit: 'audit_log', friends: 'friends', settings: 'settings' },
+      { defaultCoins: 1000, sessionTtlDays: 30 },
+    );
+    expect(again.settings.guestsAllowed).toBe(false);
+    await again.close();
+    // and it shows in the admin's history
+    const history = (await api().get(`/api/admin/users/${boss.body.user.id}/history`).set(bossAuth)).body.history as AuditEntry[];
+    expect(history[0]).toMatchObject({ action: 'settings', detail: 'Guest play turned off', by: 'switch_boss' });
+
+    expect((await api().post('/api/admin/settings').set(bossAuth).send({ guestsAllowed: true })).body.settings.guestsAllowed).toBe(true);
+    expect((await send(guest, 'room:create', { name: 'Guesty' })).ok).toBe(true);
+    [guest, host, member].forEach((c) => c.socket.disconnect());
   });
 
   it('makes a player who leaves a staked game lose and still pay', async () => {

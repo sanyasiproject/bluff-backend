@@ -4,7 +4,7 @@ import { sameSecret } from '../../auth/tokens.js';
 import type { Actor } from '../../db/documents.js';
 import type { Store } from '../../services/store.js';
 import type { UserChanges } from '../../services/users.js';
-import type { AdminUserDetail } from '../../types.js';
+import type { AdminUserDetail, AppSettings } from '../../types.js';
 import {
   asPayload,
   parseCoinAmount,
@@ -22,9 +22,36 @@ import { ah, bearerToken, currentUser, requireAdmin, type rateLimit } from '../m
 
 const actorOf = (res: Response): Actor => ({ userId: currentUser(res)._id, via: 'admin' });
 
-export function adminRoutes(store: Store, adminApiKey: string, limited: ReturnType<typeof rateLimit>): Router {
+export function adminRoutes(
+  store: Store,
+  adminApiKey: string,
+  limited: ReturnType<typeof rateLimit>,
+  onSettingsChanged: (settings: AppSettings) => void,
+): Router {
   const r = Router();
   const admin = requireAdmin(store);
+
+  r.get(
+    '/settings',
+    ...admin,
+    ah(async (_req, res) => {
+      res.json({ settings: await store.settings.view() });
+    }),
+  );
+
+  // guest play on or off for the whole app; open apps update at once
+  r.post(
+    '/settings',
+    ...admin,
+    ah(async (req, res) => {
+      const on = parseFlag(asPayload(req.body).guestsAllowed, 'Guest play');
+      const by = actorOf(res);
+      const settings = await store.settings.setGuestsAllowed(on, by.userId);
+      await store.users.logSetting(by, on ? 'Guest play turned on' : 'Guest play turned off');
+      onSettingsChanged(settings);
+      res.json({ settings });
+    }),
+  );
 
   r.get(
     '/users',

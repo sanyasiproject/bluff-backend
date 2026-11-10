@@ -7,6 +7,7 @@ import { ApiError } from './http/errors.js';
 import { Presence } from './presence.js';
 import { DEFAULT_ROOM_LIMITS, RoomManager, type RoomLimits } from './rooms.js';
 import type { Store } from './services/store.js';
+import type { AppSettings } from './types.js';
 import { giftLeftOf } from './services/users.js';
 import { MAX_CONNECTIONS_PER_IP, registerHandlers } from './socket.js';
 
@@ -24,12 +25,14 @@ export function createBluffServer(deps: ServerDeps = {}) {
   const presence = new Presence();
   // set once Socket.IO exists; the API is created first because the http server needs it
   let notifyFriends = (_userId: string) => {};
+  let settingsChanged = (_settings: AppSettings) => {};
   const app = createApi(store, {
     adminApiKey: deps.adminApiKey ?? '',
     authAttempts: deps.authAttempts,
     presence,
     notifyFriends: (userId) => notifyFriends(userId),
     roomOfUser: (userId) => rooms.roomOfUser(userId)?.code ?? null,
+    onSettingsChanged: (settings) => settingsChanged(settings),
   });
   const httpServer = createServer(app);
 
@@ -42,6 +45,10 @@ export function createBluffServer(deps: ServerDeps = {}) {
 
   notifyFriends = (userId) => {
     for (const id of presence.socketsOf(userId)) io.to(id).emit('friends:changed');
+  };
+  // every open app hears about it, so home screens show or hide guest play right away
+  settingsChanged = (settings) => {
+    io.emit('settings:changed', { guestsAllowed: settings.guestsAllowed });
   };
 
   const rooms = new RoomManager({ ...DEFAULT_ROOM_LIMITS, ...deps.limits });
@@ -58,6 +65,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
           // the socket layer runs this in the background; a DB hiccup must never break the game
           onGameEnd: (record) => store.games.save(record),
           areFriends: (a, b) => store.friends.areFriends(a, b),
+          guestsAllowed: () => store.settings.guestsAllowed,
           giftCoins: async (fromId, toId, amount) => {
             try {
               const { from, to } = await store.users.giftCoins(fromId, toId, amount);

@@ -3,6 +3,7 @@ import { isAllowedOrigin } from '../config.js';
 import { GameError } from '../game.js';
 import type { Presence } from '../presence.js';
 import type { Store } from '../services/store.js';
+import type { AppSettings } from '../types.js';
 import { ApiError } from './errors.js';
 import { rateLimit, userRateLimit } from './middleware.js';
 import { adminRoutes } from './routes/admin.js';
@@ -21,6 +22,8 @@ export interface ApiOptions {
   notifyFriends?: NotifyFriends;
   /** which room a user is in, so friends already playing aren't offered an invite */
   roomOfUser?: RoomOfUser;
+  /** an admin changed an app-wide setting */
+  onSettingsChanged?: (settings: AppSettings) => void;
 }
 
 /** HTTP side of the server: health check and the /api routes */
@@ -33,7 +36,8 @@ export function createApi(store: Store | null, opts: ApiOptions): express.Expres
   app.use(express.json({ limit: '10kb' }));
 
   app.get('/health', (_req, res) => {
-    res.json({ ok: true, accounts: store ? 'on' : 'off' });
+    // guests can always play on a guest-only server
+    res.json({ ok: true, accounts: store ? 'on' : 'off', guests: store ? store.settings.guestsAllowed : true });
   });
   app.get('/', (_req, res) => {
     res.type('text').send('Bluff game server is running');
@@ -47,7 +51,7 @@ export function createApi(store: Store | null, opts: ApiOptions): express.Expres
     const social = userRateLimit(20, 60_000);
     app.use('/api/friends', friendRoutes(store, opts.presence, opts.notifyFriends ?? (() => {}), opts.roomOfUser ?? (() => null), social));
     app.use('/api/players', playerRoutes(store, opts.presence, social));
-    app.use('/api/admin', adminRoutes(store, opts.adminApiKey, limited));
+    app.use('/api/admin', adminRoutes(store, opts.adminApiKey, limited, opts.onSettingsChanged ?? (() => {})));
   } else {
     app.use('/api', (_req, _res, next) => next(new ApiError(503, 'Accounts are not set up on this server')));
   }

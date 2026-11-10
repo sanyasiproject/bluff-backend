@@ -262,7 +262,13 @@ export function registerHandlers(
       if (pendingIn && pendingIn !== target && pendingIn.dropWatchRequests(socket.id)) broadcast(pendingIn);
     };
 
+    // an admin can turn guest play off; guests already in a room keep their seat
+    const assertMayPlay = () => {
+      if (!user && hooks.guestsAllowed && !hooks.guestsAllowed()) throw new GameError('Guest play is off right now. Log in to play');
+    };
+
     on('room:create', async (p) => {
+      assertMayPlay();
       const name = nameFrom(p);
       releaseOthers(null);
       const next = rooms.create(name, await accountOf(user), ip);
@@ -273,6 +279,7 @@ export function registerHandlers(
     });
 
     on('room:join', async (p) => {
+      assertMayPlay();
       const code = parseCode(p.code);
       const name = nameFrom(p);
       const room = rooms.get(code);

@@ -49,7 +49,9 @@ Everything else has a built-in default: database `bluff`; collections `users`, `
 - A player can call **Bluff at most 2 times in a row**; after that the call is refused until they play or pass on their own turn (`MAX_BLUFF_CALLS_IN_A_ROW` in `src/types.ts`).
 - New rooms start on the **pick one card** bluff rule; the host can switch to show all in the lobby.
 
-`/health` answers `{"ok":true,"accounts":"on"}` when the database is connected.
+`/health` answers `{"ok":true,"accounts":"on","guests":true}` when the database is connected (`guests` is false while an admin has guest play turned off).
+
+- **Guest play switch:** with guest play off, guests get "Guest play is off right now. Log in to play" on `room:create` / `room:join`. Guests already in a room keep their seat and can `room:rejoin`.
 
 ## Accounts API
 
@@ -75,6 +77,8 @@ All bodies are JSON. Protected routes need `Authorization: Bearer <token>` (the 
 | `POST /api/admin/users/:id` | admin | any of `{ displayName, role: 'user' \| 'admin', blocked }` | `{ user }`; blocking logs them out everywhere; not on yourself |
 | `POST /api/admin/users/:id/password` | admin | `{ password }` | 204; logs them out everywhere |
 | `POST /api/admin/users/:id/coins` | admin | `{ amount, reason? }` (negative takes coins) | `{ user }` |
+| `GET /api/admin/settings` | admin | – | `{ settings }`: `{ guestsAllowed, updatedBy, updatedAt }` |
+| `POST /api/admin/settings` | admin | `{ guestsAllowed }` | `{ settings }`; saved in the `settings` collection, logged in the admin's history, every open app gets `settings:changed` |
 | `POST /api/admin/make-admin` | admin, or header `X-Admin-Key` | `{ username }` | `{ user }` |
 
 Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128 characters; display names follow the in-game name rules (1–16 characters). Coins never go below zero. Login, register and make-admin allow 20 attempts per IP per 15 minutes. Search, player profiles and friend actions share a limit of 20 per minute per account (429 after that).

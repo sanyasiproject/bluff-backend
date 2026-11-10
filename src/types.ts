@@ -357,7 +357,16 @@ export interface AdminUser extends PublicUser {
   blocked: boolean;
 }
 
-export type AuditAction = 'coins' | 'make_admin' | 'update' | 'password' | 'gift';
+export type AuditAction = 'coins' | 'make_admin' | 'update' | 'password' | 'gift' | 'settings';
+
+/** switches an admin can flip for the whole app */
+export interface AppSettings {
+  /** false: everyone must log in to create or join a room */
+  guestsAllowed: boolean;
+  /** the admin who last changed it, and when; null if never changed */
+  updatedBy: string | null;
+  updatedAt: string | null;
+}
 
 /** one admin change to an account */
 export interface AuditEntry {
