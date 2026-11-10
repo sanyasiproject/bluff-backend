@@ -6,6 +6,7 @@ import type { Room, RoomManager } from './rooms.js';
 import type { Announcement, InviteEvent } from './types.js';
 import {
   asPayload,
+  parseBet,
   parseCardIds,
   parseCardIndex,
   parseChat,
@@ -16,6 +17,7 @@ import {
   parseName,
   parsePlayId,
   parseRank,
+  parseSlot,
   parseToken,
   parseUserId,
   type Payload,
@@ -271,6 +273,31 @@ export function registerHandlers(
       publish(room, [room.note('room', text)]);
     });
 
+    on('room:slot', (p) => {
+      const { room, member } = current();
+      room.moveToSlot(member.id, parseSlot(p.slot));
+      broadcast(room);
+    });
+
+    on('room:swap', (p) => {
+      const { room, member } = current();
+      const target = room.askSwap(member.id, parseMemberId(p.memberId));
+      publish(room, [room.note('room', `${member.name} asked ${target.name} to swap places`)]);
+    });
+
+    on('room:swapAnswer', (p) => {
+      const { room, member } = current();
+      const accept = parseFlag(p.accept, 'Answer');
+      const from = room.answerSwap(member.id, parseMemberId(p.memberId), accept);
+      publish(room, [room.note('room', accept ? `${from.name} and ${member.name} swapped places` : `${member.name} said no to swapping`)]);
+    });
+
+    on('room:teams', () => {
+      const { room, member } = current();
+      room.shuffleTeams(member.id);
+      publish(room, [room.note('room', `${member.name} shuffled the teams`)]);
+    });
+
     on('room:host', (p) => {
       const { room, member } = current();
       const target = room.transferHost(member.id, parseMemberId(p.memberId));
@@ -321,7 +348,17 @@ export function registerHandlers(
 
     on('game:bluff', (p) => {
       const { room, member } = current();
-      afterMove(room, room.requireGame().callBluff(member.id, parsePlayId(p.playId), parseCardIndex(p.cardIndex)));
+      const game = room.requireGame();
+      const bet = room.checkBet(member, parseBet(p.bet));
+      afterMove(room, game.callBluff(member.id, parsePlayId(p.playId), parseCardIndex(p.cardIndex), bet));
+    });
+
+    // the card goes back only to this player; everyone else just learns a peek happened
+    on('game:peek', (p) => {
+      const { room, member } = current();
+      const card = room.requireGame().peek(member.id, parsePlayId(p.playId), parseCardIndex(p.cardIndex) ?? -1);
+      publish(room, [room.note('room', `${member.name} used a peek 🔍`)]);
+      return { card };
     });
 
     on('chat:send', (p) => {

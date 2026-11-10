@@ -11,7 +11,7 @@ const ids = (...cards: Card[]) => cards.map((c) => c.id);
 const keepOrder = (max: number) => max - 1;
 
 function setup(players: string[], hands: Record<string, Card[]>, config: Partial<GameConfig> = {}) {
-  const game = new Game(players, { decks: 1, bluffRule: 'all', ...config }, keepOrder);
+  const game = new Game(players, { decks: 1, bluffRule: 'all', stake: 0, peeks: 0, bets: false, teams: false, ...config }, keepOrder);
   for (const p of players) game.hands.set(p, hands[p] ?? []);
   game.turnId = players[0];
   return game;
@@ -107,7 +107,7 @@ describe('bluff rule: check all cards', () => {
     g.play('a', ids(q, five), 'Q');
     const events = g.callBluff('c', g.lastPlay!.id);
     expect(events).toEqual([
-      { kind: 'bluff', callerId: 'c', playerId: 'a', bluff: true, loserId: 'a', pileCount: 2 },
+      { kind: 'bluff', callerId: 'c', playerId: 'a', bluff: true, loserId: 'a', pileCount: 2, bet: 0 },
       { kind: 'newRound', starterId: 'c' },
     ]);
     expect(g.hand('a')).toHaveLength(3);
@@ -181,6 +181,100 @@ describe('host ends the game after a winner', () => {
     expect(g).toMatchObject({ over: true, endedEarly: true, turnId: null });
     expect(g.losers()).toEqual(['b', 'c']);
     expect(() => g.endEarly()).toThrow('Game is over');
+  });
+});
+
+describe('peek power', () => {
+  it('shows one card of the last play to the player who peeks, up to the limit', () => {
+    const [q, five] = [card('Q'), card('5')];
+    const g = setup(['a', 'b'], { a: [q, five, card('9')], b: [card('2')] }, { peeks: 2 });
+    g.play('a', ids(q, five), 'Q');
+    const id = g.lastPlay!.id;
+    expect(() => g.peek('a', id, 0)).toThrow('your own cards');
+    expect(() => g.peek('b', id, 5)).toThrow('Pick one');
+    expect(g.peek('b', id, 1)).toEqual(five);
+    expect(g.peek('b', id, 0)).toEqual(q);
+    expect(g.peeksLeft('b')).toBe(0);
+    expect(() => g.peek('b', id, 0)).toThrow('No peeks left');
+    expect(() => g.peek('b', 'old-play', 0)).toThrow('Too late');
+  });
+
+  it('is off unless the room allows it', () => {
+    const q = card('Q');
+    const g = setup(['a', 'b'], { a: [q, card('2')], b: [card('3')] });
+    g.play('a', ids(q), 'Q');
+    expect(g.peeksLeft('b')).toBe(0);
+    expect(() => g.peek('b', g.lastPlay!.id, 0)).toThrow('Peeks are off');
+  });
+});
+
+describe('bets on bluff calls', () => {
+  it('records that the loser of each call pays the winner', () => {
+    const [five, two] = [card('5'), card('2')];
+    const g = setup(['a', 'b'], { a: [five, card('9'), card('8')], b: [two, card('3')] }, { bets: true });
+    g.play('a', ids(five), 'Q');
+    g.callBluff('b', g.lastPlay!.id, undefined, 100);
+    expect(g.reveal).toMatchObject({ bluff: true, bet: 100 });
+    // b won the call and starts; a wrongly calls b's true play
+    g.play('b', ids(two), '2');
+    g.callBluff('a', g.lastPlay!.id, undefined, 50);
+    expect(g.bets).toEqual([
+      { from: 'a', to: 'b', amount: 100 },
+      { from: 'a', to: 'b', amount: 50 },
+    ]);
+  });
+
+  it('refuses bets when the room has them off', () => {
+    const five = card('5');
+    const g = setup(['a', 'b'], { a: [five, card('9')], b: [card('2')] });
+    g.play('a', ids(five), 'Q');
+    expect(() => g.callBluff('b', g.lastPlay!.id, undefined, 100)).toThrow('Bets are off');
+  });
+});
+
+describe('2v2 teams', () => {
+  it('pairs 1st & 3rd against 2nd & 4th; partners cannot challenge each other and win together', () => {
+    const [a1, b1, c1] = [card('Q'), card('K'), card('Q', 'H')];
+    const g = setup(['a', 'b', 'c', 'd'], { a: [a1], b: [b1, card('2')], c: [c1], d: [card('3'), card('4')] }, { teams: true });
+    expect(g.teams).toEqual([['a', 'c'], ['b', 'd']]);
+    g.play('a', ids(a1), 'Q');
+    expect(() => g.callBluff('c', g.lastPlay!.id)).toThrow('partner');
+    g.pass('b');
+    g.pass('c');
+    g.pass('d');
+    expect(g.places).toEqual(['a']);
+    expect(g.over).toBe(false);
+
+    // c finishes too, so their team wins even though b and d are still playing
+    g.play('b', ids(b1), 'K');
+    g.play('c', ids(c1));
+    g.pass('d');
+    g.pass('b');
+    expect(g.over).toBe(true);
+    expect(g.winners()).toEqual(['a', 'c']);
+    expect(g.losers()).toEqual(['b', 'd']);
+  });
+
+  it('needs 4 players; End game crowns 1st place\'s team; removing a player stops the game', () => {
+    expect(() => new Game(['a', 'b', 'c'], { decks: 1, bluffRule: 'all', stake: 0, peeks: 0, bets: false, teams: true })).toThrow(
+      'exactly 4',
+    );
+    const q = card('Q');
+    const g = setup(['a', 'b', 'c', 'd'], { a: [card('2')], b: [q], c: [card('3')], d: [card('4')] }, { teams: true });
+    g.turnId = 'b';
+    g.play('b', ids(q), 'Q');
+    g.pass('c');
+    g.pass('d');
+    g.pass('a');
+    expect(g.places).toEqual(['b']);
+    g.endEarly();
+    expect(g.winners()).toEqual(['b', 'd']);
+    expect(g.losers()).toEqual(['a', 'c']);
+
+    const k = setup(['a', 'b', 'c', 'd'], { a: [card('2')], b: [card('3')], c: [card('4')], d: [card('5')] }, { teams: true });
+    expect(k.removePlayer('b')).toEqual([{ kind: 'gameOver', loserId: null }]);
+    expect(k).toMatchObject({ over: true, aborted: true });
+    expect(k.winners()).toEqual([]);
   });
 });
 

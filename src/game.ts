@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { buildDeck, secureRandom, shuffle, sortHand, type RandomInt } from './cards.js';
-import type { GameEvent, PlayerStats, PlayRecord } from './models.js';
+import type { BetResult, GameEvent, PlayerStats, PlayRecord } from './models.js';
 import { MAX_BLUFF_CALLS_IN_A_ROW, RANKS, type Card, type GameConfig, type Rank, type RevealView } from './types.js';
 
 /** Errors safe to show to the player */
@@ -25,8 +25,15 @@ export class Game {
   aborted = false;
   /** the host ended it after someone won: 1st place wins, everyone else loses */
   endedEarly = false;
+  /** 2v2 partners, seated alternately (1st & 3rd vs 2nd & 4th); null when everyone plays alone */
+  readonly teams: [string[], string[]] | null;
+  /** coins bet on bluff calls; paid when the game is saved */
+  readonly bets: BetResult[] = [];
   /** bluff calls each player made since their last play or pass */
   private callStreak = new Map<string, number>();
+  private peeksUsed = new Map<string, number>();
+  /** the team whose partners both finished first (or that the host's End game crowned) */
+  private winningTeam: string[] | null = null;
 
   constructor(
     readonly order: string[],
@@ -34,6 +41,8 @@ export class Game {
     rand: RandomInt = secureRandom,
   ) {
     if (order.length < 2 || order.length > 5) throw new GameError('Need 2 to 5 players');
+    if (config.teams && order.length !== 4) throw new GameError('Teams need exactly 4 players');
+    this.teams = config.teams ? [[order[0], order[2]], [order[1], order[3]]] : null;
     for (const id of order) {
       this.hands.set(id, []);
       this.stats.set(id, { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0 });
@@ -91,12 +100,32 @@ export class Game {
     return events;
   }
 
-  callBluff(callerId: string, playId: string, cardIndex?: number): GameEvent[] {
+  /** secretly look at one card of the last play; only the player who peeks learns it */
+  peek(playerId: string, playId: string, cardIndex: number): Card {
+    if (this.over) throw new GameError('Game is over');
+    const play = this.lastPlay;
+    if (!play || play.id !== playId) throw new GameError('Too late, that play is closed');
+    if (play.playerId === playerId) throw new GameError('Those are your own cards');
+    if (this.hand(playerId).length === 0) throw new GameError('You are already out');
+    if (this.peeksLeft(playerId) === 0) throw new GameError(this.config.peeks > 0 ? 'No peeks left this game' : 'Peeks are off in this room');
+    if (!Number.isInteger(cardIndex) || cardIndex < 0 || cardIndex >= play.cards.length) throw new GameError('Pick one of the played cards');
+    this.peeksUsed.set(playerId, (this.peeksUsed.get(playerId) ?? 0) + 1);
+    return play.cards[cardIndex];
+  }
+
+  peeksLeft(playerId: string): number {
+    return Math.max(0, this.config.peeks - (this.peeksUsed.get(playerId) ?? 0));
+  }
+
+  /** bet: coins the caller stakes on being right; the room checks the amount, the game records who pays whom */
+  callBluff(callerId: string, playId: string, cardIndex?: number, bet = 0): GameEvent[] {
     if (this.over) throw new GameError('Game is over');
     const play = this.lastPlay;
     if (!play || play.id !== playId) throw new GameError('Too late, that play is closed');
     if (play.playerId === callerId) throw new GameError('You cannot call bluff on yourself');
     if (this.hand(callerId).length === 0) throw new GameError('You are already out');
+    if (this.partnerOf(callerId) === play.playerId) throw new GameError("You can't call bluff on your partner");
+    if (bet > 0 && !this.config.bets) throw new GameError('Bets are off in this room');
     if (this.bluffCallsLeft(callerId) === 0) {
       throw new GameError(`You called bluff ${MAX_BLUFF_CALLS_IN_A_ROW} times in a row. Play or pass your turn first`);
     }
@@ -124,6 +153,7 @@ export class Game {
       this.stat(callerId).wrongCalls++;
     }
     this.stat(loserId).pickedUp += pileCount;
+    if (bet > 0) this.bets.push({ from: loserId, to: winnerId, amount: bet });
     this.hands.set(loserId, sortHand([...this.hand(loserId), ...this.pile]));
     this.pile = [];
     this.reveal = {
@@ -136,9 +166,10 @@ export class Game {
       bluff,
       loserId,
       pileCount,
+      bet,
     };
 
-    const events: GameEvent[] = [{ kind: 'bluff', callerId, playerId: play.playerId, bluff, loserId, pileCount }];
+    const events: GameEvent[] = [{ kind: 'bluff', callerId, playerId: play.playerId, bluff, loserId, pileCount, bet }];
     events.push(...this.settleLastPlay());
     this.lastPlay = null;
     this.roundRank = null;
@@ -157,13 +188,34 @@ export class Game {
     this.endedEarly = true;
     this.turnId = null;
     this.loserId = null;
+    // with teams, 1st place's team wins
+    if (this.teams) this.winningTeam = this.teamOf(this.places[0]);
     return [{ kind: 'gameOver', loserId: null }];
   }
 
-  /** the last player holding cards, or everyone but the winner when the host ended the game */
+  /** 1st place, or both partners of the winning team */
+  winners(): string[] {
+    if (this.aborted || !this.over) return [];
+    if (this.teams) return this.winningTeam ?? [];
+    return this.places.slice(0, 1);
+  }
+
+  /** the last player holding cards; everyone but the winners when the host ended it or teams played */
   losers(): string[] {
-    if (this.endedEarly) return this.order.filter((id) => id !== this.places[0] && !this.kicked.has(id));
+    if (this.aborted) return [];
+    if (this.endedEarly || this.teams) {
+      const won = this.winners();
+      return won.length === 0 ? [] : this.order.filter((id) => !won.includes(id) && !this.kicked.has(id));
+    }
     return this.loserId ? [this.loserId] : [];
+  }
+
+  teamOf(id: string): string[] | null {
+    return this.teams?.find((t) => t.includes(id)) ?? null;
+  }
+
+  partnerOf(id: string): string | null {
+    return this.teamOf(id)?.find((p) => p !== id) ?? null;
   }
 
   bluffCallsLeft(playerId: string): number {
@@ -179,6 +231,15 @@ export class Game {
     this.passed.delete(playerId);
     // their last play can't be challenged any more; the round rank stays
     if (this.lastPlay?.playerId === playerId) this.lastPlay = null;
+
+    // a team without its partner can't go on: stop the game, nobody wins or pays
+    if (this.teams) {
+      this.over = true;
+      this.aborted = true;
+      this.turnId = null;
+      this.loserId = null;
+      return [{ kind: 'gameOver', loserId: null }];
+    }
 
     const left = this.order.filter((p) => this.hand(p).length > 0);
     if (left.length <= 1) {
@@ -218,6 +279,17 @@ export class Game {
     if (!id || this.hand(id).length > 0 || this.places.includes(id) || this.kicked.has(id)) return [];
     this.places.push(id);
     const events: GameEvent[] = [{ kind: 'finish', playerId: id, place: this.places.length }];
+    // teams: the first team with both partners out wins
+    const team = this.teamOf(id);
+    if (team) {
+      if (team.every((p) => this.places.includes(p))) {
+        this.over = true;
+        this.winningTeam = team;
+        this.turnId = null;
+        events.push({ kind: 'gameOver', loserId: null });
+      }
+      return events;
+    }
     const left = this.order.filter((p) => this.hand(p).length > 0);
     if (left.length <= 1) {
       this.over = true;

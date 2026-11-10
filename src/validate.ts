@@ -1,5 +1,16 @@
 import { GameError } from './game.js';
-import { QUICK_MESSAGES, RANKS, REACTIONS, STAKES, type ChatKind, type GameConfig, type Rank, type Role } from './types.js';
+import {
+  BET_STEPS,
+  MAX_PEEKS,
+  QUICK_MESSAGES,
+  RANKS,
+  REACTIONS,
+  STAKES,
+  type ChatKind,
+  type GameConfig,
+  type Rank,
+  type Role,
+} from './types.js';
 
 export type Payload = Record<string, unknown>;
 
@@ -28,8 +39,26 @@ export function parseConfig(p: Payload): GameConfig {
   const decks = p.decks === 1 || p.decks === 2 ? p.decks : null;
   const bluffRule = p.bluffRule === 'all' || p.bluffRule === 'one' ? p.bluffRule : null;
   const stake = p.stake === undefined ? 0 : (STAKES as readonly unknown[]).includes(p.stake) ? (p.stake as number) : null;
-  if (!decks || !bluffRule || stake === null) throw new GameError('Invalid settings');
-  return { decks, bluffRule, stake };
+  // settings added later default to off, so older apps can still change the rest
+  const peeks = p.peeks === undefined ? 0 : Number.isInteger(p.peeks) && (p.peeks as number) >= 0 && (p.peeks as number) <= MAX_PEEKS ? (p.peeks as number) : null;
+  const bets = p.bets === undefined ? false : typeof p.bets === 'boolean' ? p.bets : null;
+  const teams = p.teams === undefined ? false : typeof p.teams === 'boolean' ? p.teams : null;
+  if (!decks || !bluffRule || stake === null || peeks === null || bets === null || teams === null) throw new GameError('Invalid settings');
+  // bets need coins at stake
+  return { decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams };
+}
+
+/** a bet on a bluff call: 0 for none, otherwise one of BET_STEPS */
+export function parseBet(value: unknown): number {
+  if (value === undefined || value === null || value === 0) return 0;
+  if (!(BET_STEPS as readonly unknown[]).includes(value)) throw new GameError('Invalid bet');
+  return value as number;
+}
+
+/** 2v2 team slot, 0 to 3 */
+export function parseSlot(value: unknown): number {
+  if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 3) throw new GameError('Invalid slot');
+  return value as number;
 }
 
 /** room member id (12 hex chars) */

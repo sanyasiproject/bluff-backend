@@ -57,6 +57,8 @@ export interface GamePlayerDoc {
   coinChange: number;
   /** daily games reward this game reached */
   bonus: number;
+  /** coins won (+) or lost (-) on bluff-call bets */
+  betChange?: number;
   stats: PlayerStats;
 }
 

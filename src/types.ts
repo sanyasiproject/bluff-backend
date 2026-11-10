@@ -35,10 +35,22 @@ export const DAILY_GAME_REWARDS: readonly { games: number; coins: number }[] = [
 /** shorter games don't count towards the daily rewards, so quick games can't farm coins */
 export const MIN_REWARD_GAME_SEC = 60;
 
+/** most peeks a room can allow per player per game */
+export const MAX_PEEKS = 3;
+
+/** coins a caller can bet on a bluff call (never more than the room's stake) */
+export const BET_STEPS = [50, 100, 250, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000] as const;
+
 export interface GameConfig {
   decks: 1 | 2;
   bluffRule: BluffRule;
   stake: number;
+  /** peeks per player per game (0 = off): secretly look at one card of the last play */
+  peeks: number;
+  /** coin games only: callers may bet coins on their bluff call */
+  bets: boolean;
+  /** 2 vs 2: exactly 4 players, partners sit opposite */
+  teams: boolean;
 }
 
 export type Phase = 'lobby' | 'playing' | 'over';
@@ -137,6 +149,8 @@ export interface CoinResult {
   gamesToday: number | null;
   /** this game counted towards today's games (finished, long enough, not removed) */
   counted: boolean;
+  /** coins won (+) or lost (-) on bluff-call bets */
+  bets: number;
   /** XP this game earned; 0 for guests, stopped games and removed players */
   xp: number;
 }
@@ -159,6 +173,8 @@ export interface RevealView {
   bluff: boolean;
   loserId: string;
   pileCount: number;
+  /** coins the caller bet on this call; the loser of the call pays it when the game ends */
+  bet: number;
 }
 
 export interface RoomView {
@@ -192,6 +208,20 @@ export interface RoomView {
   stopped: boolean;
   /** how many more times I can call bluff before I must play or pass */
   bluffCallsLeft: number;
+  /** peeks I have left this game */
+  peeksLeft: number;
+  /** most I can bet on a bluff call right now (0 when bets are off) */
+  betLimit: number;
+  /** 2v2 partners by member id (in the lobby: who would pair up), or null */
+  teams: [string[], string[]] | null;
+  /** who won: 1st place, or both partners of the winning team */
+  winnerIds: string[];
+  /** 2v2 lobby: member id in each of the 4 slots (🔵 0 & 2, 🟠 1 & 3), null when empty */
+  slots: (string | null)[] | null;
+  /** 2v2 lobby: open requests to swap places */
+  swapAsks: { fromId: string; toId: string }[];
+  /** 2v2 game: my partner's cards (only ever sent to their partner) */
+  partnerHand: Card[] | null;
 }
 
 export type Role = 'user' | 'admin';

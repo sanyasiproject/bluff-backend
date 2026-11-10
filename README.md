@@ -37,6 +37,7 @@ Everything else has a built-in default: database `bluff`; collections `users`, `
 
 - New accounts get 1000 coins. **+200** on the first login (or app open) of each India-time day, sign-up day included.
 - **Daily games ladder** (IST day, win or lose): reaching 1 / 3 / 5 / 10 / 20 / 50 finished games pays +100 / +300 / +500 / +1,000 / +2,000 / +5,000 (up to 8,900 a day). Only games of 1 minute or more count (`DAILY_GAME_REWARDS`, `MIN_REWARD_GAME_SEC` in `src/types.ts`).
+- **Peek power** (0–3 per player per game), **bets on bluff calls** (paid with the stake when the game finishes, never below zero) and **2v2 teams** (4 slots, 🔵 0 & 2 vs 🟠 1 & 3, chosen or swapped in the lobby; partners see each other's hand; the first team with both partners out wins and splits the pot; partners can't challenge each other; removing a player stops the game).
 - **Levels** come from lifetime XP (`XP_RULES`, `levelOf` in `src/types.ts`): +20 per finished game, +50 for a win, +5 per caught liar, +3 per bluff nobody caught. Level *n* needs 50 × (*n*−1) × *n* XP; titles run from Rookie (1) to Legend (50, 122,500 XP) and live in the frontend's `src/lib/progress.ts`.
 - **Stakes** (host picks in the lobby): Free, 50, 100, 250, 500, 1K, 5K, 10K, 50K, 1L, 5L, 10L per player. Start checks everyone can pay; guests can only play Free games.
 - Coins move only when a game **finishes**: every logged-in player pays the stake and the winner (1st place) gets the whole pot. A game stopped by the host, or by kicks leaving one player before anyone finished, moves nothing. A kicked player pays nothing and wins nothing.
@@ -118,15 +119,20 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `room:create` | `{ name }` → `{ code, token }` (name ignored when logged in) |
 | `room:join` | `{ code, name }` → `{ code, token }` |
 | `room:rejoin` | `{ code, token }` |
-| `room:config` | `{ decks: 1 \| 2, bluffRule: 'all' \| 'one' }` (host, lobby) |
+| `room:config` | `{ decks: 1 \| 2, bluffRule: 'all' \| 'one', stake, peeks: 0–3, bets: boolean, teams: boolean }` (host, lobby; new fields default to off) |
 | `room:start` / `room:lobby` / `room:leave` | – |
 | `room:rematch` | – (host, after game over: same table, same settings, dealt again) |
 | `room:end` | – (host, once someone finished 1st: game over, 1st wins and everyone else loses) |
 | `room:host` | `{ memberId }` (host, lobby only: make an online member the host) |
+| `room:teams` | – (host, lobby, 2v2 with 4 players: give slot 1 a different partner) |
+| `room:slot` | `{ slot: 0–3 }` (2v2 lobby: move yourself to a free slot; 🔵 0 & 2, 🟠 1 & 3) |
+| `room:swap` | `{ memberId }` (2v2 lobby: ask someone to swap places) |
+| `room:swapAnswer` | `{ memberId, accept }` (answer a swap request from `memberId`) |
 | `room:watch` | `{ watching: boolean, memberId? }` (lobby only: sit out and watch, or take a free seat; with `memberId` the host moves someone else; chosen watchers aren't seated automatically) |
 | `game:play` | `{ cardIds, rank? }` (rank only when starting a round) |
 | `game:pass` | – |
-| `game:bluff` | `{ playId, cardIndex? }` (`cardIndex` for the "pick one" rule) |
+| `game:bluff` | `{ playId, cardIndex?, bet? }` (`cardIndex` for the "pick one" rule; `bet` from `BET_STEPS`, at most the stake, coin games with bets on) |
+| `game:peek` | `{ playId, cardIndex }` → `{ card }` only to the player who peeks (rooms with peeks on) |
 | `chat:send` | `{ kind: 'reaction' \| 'message', index }` |
 | `room:kick` | `{ memberId }` (host only; mid-game the player's cards leave the game) |
 | `friend:invite` | `{ userId }` (logged in, friends only, friend must be online) |

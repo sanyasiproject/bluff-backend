@@ -20,7 +20,7 @@ const CHAT_GAP_MS = 700;
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { decks: 1, bluffRule: 'one', stake: 0 };
+  config: GameConfig = { decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false };
   game: Game | null = null;
   startedAt: Date | null = null;
   /** coin changes of the last finished game, filled once it's saved */
@@ -31,6 +31,8 @@ export class Room {
   saving: Promise<void> | null = null;
   /** players the host removed mid-game, kept so the saved game still has their name */
   private departed = new Map<string, Member>();
+  /** 2v2 lobby: who asked whom to swap places, by the asked player's id */
+  private swapAsks = new Map<string, string>();
   private announceSeq = 0;
   private lastChat = new Map<string, number>();
 
@@ -67,6 +69,7 @@ export class Room {
       // late or extra people watch, and get a seat in the next game
       watching: this.phase === 'playing' || this.players().length >= MAX_PLAYERS,
       watchByChoice: false,
+      slot: null,
       userId: account?.userId ?? null,
       coins: account?.coins ?? null,
       username: account?.username ?? null,
@@ -82,6 +85,7 @@ export class Room {
     if (this.phase === 'playing' && !leaving.watching) throw new GameError('You cannot leave in the middle of a game');
     this.members = this.members.filter((m) => m.id !== id);
     this.lastChat.delete(id);
+    this.forgetSwaps(id);
     if (this.phase === 'lobby') this.fillSeats();
     if (this.hostId === id) this.hostId = (this.players()[0] ?? this.members[0])?.id ?? '';
   }
@@ -98,6 +102,7 @@ export class Room {
     }
     this.members = this.members.filter((m) => m.id !== targetId);
     this.lastChat.delete(targetId);
+    this.forgetSwaps(targetId);
     if (this.phase === 'lobby') this.fillSeats();
     return { kicked: target, events };
   }
@@ -135,6 +140,78 @@ export class Room {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Settings can only change in the lobby');
     this.config = config;
+    if (!config.teams) this.swapAsks.clear();
+  }
+
+  /** 2v2: move yourself into a free team slot, which also picks your team and partner */
+  moveToSlot(by: string, slot: number): void {
+    const m = this.teamLobbyMember(by);
+    this.syncSlots();
+    if (this.players().some((p) => p.slot === slot && p !== m)) throw new GameError('That slot is taken. Ask them to swap instead');
+    m.slot = slot;
+    this.forgetSwaps(by);
+  }
+
+  /** 2v2: ask another player to swap places with you; they answer in the app */
+  askSwap(by: string, targetId: string): Member {
+    if (targetId === by) throw new GameError("That's your own place");
+    this.teamLobbyMember(by);
+    const target = this.teamLobbyMember(targetId);
+    this.swapAsks.set(targetId, by);
+    return target;
+  }
+
+  /** the asked player says yes (places swap) or no; returns who asked */
+  answerSwap(by: string, fromId: string, accept: boolean): Member {
+    if (this.swapAsks.get(by) !== fromId) throw new GameError('That swap request has expired');
+    this.swapAsks.delete(by);
+    const from = this.teamLobbyMember(fromId);
+    const me = this.teamLobbyMember(by);
+    if (accept) {
+      this.syncSlots();
+      [from.slot, me.slot] = [me.slot, from.slot];
+      this.forgetSwaps(fromId);
+      this.forgetSwaps(by);
+    }
+    return from;
+  }
+
+  /** a seated player in a 2v2 lobby */
+  private teamLobbyMember(id: string): Member {
+    if (this.phase !== 'lobby') throw new GameError('Teams can only change in the lobby');
+    if (!this.config.teams) throw new GameError('Turn on 2 vs 2 teams first');
+    const m = this.member(id);
+    if (m.watching) throw new GameError(`${m.name} is watching, not playing`);
+    return m;
+  }
+
+  private forgetSwaps(id: string): void {
+    this.swapAsks.delete(id);
+    for (const [to, from] of this.swapAsks) if (from === id) this.swapAsks.delete(to);
+  }
+
+  /** keeps 2v2 slots valid: watchers have none, each slot has at most one player, and empty ones fill in join order */
+  private syncSlots(): void {
+    for (const m of this.members) if (m.watching) m.slot = null;
+    if (!this.config.teams) return;
+    const taken = new Set<number>();
+    for (const m of this.players()) {
+      if (m.slot !== null && !taken.has(m.slot)) taken.add(m.slot);
+      else m.slot = null;
+    }
+    for (const m of this.players()) {
+      if (m.slot !== null) continue;
+      const free = [0, 1, 2, 3].find((s) => !taken.has(s));
+      if (free === undefined) break;
+      m.slot = free;
+      taken.add(free);
+    }
+  }
+
+  /** member id in each 2v2 slot, null when empty */
+  private slotIds(): (string | null)[] {
+    this.syncSlots();
+    return [0, 1, 2, 3].map((s) => this.players().find((m) => m.slot === s)?.id ?? null);
   }
 
   /** host, lobby and player-count checks; staked checks need coin balances and run in socket.ts */
@@ -142,15 +219,49 @@ export class Room {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Game already started');
     if (this.players().length < 2) throw new GameError('Need at least 2 players');
+    if (this.config.teams && this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
+  }
+
+  /** host swaps partners: the 1st player gets a different partner (the 2nd or the 4th seat, at random) */
+  shuffleTeams(by: string): void {
+    this.assertHost(by);
+    if (this.phase !== 'lobby') throw new GameError('Teams can only change in the lobby');
+    const slots = this.slotIds();
+    if (!this.config.teams || slots.includes(null) || this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
+    // partners hold slots 0 & 2; swapping slot 2 with slot 1 or 3 pairs slot 0 with someone new
+    const a = this.member(slots[2]!);
+    const b = this.member(slots[randomInt(2) === 0 ? 1 : 3]!);
+    [a.slot, b.slot] = [b.slot, a.slot];
+    this.swapAsks.clear();
+  }
+
+  /** a bet must be one of the steps, at most the stake, and covered by what the caller can still lose */
+  checkBet(member: Member, bet: number): number {
+    if (bet === 0) return 0;
+    const g = this.requireGame();
+    if (!g.config.bets) throw new GameError('Bets are off in this room');
+    if (bet > g.config.stake) throw new GameError(`You can bet up to the stake (${g.config.stake.toLocaleString('en-IN')})`);
+    if (bet > this.betRoom(member)) throw new GameError("You don't have enough coins for that bet");
+    return bet;
+  }
+
+  /** coins a player can still risk: balance at the start, minus the stake, plus bets already won, minus bets lost */
+  private betRoom(member: Member): number {
+    const g = this.game;
+    if (!g || member.coins === null) return 0;
+    const net = g.bets.reduce((sum, b) => sum + (b.to === member.id ? b.amount : 0) - (b.from === member.id ? b.amount : 0), 0);
+    return Math.max(0, member.coins - g.config.stake + net);
   }
 
   start(by: string): void {
     this.assertCanStart(by);
     this.game = new Game(
-      this.players().map((m) => m.id),
+      // 2v2 plays in slot order, so the teams alternate turns
+      this.config.teams ? (this.slotIds().filter((id) => id !== null) as string[]) : this.players().map((m) => m.id),
       this.config,
     );
     this.startedAt = new Date();
+    this.swapAsks.clear();
     this.coinResults = null;
     this.departed.clear();
   }
@@ -172,10 +283,12 @@ export class Room {
         name: member(id)?.name ?? 'Someone',
         place: g.places.indexOf(id) + 1 || null,
         loser: status === 'finished' && g.losers().includes(id),
+        won: status === 'finished' && g.winners().includes(id),
         kicked: g.kicked.has(id),
         stats: { ...g.stats.get(id)! },
       })),
       awards: status === 'finished' ? computeAwards(g.stats) : [],
+      bets: status === 'finished' ? [...g.bets] : [],
     };
   }
 
@@ -221,6 +334,9 @@ export class Room {
     const lp = g?.lastPlay;
     // during a game the seats are that game's players; everyone else watches
     const seated = g ? g.order.flatMap((id) => this.members.filter((m) => m.id === id)) : this.players();
+    const me = this.members.find((m) => m.id === meId);
+    // 2v2 lobby: who sits in which team slot
+    const lobbySlots = !g && this.config.teams ? this.slotIds() : null;
     const seatedIds = new Set(seated.map((m) => m.id));
     return {
       code: this.code,
@@ -271,6 +387,15 @@ export class Room {
       coinResults: this.coinResults,
       stopped: g?.aborted ?? false,
       bluffCallsLeft: g && seatedIds.has(meId) ? g.bluffCallsLeft(meId) : 0,
+      peeksLeft: g && seatedIds.has(meId) ? g.peeksLeft(meId) : 0,
+      betLimit: me && g?.config.bets && seatedIds.has(meId) ? Math.min(g.config.stake, this.betRoom(me)) : 0,
+      // in the lobby, show who would pair up if the game started now
+      teams: g ? g.teams : lobbySlots && !lobbySlots.includes(null) ? [[lobbySlots[0]!, lobbySlots[2]!], [lobbySlots[1]!, lobbySlots[3]!]] : null,
+      winnerIds: g ? g.winners() : [],
+      slots: lobbySlots,
+      swapAsks: [...this.swapAsks].map(([toId, fromId]) => ({ fromId, toId })),
+      // partners plan together: each sees the other's hand; nobody else gets it
+      partnerHand: g?.teams && seatedIds.has(meId) ? [...(g.hands.get(g.partnerOf(meId) ?? '') ?? [])] : null,
     };
   }
 
@@ -292,9 +417,10 @@ export class Room {
       case 'bluff':
         return [
           'bluff',
-          e.bluff
+          (e.bluff
             ? `${n(e.callerId)} called bluff. Caught! ${n(e.playerId)} picks up ${e.pileCount} cards`
-            : `${n(e.callerId)} called bluff. It was true! ${n(e.callerId)} picks up ${e.pileCount} cards`,
+            : `${n(e.callerId)} called bluff. It was true! ${n(e.callerId)} picks up ${e.pileCount} cards`) +
+            (e.bet > 0 ? `. ${n(e.loserId)} pays ${e.bet} coins` : ''),
         ];
       case 'newRound':
         return ['round', `${n(e.starterId)} starts a new round`];
@@ -303,7 +429,13 @@ export class Room {
       case 'finish':
         return ['finish', `${n(e.playerId)} finished ${ordinal(e.place)}`];
       case 'gameOver': {
-        if (this.game?.aborted) return ['over', 'Game stopped, not enough players left. No coins moved'];
+        if (this.game?.aborted) {
+          return ['over', this.game.teams ? 'Game stopped, a team lost a player. No coins moved' : 'Game stopped, not enough players left. No coins moved'];
+        }
+        if (this.game?.teams) {
+          const won = this.game.winners().map(n).join(' and ');
+          return ['over', this.game.endedEarly ? `The host ended the game. ${won} win` : `Game over. ${won} win`];
+        }
         if (this.game?.endedEarly) return ['over', `The host ended the game. ${n(this.game.places[0])} wins`];
         const liar =this.game ? computeAwards(this.game.stats).find((a) => a.title === 'Biggest liar') : undefined;
         const loser = e.loserId ? `Game over. ${n(e.loserId)} is the loser` : 'Game over';

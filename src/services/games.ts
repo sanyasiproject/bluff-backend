@@ -41,16 +41,18 @@ export class GameRecorder {
       name: p.name,
       guest: !p.userId,
       place: p.place,
-      won: finished && p.place === 1 && !p.kicked,
+      won: finished && p.won && !p.kicked,
       loser: p.loser,
       kicked: p.kicked,
       coinChange: 0,
       bonus: 0,
+      betChange: 0,
       stats: p.stats,
     }));
 
     // coins only move when the game really finished; a stopped game costs nobody anything
     const pot = finished ? await this.settleStake(players, record.config.stake) : 0;
+    if (finished) await this.settleBets(players, record.bets);
     if (counts) await this.payDailyGameRewards(players);
 
     await this.cols.games.insertOne({
@@ -94,6 +96,7 @@ export class GameRecorder {
         level: u ? levelOf(statsOf(u)) : null,
         gamesToday: u ? (u.gamesTodayDay === today ? (u.gamesToday ?? 0) : 0) : null,
         counted: counts && !!u && !p.kicked,
+        bets: p.betChange ?? 0,
         // same rule as addLifetimeStats: finished games of logged-in players who weren't removed
         xp: finished && u && !p.kicked ? xpOf(asLifetime(p)) : 0,
       };
@@ -116,12 +119,35 @@ export class GameRecorder {
       p.coinChange -= paid;
       pot += paid;
     }
-    const winner = players.find((p) => p.won && p.userId);
-    if (winner && pot > 0) {
-      await this.cols.users.updateOne({ _id: winner.userId! }, { $inc: { coins: pot } });
-      winner.coinChange += pot;
+    // one winner takes it all; a winning 2v2 team splits it (any odd coin goes to the first)
+    const winners = players.filter((p) => p.won && p.userId);
+    for (const [i, w] of winners.entries()) {
+      const share = Math.floor(pot / winners.length) + (i === 0 ? pot % winners.length : 0);
+      if (share === 0) continue;
+      await this.cols.users.updateOne({ _id: w.userId! }, { $inc: { coins: share } });
+      w.coinChange += share;
     }
     return pot;
+  }
+
+  /** each bet's loser pays the winner, never below zero; bets with a removed or guest player don't count */
+  private async settleBets(players: (GamePlayerDoc & { memberId: string })[], bets: GameRecord['bets']): Promise<void> {
+    const byMember = new Map(players.map((p) => [p.memberId, p]));
+    for (const bet of bets) {
+      const from = byMember.get(bet.from);
+      const to = byMember.get(bet.to);
+      if (!from?.userId || !to?.userId || from.kicked || to.kicked) continue;
+      const before = await this.cols.users.findOneAndUpdate(
+        { _id: from.userId },
+        [{ $set: { coins: { $max: [0, { $subtract: ['$coins', bet.amount] }] } } }],
+        { returnDocument: 'before', projection: { coins: 1 } },
+      );
+      const paid = Math.min(before?.coins ?? 0, bet.amount);
+      if (paid === 0) continue;
+      await this.cols.users.updateOne({ _id: to.userId }, { $inc: { coins: paid } });
+      from.betChange = (from.betChange ?? 0) - paid;
+      to.betChange = (to.betChange ?? 0) + paid;
+    }
   }
 
   /** adds one to each player's games today (IST); reaching a DAILY_GAME_REWARDS step pays its coins, win or lose */
@@ -189,7 +215,8 @@ export class GameRecorder {
         won: me?.won ?? false,
         lost: me?.loser ?? false,
         kicked: me?.kicked ?? false,
-        coinChange: me?.coinChange ?? 0,
+        // stake and bets together
+        coinChange: (me?.coinChange ?? 0) + (me?.betChange ?? 0),
         bonus: me?.bonus ?? 0,
         my: me
           ? { bluffs: me.stats.bluffs, caught: me.stats.caught, goodCalls: me.stats.goodCalls, wrongCalls: me.stats.wrongCalls, pickedUp: me.stats.pickedUp }

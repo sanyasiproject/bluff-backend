@@ -12,6 +12,8 @@ export interface Member {
   watching: boolean;
   /** chose to watch in the lobby; stays a watcher until they switch back, even when a seat frees up */
   watchByChoice: boolean;
+  /** 2v2 slot 0-3 (🔵 0 & 2, 🟠 1 & 3); null when not in a team slot */
+  slot: number | null;
   /** account id when logged in; null for guests */
   userId: string | null;
   /** coin balance as last seen (display only); null for guests */
@@ -45,7 +47,16 @@ export interface GameRecordPlayer {
   loser: boolean;
   /** removed by the host mid-game: pays nothing, wins nothing */
   kicked: boolean;
+  /** 1st place, or on the winning team */
+  won: boolean;
   stats: PlayerStats;
+}
+
+/** a bet on a bluff call: the loser of the call pays the winner when the game is saved */
+export interface BetResult {
+  from: string;
+  to: string;
+  amount: number;
 }
 
 /** a finished (or stopped) game, ready to be saved */
@@ -57,6 +68,8 @@ export interface GameRecord {
   endedAt: Date;
   players: GameRecordPlayer[];
   awards: Award[];
+  /** bets on bluff calls, by member id */
+  bets: BetResult[];
 }
 
 /** optional server features wired in by server.ts (accounts, coins, friends) */
@@ -88,7 +101,7 @@ export interface PlayRecord {
 export type GameEvent =
   | { kind: 'play'; playerId: string; count: number; rank: Rank }
   | { kind: 'pass'; playerId: string }
-  | { kind: 'bluff'; callerId: string; playerId: string; bluff: boolean; loserId: string; pileCount: number }
+  | { kind: 'bluff'; callerId: string; playerId: string; bluff: boolean; loserId: string; pileCount: number; bet: number }
   | { kind: 'newRound'; starterId: string }
   | { kind: 'roundEnd'; starterId: string; discarded: number }
   | { kind: 'finish'; playerId: string; place: number }

@@ -50,7 +50,7 @@ describe('socket server', () => {
     const code = created.code!;
     // new rooms start on the "pick one card" bluff rule
     await until(() => a.state !== null);
-    expect(a.state!.config).toEqual({ decks: 1, bluffRule: 'one', stake: 0 });
+    expect(a.state!.config).toEqual({ decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false });
     expect(await send(b, 'room:join', { code: code.toLowerCase(), name: 'Ravi' })).toMatchObject({ ok: true });
     expect(await send(c, 'room:join', { code, name: 'ravi' })).toEqual({ ok: false, error: 'That name is taken in this room' });
     expect(await send(c, 'room:join', { code, name: 'Meena' })).toMatchObject({ ok: true });
@@ -293,6 +293,98 @@ describe('socket server', () => {
     await send(host, 'room:lobby');
     await until(() => host.state?.phase === 'lobby');
     expect(names(host.state!.watchers)).toEqual(['P1']);
+  });
+
+  it('plays 2v2: teams pair the 1st & 3rd seats, the host can shuffle them, and a peek stays private', async () => {
+    const people: Client[] = [];
+    for (let i = 0; i < 4; i++) people.push(await client());
+    const [host] = people;
+    const { code } = await send(host, 'room:create', { name: 'T1' });
+    for (let i = 1; i < 4; i++) await send(people[i], 'room:join', { code, name: `T${i + 1}` });
+    expect(await send(host, 'room:config', { decks: 1, bluffRule: 'all', peeks: 1, teams: true })).toEqual({ ok: true });
+    await until(() => people.every((p) => p.state?.teams != null));
+    const ids = people.map((p) => p.state!.meId);
+    expect(host.state!.teams).toEqual([
+      [ids[0], ids[2]],
+      [ids[1], ids[3]],
+    ]);
+    expect(await send(people[1], 'room:teams')).toEqual({ ok: false, error: 'Only the host can do that' });
+    expect(await send(host, 'room:teams')).toEqual({ ok: true });
+    await until(() => host.state!.teams![0][1] !== ids[2]);
+
+    // three players can't start a team game
+    await send(people[3], 'room:watch', { watching: true });
+    expect(await send(host, 'room:start')).toEqual({ ok: false, error: 'Teams need exactly 4 players' });
+    await send(people[3], 'room:watch', { watching: false });
+    expect(await send(host, 'room:start')).toEqual({ ok: true });
+    await until(() => people.every((p) => p.state?.phase === 'playing'));
+    const teams = host.state!.teams!;
+
+    const byId = new Map(people.map((p) => [p.state!.meId, p]));
+    const mover = byId.get(host.state!.turnId!)!;
+    const moverId = mover.state!.meId;
+    const partner = byId.get(teams.find((t) => t.includes(moverId))!.find((id) => id !== moverId)!)!;
+    const rival = byId.get(teams.find((t) => !t.includes(moverId))![0])!;
+    const played = mover.state!.hand.slice(0, 2);
+    await send(mover, 'game:play', { cardIds: played.map((c) => c.id), rank: 'Q' });
+    await until(() => rival.state?.lastPlay?.count === 2);
+    const playId = rival.state!.lastPlay!.id;
+    expect((await send(partner, 'game:bluff', { playId })).error).toBe("You can't call bluff on your partner");
+
+    // the card comes back only in the peeker's reply; others hear that a peek happened
+    const peek = (await send(rival, 'game:peek', { playId, cardIndex: 1 })) as Res & { card?: unknown };
+    expect(peek).toEqual({ ok: true, card: played[1] });
+    await until(() => host.notes.some((n) => n.text === `${rival.state!.players.find((p) => p.id === rival.state!.meId)!.name} used a peek 🔍`));
+    await until(() => rival.state!.peeksLeft === 0);
+    expect((await send(rival, 'game:peek', { playId, cardIndex: 0 })).error).toBe('No peeks left this game');
+    expect(JSON.stringify(partner.state)).not.toContain(played[1].id);
+  });
+
+  it('lets 2v2 players pick a slot, swap places on request, and see only their partner\'s hand', async () => {
+    const [s1, s2, s3] = [await client(), await client(), await client()];
+    const { code } = await send(s1, 'room:create', { name: 'S1' });
+    await send(s2, 'room:join', { code, name: 'S2' });
+    await send(s3, 'room:join', { code, name: 'S3' });
+    await send(s1, 'room:config', { decks: 1, bluffRule: 'all', teams: true });
+    const id = (c: Client) => c.state!.meId;
+    await until(() => s1.state?.slots?.filter(Boolean).length === 3);
+    expect(s1.state!.slots).toEqual([id(s1), id(s2), id(s3), null]);
+
+    // S3 picks the empty slot, which moves them to the other team
+    expect((await send(s3, 'room:slot', { slot: 1 })).error).toBe('That slot is taken. Ask them to swap instead');
+    expect(await send(s3, 'room:slot', { slot: 3 })).toEqual({ ok: true });
+    await until(() => s1.state!.slots![3] === id(s3));
+    const s4 = await client();
+    await send(s4, 'room:join', { code, name: 'S4' });
+    await until(() => s1.state!.slots![2] === id(s4));
+    expect(s1.state!.teams).toEqual([
+      [id(s1), id(s4)],
+      [id(s2), id(s3)],
+    ]);
+
+    // S1 asks S2 to swap; only S2 can answer, and yes swaps their places
+    expect(await send(s1, 'room:swap', { memberId: id(s2) })).toEqual({ ok: true });
+    await until(() => s2.state!.swapAsks.some((a) => a.fromId === id(s1) && a.toId === id(s2)));
+    expect((await send(s3, 'room:swapAnswer', { memberId: id(s1), accept: true })).error).toBe('That swap request has expired');
+    expect(await send(s2, 'room:swapAnswer', { memberId: id(s1), accept: true })).toEqual({ ok: true });
+    await until(() => s1.state!.slots![0] === id(s2) && s1.state!.slots![1] === id(s1));
+    await until(() => s1.notes.at(-1)?.text === 'S1 and S2 swapped places');
+    expect(s1.state!.swapAsks).toEqual([]);
+
+    // a no leaves everyone where they are
+    await send(s3, 'room:swap', { memberId: id(s4) });
+    expect(await send(s4, 'room:swapAnswer', { memberId: id(s3), accept: false })).toEqual({ ok: true });
+    await until(() => s1.notes.at(-1)?.text === 'S4 said no to swapping');
+    expect(s1.state!.slots).toEqual([id(s2), id(s1), id(s4), id(s3)]);
+
+    // in the game partners see each other's hand and nobody else's
+    expect(await send(s1, 'room:start')).toEqual({ ok: true });
+    await until(() => [s1, s2, s3, s4].every((c) => c.state?.phase === 'playing'));
+    expect(s2.state!.partnerHand).toEqual(s4.state!.hand);
+    expect(s4.state!.partnerHand).toEqual(s2.state!.hand);
+    expect(s1.state!.partnerHand).toEqual(s3.state!.hand);
+    const s1Json = JSON.stringify(s1.state);
+    expect([...s2.state!.hand, ...s4.state!.hand].some((c) => s1Json.includes(`"${c.id}"`))).toBe(false);
   });
 
   it('blocks browser connections from unknown sites', async () => {

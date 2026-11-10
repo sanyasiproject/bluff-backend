@@ -333,10 +333,11 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
       startedAt: new Date(Date.now() - seconds * 1000),
       endedAt: new Date(),
       players: [
-        { memberId: 'm1', userId, name: 'ladder_l', place: 1, loser: false, kicked: false, stats: zero },
-        { memberId: 'm2', userId: null, name: 'Guest', place: null, loser: true, kicked: false, stats: zero },
+        { memberId: 'm1', userId, name: 'ladder_l', place: 1, loser: false, kicked: false, won: true, stats: zero },
+        { memberId: 'm2', userId: null, name: 'Guest', place: null, loser: true, kicked: false, won: false, stats: zero },
       ],
       awards: [],
+      bets: [],
     });
     const save = async (seconds: number) => new Map((await store.games.save(game(seconds))).map((r) => [r.playerId, r]));
 
@@ -354,6 +355,51 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     await client.db(DB).collection('users').updateOne({ username: 'ladder_l' }, { $set: { gamesTodayDay: '2000-01-01' } });
     await client.close();
     expect((await save(90)).get('m1')).toMatchObject({ bonus: 100, gamesToday: 1, coins: 1700 });
+  });
+
+  it('plays a staked 2v2 with a bet: the team splits the pot and the bet is paid', async () => {
+    const regs = [];
+    for (const u of ['team_a1', 'team_b1', 'team_a2', 'team_b2']) regs.push(await register(u, 'secret-pass-1', u));
+    const people = [];
+    for (const r of regs) people.push(await socketClient(r.body.token));
+    const { code } = await send(people[0], 'room:create', {});
+    for (const p of people.slice(1)) await send(p, 'room:join', { code });
+    await until(() => people.every((p) => p.state?.players.length === 4));
+    expect(await send(people[0], 'room:config', { decks: 1, bluffRule: 'all', stake: 100, bets: true, teams: true })).toEqual({ ok: true });
+    expect(await send(people[0], 'room:start')).toEqual({ ok: true });
+    await until(() => people.every((p) => p.state?.phase === 'playing'));
+
+    // the mover lies; an opponent (not their partner) calls with a bet
+    const byId = new Map(people.map((p) => [p.state!.meId, p]));
+    const mover = byId.get(people[0].state!.turnId!)!;
+    const teams = mover.state!.teams!;
+    const moverTeam = teams.find((t) => t.includes(mover.state!.meId))!;
+    const caller = byId.get(teams.find((t) => t !== moverTeam)![0])!;
+    const lie = mover.state!.hand[0];
+    await send(mover, 'game:play', { cardIds: [lie.id], rank: lie.rank === 'K' ? 'Q' : 'K' });
+    await until(() => caller.state?.lastPlay?.count === 1);
+    expect(caller.state!.betLimit).toBe(100);
+    const playId = caller.state!.lastPlay!.id;
+    expect((await send(caller, 'game:bluff', { playId, bet: 7 })).error).toBe('Invalid bet');
+    expect((await send(caller, 'game:bluff', { playId, bet: 250 })).error).toBe('You can bet up to the stake (100)');
+    expect(await send(caller, 'game:bluff', { playId, bet: 100 })).toEqual({ ok: true });
+    await until(() => caller.state?.reveal?.bet === 100);
+
+    // the caller finishes 1st and the host ends the game: the caller's team wins
+    server.rooms.get(code!).game!.places.push(caller.state!.meId);
+    expect(await send(people[0], 'room:end')).toEqual({ ok: true });
+    await until(() => people.every((p) => p.state?.coinResults != null));
+    const results = new Map(caller.state!.coinResults!.map((r) => [r.playerId, r]));
+    const callerId = caller.state!.meId;
+    const callerPartner = teams.find((t) => t.includes(callerId))!.find((id) => id !== callerId)!;
+    const moverPartner = moverTeam.find((id) => id !== mover.state!.meId)!;
+    // pot of 400 split by the winning team: +100 each after paying 100; the bet moves 100 from mover to caller
+    expect(results.get(callerId)).toMatchObject({ change: 100, bets: 100, coins: 1400 });
+    expect(results.get(callerPartner)).toMatchObject({ change: 100, bets: 0, coins: 1300 });
+    expect(results.get(mover.state!.meId)).toMatchObject({ change: -100, bets: -100, coins: 1000 });
+    expect(results.get(moverPartner)).toMatchObject({ change: -100, bets: 0, coins: 1100 });
+    expect([...caller.state!.winnerIds].sort()).toEqual([callerId, callerPartner].sort());
+    people.forEach((p) => p.socket.disconnect());
   });
 
   it('keeps guests out of staked games', async () => {
