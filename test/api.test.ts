@@ -6,7 +6,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBluffServer } from '../src/server.js';
 import type { GameRecord } from '../src/models.js';
 import { createStore, type Store } from '../src/services/store.js';
-import type { AuditEntry, FriendsResponse, GameSummary, InviteEvent, PlayerSearchResult, PublicUser, RoomView } from '../src/types.js';
+import type {
+  AuditEntry,
+  FriendsResponse,
+  GameSummary,
+  GiftEvent,
+  GiftReceived,
+  InviteEvent,
+  PlayerSearchResult,
+  PublicUser,
+  RoomView,
+} from '../src/types.js';
 
 // run with TEST_MONGODB_URI=mongodb://127.0.0.1:27017 (a throwaway database is created and dropped)
 const MONGO = process.env.TEST_MONGODB_URI;
@@ -566,6 +576,43 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect((await send(third, 'room:create', {})).error).toBe(`You're in a game in room ${gameRoom}. Finish it or leave it first`);
     third.socket.disconnect();
     friend.socket.disconnect();
+  });
+
+  it('lets friends gift coins, up to 100 a day in total, and shows it in the room', async () => {
+    const { host, other, tokens } = await stakedRoom('gift_a', 'gift_b');
+    const stranger = await register('gift_c');
+    const got: GiftReceived[] = [];
+    const flew: GiftEvent[] = [];
+    other.socket.on('gift:received', (g: GiftReceived) => got.push(g));
+    host.socket.on('gift', (g: GiftEvent) => flew.push(g));
+    const otherMember = host.state!.players.find((p) => p.id !== host.state!.meId)!.id;
+    // friends only
+    expect(await send(host, 'friend:gift', { memberId: otherMember, amount: 50 })).toEqual({ ok: false, error: 'You can only send coins to friends' });
+    await api().post('/api/friends/request').set(bearer(tokens[0])).send({ username: 'gift_b' });
+    const ids = [(await api().get('/api/me').set(bearer(tokens[0]))).body.user.id, (await api().get('/api/me').set(bearer(tokens[1]))).body.user.id];
+    await api().post(`/api/friends/${ids[0]}/accept`).set(bearer(tokens[1]));
+    expect(await send(host, 'friend:gift', { memberId: otherMember, amount: 7 })).toEqual({ ok: false, error: 'Pick one of the gift amounts' });
+    // in the room by member id: everyone sees the coins fly
+    expect(await send(host, 'friend:gift', { memberId: otherMember, amount: 50 })).toEqual({ ok: true, coins: 1150, giftLeft: 50 });
+    await until(() => flew.length === 1 && got.length === 1);
+    expect(flew[0]).toEqual({ from: host.state!.meId, to: otherMember, amount: 50 });
+    expect(got[0]).toEqual({ fromName: 'gift_a', amount: 50 });
+    await until(() => host.state!.players.find((p) => p.id === otherMember)?.coins === 1250);
+    // from the friends list by user id; the 100 a day is a total across friends
+    expect(await send(host, 'friend:gift', { userId: ids[1], amount: 50 })).toEqual({ ok: true, coins: 1100, giftLeft: 0 });
+    expect(await send(host, 'friend:gift', { userId: ids[1], amount: 10 })).toEqual({
+      ok: false,
+      error: 'You can give 100 coins a day. 0 left today',
+    });
+    expect(await send(host, 'friend:gift', { userId: stranger.body.user.id, amount: 10 })).toEqual({
+      ok: false,
+      error: 'You can only send coins to friends',
+    });
+    expect([await coinsOf(tokens[0]), await coinsOf(tokens[1])]).toEqual([1100, 1300]);
+    expect((await api().get('/api/me').set(bearer(tokens[0]))).body.user.giftLeft).toBe(0);
+    expect((await api().get('/api/me').set(bearer(tokens[1]))).body.user.giftLeft).toBe(100);
+    host.socket.disconnect();
+    other.socket.disconnect();
   });
 
   it('makes a player who leaves a staked game lose and still pay', async () => {

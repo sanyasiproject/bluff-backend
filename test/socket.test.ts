@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 import { io as connect, type Socket } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBluffServer } from '../src/server.js';
-import type { Announcement, ChatEvent, RoomView } from '../src/types.js';
+import type { Announcement, ChatEvent, RoomView, ThrowEvent } from '../src/types.js';
 
 type Client = { socket: Socket; state: RoomView | null; notes: Announcement[] };
 type Res = { ok: boolean; error?: string; code?: string; token?: string; pending?: boolean };
@@ -450,6 +450,28 @@ describe('socket server', () => {
     await send(a, 'room:lobby');
     await until(() => a.state?.phase === 'lobby');
     expect(a.state!.leftPlayers).toEqual([]);
+  });
+
+  it('throws an emoji at someone in the room for everyone to see', async () => {
+    const [a, b] = [await client(), await client()];
+    const { code } = await send(a, 'room:create', { name: 'Thrower' });
+    await send(b, 'room:join', { code, name: 'Target' });
+    await until(() => a.state?.players.length === 2 && b.state?.players.length === 2);
+    const seen: ThrowEvent[] = [];
+    b.socket.on('throw', (t: ThrowEvent) => seen.push(t));
+    const [me, them] = [a.state!.meId, b.state!.meId];
+    expect(await send(a, 'chat:throw', { to: them, index: 2 })).toEqual({ ok: true });
+    await until(() => seen.length === 1);
+    expect(seen[0]).toEqual({ from: me, to: them, index: 2 });
+    // shares the chat speed limit, and only real people in the room
+    expect(await send(a, 'chat:throw', { to: them, index: 0 })).toEqual({ ok: false, error: 'Slow down' });
+    expect(await send(b, 'chat:throw', { to: them, index: 0 })).toEqual({ ok: false, error: 'Pick someone else' });
+    expect(await send(b, 'chat:throw', { to: me, index: 99 })).toEqual({ ok: false, error: 'Invalid emoji' });
+    expect(await send(b, 'chat:throw', { to: 'abcdefabcdef', index: 0 })).toEqual({ ok: false, error: 'That player has left' });
+    // guests can't send coins
+    expect(await send(a, 'friend:gift', { memberId: them, amount: 10 })).toEqual({ ok: false, error: 'Log in to send coins' });
+    a.socket.disconnect();
+    b.socket.disconnect();
   });
 
   it('limits connections, new rooms and open rooms per network', async () => {

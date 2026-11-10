@@ -5,6 +5,7 @@ import { istDay } from '../days.js';
 import type { Actor, AuditDoc, Collections, UserDoc } from '../db/documents.js';
 import { ApiError } from '../http/errors.js';
 import {
+  DAILY_GIFT_LIMIT,
   HISTORY_PAGE_SIZE,
   levelOf,
   LOGIN_BONUS,
@@ -36,6 +37,10 @@ const EMPTY_STATS: LifetimeStats = {
 /** lifetime stats, with zeros for any an older account is missing */
 export const statsOf = (u: Pick<UserDoc, 'stats'>): LifetimeStats => ({ ...EMPTY_STATS, ...u.stats });
 
+/** coins an account can still give friends today */
+export const giftLeftOf = (u: Pick<UserDoc, 'giftDay' | 'giftGiven'>, today = istDay()): number =>
+  u.giftDay === today ? Math.max(0, DAILY_GIFT_LIMIT - (u.giftGiven ?? 0)) : DAILY_GIFT_LIMIT;
+
 export function toPublicUser(u: WithId<UserDoc>): PublicUser {
   return {
     id: u._id.toHexString(),
@@ -45,6 +50,7 @@ export function toPublicUser(u: WithId<UserDoc>): PublicUser {
     coins: u.coins,
     stats: statsOf(u),
     createdAt: u.createdAt.toISOString(),
+    giftLeft: giftLeftOf(u),
   };
 }
 
@@ -273,6 +279,45 @@ export class UserService {
       createdAt: new Date(),
     });
     return toPublicUser(user);
+  }
+
+  /** gives a friend coins; one atomic update checks the sender's balance and daily gift limit */
+  async giftCoins(fromId: string, toId: string, amount: number): Promise<{ from: WithId<UserDoc>; to: WithId<UserDoc> }> {
+    const fromOid = objectId(fromId);
+    const toOid = objectId(toId);
+    if (fromOid.equals(toOid)) throw new ApiError(400, "You can't send coins to yourself");
+    const today = istDay();
+    const from = await this.cols.users.findOneAndUpdate(
+      { _id: fromOid, coins: { $gte: amount }, $or: [{ giftDay: { $ne: today } }, { giftGiven: { $lte: DAILY_GIFT_LIMIT - amount } }] },
+      [
+        {
+          $set: {
+            coins: { $subtract: ['$coins', amount] },
+            giftGiven: { $cond: [{ $eq: ['$giftDay', today] }, { $add: [{ $ifNull: ['$giftGiven', 0] }, amount] }, amount] },
+            giftDay: today,
+          },
+        },
+      ],
+      { returnDocument: 'after' },
+    );
+    if (!from) {
+      const me = await this.cols.users.findOne({ _id: fromOid }, { projection: { coins: 1, giftDay: 1, giftGiven: 1 } });
+      if (!me) throw new ApiError(404, 'User not found');
+      if (me.coins < amount) throw new ApiError(400, "You don't have that many coins");
+      throw new ApiError(400, `You can give ${DAILY_GIFT_LIMIT} coins a day. ${giftLeftOf(me, today)} left today`);
+    }
+    const to = await this.cols.users.findOneAndUpdate({ _id: toOid, blocked: { $ne: true } }, { $inc: { coins: amount } }, { returnDocument: 'after' });
+    if (!to) {
+      // the friend can't get coins (account gone or blocked): give them back
+      await this.cols.users.updateOne({ _id: fromOid }, { $inc: { coins: amount, giftGiven: -amount } });
+      throw new ApiError(404, "Your friend can't get coins right now");
+    }
+    const at = new Date();
+    await this.cols.audit.insertMany([
+      { _id: new ObjectId(), action: 'gift', targetUserId: fromOid, byUserId: fromOid, via: 'player', amount: -amount, balanceAfter: from.coins, detail: `Gift to ${to.displayName}`, createdAt: at },
+      { _id: new ObjectId(), action: 'gift', targetUserId: toOid, byUserId: fromOid, via: 'player', amount, balanceAfter: to.coins, detail: `Gift from ${from.displayName}`, createdAt: at },
+    ]);
+    return { from, to };
   }
 
   async makeAdmin(username: string, by: Actor): Promise<PublicUser> {

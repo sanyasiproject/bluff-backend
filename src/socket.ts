@@ -3,7 +3,7 @@ import { GameError } from './game.js';
 import type { GameEvent, GameRecord, Member, MemberAccount, SocketHooks, SocketUser, WatchRequest } from './models.js';
 import { Presence } from './presence.js';
 import type { Room, RoomManager } from './rooms.js';
-import type { Announcement, InviteEvent } from './types.js';
+import type { Announcement, GiftEvent, GiftReceived, InviteEvent } from './types.js';
 import {
   asPayload,
   parseBet,
@@ -13,11 +13,13 @@ import {
   parseCode,
   parseConfig,
   parseFlag,
+  parseGift,
   parseMemberId,
   parseName,
   parsePlayId,
   parseRank,
   parseSlot,
+  parseThrow,
   parseToken,
   parseUserId,
   type Payload,
@@ -465,6 +467,45 @@ export function registerHandlers(
       const { room, member } = current();
       const { kind, index } = parseChat(p);
       io.to(room.code).emit('chat', room.chat(member.id, kind, index));
+    });
+
+    // an emoji flies from one person to another; everyone in the room sees it
+    on('chat:throw', (p) => {
+      const { room, member } = current();
+      const { to, index } = parseThrow(p);
+      io.to(room.code).emit('throw', room.throwAt(member.id, to, index));
+    });
+
+    // coins for a friend, picked in the friends list (userId) or in this room (memberId)
+    on('friend:gift', async (p) => {
+      if (!user) throw new GameError('Log in to send coins');
+      if (!hooks.giftCoins || !hooks.areFriends) throw new GameError('Coins are not available on this server');
+      const amount = parseGift(p.amount);
+      let friendId: string;
+      if (p.memberId !== undefined) {
+        const target = current().room.members.find((m) => m.id === parseMemberId(p.memberId));
+        if (!target?.userId) throw new GameError('Only logged-in friends can get coins');
+        friendId = target.userId;
+      } else {
+        friendId = parseUserId(p.userId);
+      }
+      if (!(await hooks.areFriends(user.id, friendId))) throw new GameError('You can only send coins to friends');
+      const res = await hooks.giftCoins(user.id, friendId, amount);
+      // rooms show the new balances at once; in a shared room everyone sees the coins fly
+      const fromRoom = rooms.roomOfUser(user.id);
+      const toRoom = rooms.roomOfUser(friendId);
+      const giver = fromRoom?.members.find((m) => m.userId === user.id);
+      const taker = toRoom?.members.find((m) => m.userId === friendId);
+      if (giver) giver.coins = res.fromCoins;
+      if (taker) taker.coins = res.toCoins;
+      for (const r of new Set([fromRoom, toRoom])) if (r) broadcast(r);
+      if (fromRoom && fromRoom === toRoom && giver && taker) {
+        const gift: GiftEvent = { from: giver.id, to: taker.id, amount };
+        io.to(fromRoom.code).emit('gift', gift);
+      }
+      const received: GiftReceived = { fromName: user.displayName, amount };
+      for (const id of presence.socketsOf(friendId)) io.to(id).emit('gift:received', received);
+      return { coins: res.fromCoins, giftLeft: res.giftLeft };
     });
 
     socket.on('disconnect', () => {

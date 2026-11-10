@@ -95,6 +95,33 @@ export interface ChatEvent {
   index: number;
 }
 
+/** emoji a player throws at someone in the room; everyone sees it fly across */
+export const THROWS = ['🌹', '💋', '👏', '🎉', '😂', '🍅', '🥚', '💣'] as const;
+
+/** a thrown emoji: member ids in the room, index into THROWS */
+export interface ThrowEvent {
+  from: string;
+  to: string;
+  index: number;
+}
+
+/** amounts one gift can be, and the most a player can give away in total per IST day */
+export const GIFT_STEPS = [10, 25, 50, 100] as const;
+export const DAILY_GIFT_LIMIT = 100;
+
+/** coins given between two people in the same room (member ids), so everyone sees them fly */
+export interface GiftEvent {
+  from: string;
+  to: string;
+  amount: number;
+}
+
+/** tells whoever got the coins, wherever they are */
+export interface GiftReceived {
+  fromName: string;
+  amount: number;
+}
+
 export interface WatcherView {
   id: string;
   name: string;
@@ -273,6 +300,8 @@ export interface PublicUser {
   coins: number;
   stats: LifetimeStats;
   createdAt: string;
+  /** coins this player can still give friends today */
+  giftLeft: number;
 }
 
 export interface AuthResponse {
@@ -328,7 +357,7 @@ export interface AdminUser extends PublicUser {
   blocked: boolean;
 }
 
-export type AuditAction = 'coins' | 'make_admin' | 'update' | 'password';
+export type AuditAction = 'coins' | 'make_admin' | 'update' | 'password' | 'gift';
 
 /** one admin change to an account */
 export interface AuditEntry {

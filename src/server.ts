@@ -1,10 +1,13 @@
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import { isAllowedOrigin } from './config.js';
+import { GameError } from './game.js';
 import { createApi } from './http/app.js';
+import { ApiError } from './http/errors.js';
 import { Presence } from './presence.js';
 import { DEFAULT_ROOM_LIMITS, RoomManager, type RoomLimits } from './rooms.js';
 import type { Store } from './services/store.js';
+import { giftLeftOf } from './services/users.js';
 import { MAX_CONNECTIONS_PER_IP, registerHandlers } from './socket.js';
 
 export interface ServerDeps {
@@ -55,6 +58,14 @@ export function createBluffServer(deps: ServerDeps = {}) {
           // the socket layer runs this in the background; a DB hiccup must never break the game
           onGameEnd: (record) => store.games.save(record),
           areFriends: (a, b) => store.friends.areFriends(a, b),
+          giftCoins: async (fromId, toId, amount) => {
+            try {
+              const { from, to } = await store.users.giftCoins(fromId, toId, amount);
+              return { fromCoins: from.coins, giftLeft: giftLeftOf(from), toCoins: to.coins };
+            } catch (err) {
+              throw err instanceof ApiError ? new GameError(err.message) : err;
+            }
+          },
         }
       : {},
     presence,

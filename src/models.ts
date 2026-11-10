@@ -88,6 +88,15 @@ export interface SocketHooks {
   /** saves the game, moves stake coins, pays daily game rewards; resolves with each player's coin change */
   onGameEnd?: (record: GameRecord) => Promise<CoinResult[]>;
   areFriends?: (a: string, b: string) => Promise<boolean>;
+  /** moves coins to a friend within the daily gift limit; throws GameError with a reason players can read */
+  giftCoins?: (fromUserId: string, toUserId: string, amount: number) => Promise<GiftResult>;
+}
+
+/** balances after a gift between friends */
+export interface GiftResult {
+  fromCoins: number;
+  giftLeft: number;
+  toCoins: number;
 }
 
 /** per-player counts behind the end-of-game awards */

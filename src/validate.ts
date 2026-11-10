@@ -1,11 +1,13 @@
 import { GameError } from './game.js';
 import {
   BET_STEPS,
+  GIFT_STEPS,
   MAX_PEEKS,
   QUICK_MESSAGES,
   RANKS,
   REACTIONS,
   STAKES,
+  THROWS,
   type ChatKind,
   type GameConfig,
   type Rank,
@@ -100,6 +102,17 @@ export function parseChat(p: Payload): { kind: ChatKind; index: number } {
     throw new GameError('Invalid message');
   }
   return { kind, index };
+}
+
+export function parseThrow(p: Payload): { to: string; index: number } {
+  const index = p.index;
+  if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= THROWS.length) throw new GameError('Invalid emoji');
+  return { to: parseMemberId(p.to), index };
+}
+
+export function parseGift(value: unknown): number {
+  if (typeof value !== 'number' || !(GIFT_STEPS as readonly number[]).includes(value)) throw new GameError('Pick one of the gift amounts');
+  return value;
 }
 
 export function parseUsername(value: unknown): string {

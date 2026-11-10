@@ -3,7 +3,7 @@ import { computeAwards } from './awards.js';
 import { describeClaim, ordinal } from './cards.js';
 import { Game, GameError } from './game.js';
 import type { GameEvent, GameRecord, Member, MemberAccount, WatchRequest } from './models.js';
-import type { AnnounceKind, Announcement, ChatEvent, ChatKind, CoinResult, GameConfig, Phase, RoomView } from './types.js';
+import type { AnnounceKind, Announcement, ChatEvent, ChatKind, CoinResult, GameConfig, Phase, RoomView, ThrowEvent } from './types.js';
 
 export const MAX_PLAYERS = 5;
 /** seated players plus watchers */
@@ -391,6 +391,17 @@ export class Room {
     if (now - (this.lastChat.get(by) ?? 0) < CHAT_GAP_MS) throw new GameError('Slow down');
     this.lastChat.set(by, now);
     return { from: by, kind, index };
+  }
+
+  /** an emoji thrown at someone else in the room; shares the chat speed limit */
+  throwAt(by: string, to: string, index: number): ThrowEvent {
+    this.member(by);
+    if (by === to) throw new GameError('Pick someone else');
+    if (!this.members.some((m) => m.id === to)) throw new GameError('That player has left');
+    const now = Date.now();
+    if (now - (this.lastChat.get(by) ?? 0) < CHAT_GAP_MS) throw new GameError('Slow down');
+    this.lastChat.set(by, now);
+    return { from: by, to, index };
   }
 
   view(meId: string): RoomView {

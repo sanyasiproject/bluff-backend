@@ -42,6 +42,7 @@ Everything else has a built-in default: database `bluff`; collections `users`, `
 - **Stakes** (host picks in the lobby): Free, 50, 100, 250, 500, 1K, 5K, 10K, 50K, 1L, 5L, 10L per player. Start checks everyone can pay; guests can only play Free games.
 - Coins move only when a game **finishes**: every logged-in player pays the stake and the winner (1st place) gets the whole pot. A game stopped by the host, or by kicks leaving one player before anyone finished, moves nothing. A kicked player pays nothing and wins nothing. A player who uses **Leave game** mid-game forfeits: they lose and still pay the stake (in 2v2 their team loses; if one player is left, they win).
 - Every finished game stores the stake, pot and each player's coin change in `games`.
+- **Gifts:** friends can give each other 10 / 25 / 50 / 100 coins, at most 100 a day in total per giver (one atomic update checks balance and limit). Both sides get an audit entry (`gift`), shown in the admin history. `PublicUser.giftLeft` says what's left today.
 
 ## Rules worth knowing
 
@@ -139,7 +140,9 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `game:bluff` | `{ playId, cardIndex?, bet? }` (`cardIndex` for the "pick one" rule; `bet` from `BET_STEPS`, at most the stake, coin games with bets on) |
 | `game:peek` | `{ playId, cardIndex }` → `{ card }` only to the player who peeks (rooms with peeks on) |
 | `chat:send` | `{ kind: 'reaction' \| 'message', index }` |
+| `chat:throw` | `{ to: memberId, index }` (index into `THROWS`; shares the chat speed limit) |
+| `friend:gift` | `{ memberId \| userId, amount }` (logged in, friends only; amount from `GIFT_STEPS`; at most `DAILY_GIFT_LIMIT` = 100 coins given per IST day in total) → `{ coins, giftLeft }` |
 | `room:kick` | `{ memberId }` (host only; mid-game the player's cards leave the game) |
 | `friend:invite` | `{ userId }` (logged in, friends only, friend must be online) |
 
-Connect with `io(url, { auth: { token } })` to play as a logged-in account. Server → client: `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud), `chat` (`{ from, kind, index }`), `invite` (`{ fromId, fromName, code }`), `friends:changed` (someone sent, accepted or removed a friend request), `watch:admitted` (`{ code, token, name }`: the host let you in, rejoin with it), `watch:denied` (`{ code, reason? }`), `room:kicked`, `session:replaced`. The host's `RoomView.watchRequests` lists pending requests (empty for everyone else). `RoomView.leftPlayers` lists who used Leave game in the current game (for names, the pot and the results), cleared back in the lobby.
+Connect with `io(url, { auth: { token } })` to play as a logged-in account. Server → client: `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud), `chat` (`{ from, kind, index }`), `invite` (`{ fromId, fromName, code }`), `friends:changed` (someone sent, accepted or removed a friend request), `throw` (`{ from, to, index }`), `gift` (`{ from, to, amount }`, member ids, only when both are in the same room), `gift:received` (`{ fromName, amount }`, to whoever got coins), `watch:admitted` (`{ code, token, name }`: the host let you in, rejoin with it), `watch:denied` (`{ code, reason? }`), `room:kicked`, `session:replaced`. The host's `RoomView.watchRequests` lists pending requests (empty for everyone else). `RoomView.leftPlayers` lists who used Leave game in the current game (for names, the pot and the results), cleared back in the lobby.

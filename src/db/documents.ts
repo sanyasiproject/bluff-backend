@@ -32,6 +32,10 @@ export interface UserDoc {
   gamesToday?: number;
   /** set by an admin: no login, existing sessions are revoked */
   blocked?: boolean;
+  /** IST day that giftGiven counts */
+  giftDay?: string;
+  /** coins given to friends on giftDay */
+  giftGiven?: number;
 }
 
 export interface SessionDoc {
@@ -85,7 +89,8 @@ export interface AuditDoc {
   targetUserId: ObjectId;
   /** null when done with the ADMIN_API_KEY */
   byUserId: ObjectId | null;
-  via: 'admin' | 'api_key';
+  /** player: a gift between friends */
+  via: 'admin' | 'api_key' | 'player';
   amount?: number;
   balanceAfter?: number;
   reason?: string;
