@@ -278,6 +278,40 @@ describe('2v2 teams', () => {
   });
 });
 
+describe('leaving a game in progress', () => {
+  it('is a forfeit: the leaver loses, the game goes on, and the last one standing finishes', () => {
+    const g = setup(['a', 'b', 'c'], { a: [card('2')], b: [card('3')], c: [card('4')] });
+    expect(g.leave('b')).toEqual([]);
+    expect(g.over).toBe(false);
+    expect(g.hand('b')).toEqual([]);
+    // with two left, one leaving makes the other the winner
+    expect(g.leave('a')).toEqual([
+      { kind: 'finish', playerId: 'c', place: 1 },
+      { kind: 'gameOver', loserId: null },
+    ]);
+    expect(g.winners()).toEqual(['c']);
+    expect(g.losers().sort()).toEqual(['a', 'b']);
+  });
+
+  it('changes nothing for a player who already finished', () => {
+    const q = card('Q');
+    const g = setup(['a', 'b', 'c'], { a: [q], b: [card('3')], c: [card('4')] });
+    g.play('a', ids(q), 'Q');
+    g.pass('b');
+    g.pass('c');
+    expect(g.places).toEqual(['a']);
+    expect(g.leave('a')).toEqual([]);
+    expect(g.losers()).toEqual([]);
+  });
+
+  it('in 2v2 makes the leaver\'s team lose', () => {
+    const g = setup(['a', 'b', 'c', 'd'], { a: [card('2')], b: [card('3')], c: [card('4')], d: [card('5')] }, { teams: true });
+    expect(g.leave('c')).toEqual([{ kind: 'gameOver', loserId: null }]);
+    expect(g.winners()).toEqual(['b', 'd']);
+    expect(g.losers()).toEqual(['a', 'c']);
+  });
+});
+
 describe('end-of-game awards', () => {
   it('counts bluffs, calls and pickups', () => {
     const [q, five, k1, k2] = [card('Q'), card('5'), card('K'), card('K', 'H')];

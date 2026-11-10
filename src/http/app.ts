@@ -4,7 +4,7 @@ import { GameError } from '../game.js';
 import type { Presence } from '../presence.js';
 import type { Store } from '../services/store.js';
 import { ApiError } from './errors.js';
-import { rateLimit } from './middleware.js';
+import { rateLimit, userRateLimit } from './middleware.js';
 import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
 import { friendRoutes, type NotifyFriends, type RoomOfUser } from './routes/friends.js';
@@ -43,8 +43,10 @@ export function createApi(store: Store | null, opts: ApiOptions): express.Expres
     const limited = rateLimit(opts.authAttempts ?? 20, 15 * 60_000);
     app.use('/api/auth', authRoutes(store, limited));
     app.use('/api/me', meRoutes(store));
-    app.use('/api/friends', friendRoutes(store, opts.presence, opts.notifyFriends ?? (() => {}), opts.roomOfUser ?? (() => null)));
-    app.use('/api/players', playerRoutes(store, opts.presence));
+    // search, profiles and friend requests: 20 a minute per user, shared
+    const social = userRateLimit(20, 60_000);
+    app.use('/api/friends', friendRoutes(store, opts.presence, opts.notifyFriends ?? (() => {}), opts.roomOfUser ?? (() => null), social));
+    app.use('/api/players', playerRoutes(store, opts.presence, social));
     app.use('/api/admin', adminRoutes(store, opts.adminApiKey, limited));
   } else {
     app.use('/api', (_req, _res, next) => next(new ApiError(503, 'Accounts are not set up on this server')));

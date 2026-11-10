@@ -44,7 +44,7 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
       { db: DB, users: 'users', sessions: 'sessions', games: 'games', audit: 'audit_log', friends: 'friends' },
       { defaultCoins: 1000, sessionTtlDays: 30 },
     );
-    server = createBluffServer({ store, adminApiKey: ADMIN_KEY, authAttempts: 1000 });
+    server = createBluffServer({ store, adminApiKey: ADMIN_KEY, authAttempts: 1000, limits: { createsPerIp: 10_000, liveRoomsPerIp: 10_000 } });
     await new Promise<void>((resolve) => server.httpServer.listen(0, resolve));
     url = `http://localhost:${(server.httpServer.address() as AddressInfo).port}`;
   });
@@ -523,7 +523,8 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
 
     expect((await api().get('/api/players/raj_pub')).status).toBe(401);
     const raju = await card('raj_pub');
-    expect(raju).toMatchObject({ username: 'raj_pub', displayName: 'Raj', level: 1, online: false, status: 'none' });
+    // not a friend, so whether they're online stays hidden
+    expect(raju).toMatchObject({ username: 'raj_pub', displayName: 'Raj', level: 1, online: null, status: 'none' });
     expect(raju.stats).toMatchObject({ gamesPlayed: 0, wins: 0 });
     // no coins, role, login times or password hash
     expect(Object.keys(raju).sort()).toEqual(['displayName', 'id', 'joinedAt', 'level', 'online', 'stats', 'status', 'username']);
@@ -538,6 +539,67 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     await api().post('/api/admin/make-admin').set('X-Admin-Key', ADMIN_KEY).send({ username: 'pia_pub' });
     await api().post(`/api/admin/users/${raj.body.user.id}`).set(piaAuth).send({ blocked: true });
     expect((await api().get('/api/players/raj_pub').set(piaAuth)).status).toBe(404);
+  });
+
+  it('keeps an account in one room at a time', async () => {
+    const reg = await register('one_room');
+    const first = await socketClient(reg.body.token);
+    const { code: firstRoom } = await send(first, 'room:create', {});
+    const second = await socketClient(reg.body.token);
+    expect((await send(second, 'room:create', {})).error).toBe(`You're already in room ${firstRoom} on another device or tab. Leave it there first`);
+
+    // the first tab is gone: its lobby seat is given up and the old room closes
+    first.socket.disconnect();
+    await wait(100);
+    expect(await send(second, 'room:create', {})).toMatchObject({ ok: true });
+    expect(() => server.rooms.get(firstRoom!)).toThrow('not found');
+
+    // a game you're still playing must be finished or left first
+    const friend = await socketClient();
+    const { code: gameRoom } = await send(second, 'room:create', {});
+    await send(friend, 'room:join', { code: gameRoom, name: 'Pal' });
+    await send(second, 'room:start');
+    await until(() => friend.state?.phase === 'playing');
+    second.socket.disconnect();
+    await wait(100);
+    const third = await socketClient(reg.body.token);
+    expect((await send(third, 'room:create', {})).error).toBe(`You're in a game in room ${gameRoom}. Finish it or leave it first`);
+    third.socket.disconnect();
+    friend.socket.disconnect();
+  });
+
+  it('makes a player who leaves a staked game lose and still pay', async () => {
+    const { host, other, tokens } = await stakedRoom('quit_a', 'quit_b');
+    await send(host, 'room:config', { decks: 1, bluffRule: 'all', stake: 100 });
+    await send(host, 'room:start');
+    await until(() => other.state?.phase === 'playing');
+    expect(await send(other, 'room:leave')).toEqual({ ok: true });
+    await until(() => host.state?.coinResults != null);
+    expect(host.state!.coinResults!.find((r) => r.playerId === host.state!.meId)).toMatchObject({ change: 100 });
+    expect([await coinsOf(tokens[0]), await coinsOf(tokens[1])]).toEqual([1300, 1100]);
+    host.socket.disconnect();
+    other.socket.disconnect();
+  });
+
+  it('limits search, profiles and friend requests to 20 a minute per user, and shows online status only to friends', async () => {
+    const spy = await register('spy_user');
+    const target = await register('seen_user');
+    const auth = bearer(spy.body.token);
+    const targetApp = await socketClient(target.body.token);
+    // not friends: no online status in search or on the profile
+    expect((await api().get('/api/friends/search?q=seen_u').set(auth)).body.players[0].online).toBeNull();
+    expect((await api().get('/api/players/seen_user').set(auth)).body.profile.online).toBeNull();
+    await api().post('/api/friends/request').set(auth).send({ username: 'seen_user' });
+    await api().post(`/api/friends/${spy.body.user.id}/accept`).set(bearer(target.body.token));
+    expect((await api().get('/api/players/seen_user').set(auth)).body.profile.online).toBe(true);
+    // 4 calls so far; the 21st in the minute is refused
+    for (let i = 0; i < 16; i++) expect((await api().get('/api/friends/search?q=zz').set(auth)).status).toBe(200);
+    const refused = await api().get('/api/friends/search?q=zz').set(auth);
+    expect(refused.status).toBe(429);
+    expect(refused.body.error).toBe('Too many requests, try again in a minute');
+    // the friends list itself keeps working
+    expect((await api().get('/api/friends').set(auth)).status).toBe(200);
+    targetApp.socket.disconnect();
   });
 
   it('allows API calls only from allowed sites', async () => {

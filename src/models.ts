@@ -32,6 +32,14 @@ export interface MemberAccount {
   level: number | null;
 }
 
+/** someone asking to watch a game in progress; the host lets them in or not */
+export interface WatchRequest {
+  id: string;
+  name: string;
+  account: MemberAccount | null;
+  socketId: string;
+}
+
 /** logged-in account attached to a socket */
 export interface SocketUser {
   id: string;

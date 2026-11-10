@@ -21,6 +21,8 @@ export class Game {
   over = false;
   /** removed by the host mid-game */
   readonly kicked = new Set<string>();
+  /** walked out mid-game: they lose and still pay a stake */
+  readonly forfeited = new Set<string>();
   /** ended because too few players were left before anyone finished; no coins move */
   aborted = false;
   /** the host ended it after someone won: 1st place wins, everyone else loses */
@@ -200,14 +202,55 @@ export class Game {
     return this.places.slice(0, 1);
   }
 
-  /** the last player holding cards; everyone but the winners when the host ended it or teams played */
+  /** the last player holding cards plus anyone who walked out; everyone but the winners when the host ended it or teams played */
   losers(): string[] {
     if (this.aborted) return [];
     if (this.endedEarly || this.teams) {
       const won = this.winners();
       return won.length === 0 ? [] : this.order.filter((id) => !won.includes(id) && !this.kicked.has(id));
     }
-    return this.loserId ? [this.loserId] : [];
+    const out = [...this.forfeited];
+    if (this.loserId && !out.includes(this.loserId)) out.push(this.loserId);
+    return out;
+  }
+
+  /** a player walks out: their cards leave, they lose (and still pay a stake); in 2v2 their team loses */
+  leave(playerId: string): GameEvent[] {
+    if (this.over) return [];
+    // already finished: leaving changes nothing
+    if (this.hand(playerId).length === 0 || this.kicked.has(playerId) || this.forfeited.has(playerId)) return [];
+    this.forfeited.add(playerId);
+    this.hands.set(playerId, []);
+    this.passed.delete(playerId);
+    if (this.lastPlay?.playerId === playerId) this.lastPlay = null;
+
+    if (this.teams) {
+      this.over = true;
+      this.turnId = null;
+      this.loserId = null;
+      this.winningTeam = this.teams.find((t) => !t.includes(playerId)) ?? null;
+      return [{ kind: 'gameOver', loserId: null }];
+    }
+    const left = this.order.filter((p) => this.hand(p).length > 0);
+    if (left.length <= 1) {
+      // the last one still holding cards finishes next: 1st if nobody had finished yet
+      const events: GameEvent[] = [];
+      if (left[0]) {
+        this.places.push(left[0]);
+        events.push({ kind: 'finish', playerId: left[0], place: this.places.length });
+      }
+      this.over = true;
+      this.turnId = null;
+      this.loserId = null;
+      return [...events, { kind: 'gameOver', loserId: null }];
+    }
+    if (this.turnId === playerId) this.turnId = this.nextActive(playerId);
+    const play = this.lastPlay;
+    if (play) {
+      const others = this.order.filter((id) => id !== play.playerId && this.hand(id).length > 0);
+      if (others.every((id) => this.passed.has(id))) return this.endRound();
+    }
+    return [];
   }
 
   teamOf(id: string): string[] | null {

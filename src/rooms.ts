@@ -2,7 +2,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import { computeAwards } from './awards.js';
 import { describeClaim, ordinal } from './cards.js';
 import { Game, GameError } from './game.js';
-import type { GameEvent, GameRecord, Member, MemberAccount } from './models.js';
+import type { GameEvent, GameRecord, Member, MemberAccount, WatchRequest } from './models.js';
 import type { AnnounceKind, Announcement, ChatEvent, ChatKind, CoinResult, GameConfig, Phase, RoomView } from './types.js';
 
 export const MAX_PLAYERS = 5;
@@ -16,6 +16,19 @@ const LOBBY_GRACE_MS = 2 * 60_000;
 const ROOM_IDLE_MS = 30 * 60_000;
 /** minimum gap between one person's chat messages */
 const CHAT_GAP_MS = 700;
+/** people waiting for the host to let them watch */
+const MAX_WATCH_REQUESTS = 10;
+/** room creation per network (IP), so one script can't fill the server */
+const CREATE_WINDOW_MS = 10 * 60_000;
+
+export interface RoomLimits {
+  /** new rooms one network may create per 10 minutes */
+  createsPerIp: number;
+  /** rooms one network may have open at once */
+  liveRoomsPerIp: number;
+}
+
+export const DEFAULT_ROOM_LIMITS: RoomLimits = { createsPerIp: 10, liveRoomsPerIp: 5 };
 
 export class Room {
   members: Member[] = [];
@@ -33,6 +46,10 @@ export class Room {
   private departed = new Map<string, Member>();
   /** 2v2 lobby: who asked whom to swap places, by the asked player's id */
   private swapAsks = new Map<string, string>();
+  /** after the game has started, newcomers ask the host before they can watch */
+  private watchRequests: WatchRequest[] = [];
+  /** network that created the room, for the per-network room limit */
+  creatorIp = '';
   private announceSeq = 0;
   private lastChat = new Map<string, number>();
 
@@ -80,14 +97,61 @@ export class Room {
     return member;
   }
 
-  removeMember(id: string): void {
+  /** leaves the room; a player seated in a running game forfeits it. Returns any game events */
+  removeMember(id: string): GameEvent[] {
     const leaving = this.member(id);
-    if (this.phase === 'playing' && !leaving.watching) throw new GameError('You cannot leave in the middle of a game');
+    let events: GameEvent[] = [];
+    if (this.phase === 'playing' && this.game?.order.includes(id)) {
+      events = this.game.leave(id);
+      // kept so the saved game still has their name
+      this.departed.set(id, leaving);
+    }
     this.members = this.members.filter((m) => m.id !== id);
     this.lastChat.delete(id);
     this.forgetSwaps(id);
     if (this.phase === 'lobby') this.fillSeats();
     if (this.hostId === id) this.hostId = (this.players()[0] ?? this.members[0])?.id ?? '';
+    return events;
+  }
+
+  /** a game is running: newcomers ask the host instead of joining straight away */
+  get needsApproval(): boolean {
+    return this.phase === 'playing';
+  }
+
+  requestWatch(name: string, account: MemberAccount | null, socketId: string): WatchRequest {
+    if (this.members.length >= MAX_MEMBERS) throw new GameError(`Room is full (max ${MAX_MEMBERS})`);
+    if (this.watchRequests.length >= MAX_WATCH_REQUESTS) throw new GameError('The host has a lot of requests, try again soon');
+    if (account && this.members.some((m) => m.userId === account.userId)) throw new GameError('Your account is already in this room');
+    const taken = [...this.members.map((m) => m.name), ...this.watchRequests.map((r) => r.name)];
+    if (taken.some((n) => n.toLowerCase() === name.toLowerCase())) throw new GameError('That name is taken in this room');
+    this.dropWatchRequests(socketId);
+    const req: WatchRequest = { id: randomBytes(6).toString('hex'), name, account, socketId };
+    this.watchRequests.push(req);
+    return req;
+  }
+
+  /** the host answers one request; it's removed either way */
+  takeWatchRequest(by: string, id: string): WatchRequest {
+    this.assertHost(by);
+    const req = this.watchRequests.find((r) => r.id === id);
+    if (!req) throw new GameError('That request was cancelled');
+    this.watchRequests = this.watchRequests.filter((r) => r !== req);
+    return req;
+  }
+
+  /** returns true if that connection had a request here */
+  dropWatchRequests(socketId: string): boolean {
+    const before = this.watchRequests.length;
+    this.watchRequests = this.watchRequests.filter((r) => r.socketId !== socketId);
+    return this.watchRequests.length !== before;
+  }
+
+  /** back in the lobby, everyone still waiting just comes in */
+  takeAllWatchRequests(): WatchRequest[] {
+    const all = this.watchRequests;
+    this.watchRequests = [];
+    return all;
   }
 
   /** host removes someone; mid-game their cards leave the game. Returns who left and any game events */
@@ -396,6 +460,16 @@ export class Room {
       swapAsks: [...this.swapAsks].map(([toId, fromId]) => ({ fromId, toId })),
       // partners plan together: each sees the other's hand; nobody else gets it
       partnerHand: g?.teams && seatedIds.has(meId) ? [...(g.hands.get(g.partnerOf(meId) ?? '') ?? [])] : null,
+      watchRequests:
+        meId === this.hostId
+          ? this.watchRequests.map((r) => ({ id: r.id, name: r.name, registered: r.account !== null, level: r.account?.level ?? null }))
+          : [],
+      leftPlayers: g
+        ? g.order.flatMap((id) => {
+            const m = g.forfeited.has(id) ? this.departed.get(id) : undefined;
+            return m ? [{ id, name: m.name, registered: m.userId !== null, level: m.level }] : [];
+          })
+        : [],
     };
   }
 
@@ -458,16 +532,35 @@ export class Room {
 
 export class RoomManager {
   private rooms = new Map<string, Room>();
+  /** when each network created rooms, for the creation limit */
+  private created = new Map<string, number[]>();
 
-  create(name: string, account: MemberAccount | null = null): { room: Room; member: Member } {
+  constructor(private readonly limits: RoomLimits = DEFAULT_ROOM_LIMITS) {}
+
+  create(name: string, account: MemberAccount | null = null, ip = ''): { room: Room; member: Member } {
     if (this.rooms.size >= MAX_ROOMS) throw new GameError('Server is busy, try again later');
+    if (ip) {
+      const now = Date.now();
+      const recent = (this.created.get(ip) ?? []).filter((t) => now - t < CREATE_WINDOW_MS);
+      if (recent.length >= this.limits.createsPerIp) throw new GameError('Too many new rooms from your network. Try again in a few minutes');
+      const live = [...this.rooms.values()].filter((r) => r.creatorIp === ip).length;
+      if (live >= this.limits.liveRoomsPerIp) throw new GameError('Your network already has several rooms open. Use one of them');
+      recent.push(now);
+      this.created.set(ip, recent);
+    }
     let code = '';
     do {
       code = Array.from({ length: 4 }, () => CODE_LETTERS[randomInt(CODE_LETTERS.length)]).join('');
     } while (this.rooms.has(code));
     const room = new Room(code);
+    room.creatorIp = ip;
     this.rooms.set(code, room);
     return { room, member: room.addMember(name, account) };
+  }
+
+  /** a room nobody is in any more goes away at once */
+  dropIfEmpty(room: Room): void {
+    if (room.members.length === 0) this.rooms.delete(room.code);
   }
 
   join(code: string, name: string, account: MemberAccount | null = null): { room: Room; member: Member } {
@@ -499,6 +592,11 @@ export class RoomManager {
   /** drops stale lobby seats, stale watchers and idle rooms; returns rooms whose member list changed */
   sweep(now = Date.now()): Room[] {
     const changed: Room[] = [];
+    for (const [ip, times] of this.created) {
+      const recent = times.filter((t) => now - t < CREATE_WINDOW_MS);
+      if (recent.length > 0) this.created.set(ip, recent);
+      else this.created.delete(ip);
+    }
     for (const room of this.rooms.values()) {
       if (room.members.every((m) => !m.socketId && now - m.lastSeen > ROOM_IDLE_MS)) {
         this.rooms.delete(room.code);

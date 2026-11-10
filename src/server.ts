@@ -3,15 +3,17 @@ import { Server } from 'socket.io';
 import { isAllowedOrigin } from './config.js';
 import { createApi } from './http/app.js';
 import { Presence } from './presence.js';
-import { RoomManager } from './rooms.js';
+import { DEFAULT_ROOM_LIMITS, RoomManager, type RoomLimits } from './rooms.js';
 import type { Store } from './services/store.js';
-import { registerHandlers } from './socket.js';
+import { MAX_CONNECTIONS_PER_IP, registerHandlers } from './socket.js';
 
 export interface ServerDeps {
   /** MongoDB-backed accounts, coins, friends and game history; omit for guest-only */
   store?: Store | null;
   adminApiKey?: string;
   authAttempts?: number;
+  /** abuse limits per network; defaults suit production */
+  limits?: Partial<RoomLimits & { connectionsPerIp: number }>;
 }
 
 export function createBluffServer(deps: ServerDeps = {}) {
@@ -39,7 +41,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
     for (const id of presence.socketsOf(userId)) io.to(id).emit('friends:changed');
   };
 
-  const rooms = new RoomManager();
+  const rooms = new RoomManager({ ...DEFAULT_ROOM_LIMITS, ...deps.limits });
   const stopSweep = registerHandlers(
     io,
     rooms,
@@ -56,6 +58,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
         }
       : {},
     presence,
+    deps.limits?.connectionsPerIp ?? MAX_CONNECTIONS_PER_IP,
   );
 
   return {

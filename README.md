@@ -40,7 +40,7 @@ Everything else has a built-in default: database `bluff`; collections `users`, `
 - **Peek power** (0–3 per player per game), **bets on bluff calls** (paid with the stake when the game finishes, never below zero) and **2v2 teams** (4 slots, 🔵 0 & 2 vs 🟠 1 & 3, chosen or swapped in the lobby; partners see each other's hand; the first team with both partners out wins and splits the pot; partners can't challenge each other; removing a player stops the game).
 - **Levels** come from lifetime XP (`XP_RULES`, `levelOf` in `src/types.ts`): +20 per finished game, +50 for a win, +5 per caught liar, +3 per bluff nobody caught. Level *n* needs 50 × (*n*−1) × *n* XP; titles run from Rookie (1) to Legend (50, 122,500 XP) and live in the frontend's `src/lib/progress.ts`.
 - **Stakes** (host picks in the lobby): Free, 50, 100, 250, 500, 1K, 5K, 10K, 50K, 1L, 5L, 10L per player. Start checks everyone can pay; guests can only play Free games.
-- Coins move only when a game **finishes**: every logged-in player pays the stake and the winner (1st place) gets the whole pot. A game stopped by the host, or by kicks leaving one player before anyone finished, moves nothing. A kicked player pays nothing and wins nothing.
+- Coins move only when a game **finishes**: every logged-in player pays the stake and the winner (1st place) gets the whole pot. A game stopped by the host, or by kicks leaving one player before anyone finished, moves nothing. A kicked player pays nothing and wins nothing. A player who uses **Leave game** mid-game forfeits: they lose and still pay the stake (in 2v2 their team loses; if one player is left, they win).
 - Every finished game stores the stake, pot and each player's coin change in `games`.
 
 ## Rules worth knowing
@@ -63,8 +63,8 @@ All bodies are JSON. Protected routes need `Authorization: Bearer <token>` (the 
 | `GET /api/me/games` | logged in | `?limit=20` | `{ games }` most recent first, with per-game stats and coins |
 | `GET /api/me/overview` | logged in | – | `{ coinRank, players, friends, loginBonusToday, gameBonusToday }` for the profile page |
 | `GET /api/friends` | logged in | – | `{ friends, incoming, outgoing }` with `online` |
-| `GET /api/players/:username` | logged in | – | `{ profile }`: name, level, joined date, online, game stats and friend status; never coins, role or login times |
-| `GET /api/friends/search` | logged in | `?q=` (2+ letters; username start or display name) | `{ players }` with `level`, `online`, `status` |
+| `GET /api/players/:username` | logged in | – | `{ profile }`: name, level, joined date, online (friends and yourself only, else `null`), game stats and friend status; never coins, role or login times |
+| `GET /api/friends/search` | logged in | `?q=` (2+ letters; username start or display name) | `{ players }` with `level`, `online` (friends only, else `null`), `status` |
 | `POST /api/friends/request` | logged in | `{ username }` | `{ result: 'sent' \| 'accepted' }` |
 | `POST /api/friends/:id/accept` | logged in | – | 204 |
 | `POST /api/friends/:id/remove` | logged in | – | 204 (decline, cancel or unfriend) |
@@ -76,7 +76,7 @@ All bodies are JSON. Protected routes need `Authorization: Bearer <token>` (the 
 | `POST /api/admin/users/:id/coins` | admin | `{ amount, reason? }` (negative takes coins) | `{ user }` |
 | `POST /api/admin/make-admin` | admin, or header `X-Admin-Key` | `{ username }` | `{ user }` |
 
-Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128 characters; display names follow the in-game name rules (1–16 characters). Coins never go below zero. Login, register and make-admin allow 20 attempts per IP per 15 minutes.
+Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128 characters; display names follow the in-game name rules (1–16 characters). Coins never go below zero. Login, register and make-admin allow 20 attempts per IP per 15 minutes. Search, player profiles and friend actions share a limit of 20 per minute per account (429 after that).
 
 **Make the first admin:** sign up in the app, then in MongoDB (e.g. Atlas → Browse Collections → `users`) change your document's `role` from `"user"` to `"admin"`. After that, admins promote others from the app's Admin screen.
 
@@ -88,6 +88,9 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 - Logged-in players are identified from the socket handshake token; a missing or bad token just means guest.
 - Admin actions are written to the audit collection with who did them and how (admin login or API key).
 - Game saving runs in the background; a database error is logged and never stops a game.
+- One room per account: joining or creating a room releases your old seat, unless it's open on another connection or you still hold cards in a running game there.
+- Per network (client IP from `cf-connecting-ip`, else the last `X-Forwarded-For` entry, else the socket address): 50 connections, 10 new rooms per 10 minutes and 5 open rooms. Tune with `createBluffServer({ limits })`.
+- Watchers see every hand, so after a game starts newcomers must be let in by the host (see `room:admit`).
 
 ## Good to know
 
@@ -95,7 +98,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 - Rooms live in memory: a redeploy or restart ends running games, and players land back on the home screen. Don't deploy while friends are playing.
 - Without `CLIENT_ORIGIN` only localhost and home-network (192.168.x / 10.x / 172.16–31.x) pages can connect.
 - Limits: 5 players + up to 7 watchers per room (12 people), 200 rooms, 40 events per 10 s per connection, one chat message per 0.7 s, names up to 16 characters.
-- People who join mid-game, or when 5 are seated, watch; they take free seats when the room returns to the lobby.
+- When 5 are seated, newcomers watch; they take free seats when the room returns to the lobby. After a game has started, a join becomes a request the host approves; anyone still waiting is let in when the room returns to the lobby.
 - Chat only sends an index into the fixed `REACTIONS` / `QUICK_MESSAGES` lists in `src/types.ts`, so there is no free text to moderate.
 
 ## Code map
@@ -117,10 +120,12 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | Client → server | Payload |
 |---|---|
 | `room:create` | `{ name }` → `{ code, token }` (name ignored when logged in) |
-| `room:join` | `{ code, name }` → `{ code, token }` |
+| `room:join` | `{ code, name }` → `{ code, token }`, or `{ code, pending: true }` once a game has started (waits for the host) |
+| `room:cancelRequest` | – (withdraw a pending join request) |
+| `room:admit` | `{ requestId, accept }` (host: let a pending request in to watch, or turn it down) |
 | `room:rejoin` | `{ code, token }` |
 | `room:config` | `{ decks: 1 \| 2, bluffRule: 'all' \| 'one', stake, peeks: 0–3, bets: boolean, teams: boolean }` (host, lobby; new fields default to off) |
-| `room:start` / `room:lobby` / `room:leave` | – |
+| `room:start` / `room:lobby` / `room:leave` | – (`room:leave` mid-game with cards is a forfeit: a loss that still pays the stake) |
 | `room:rematch` | – (host, after game over: same table, same settings, dealt again) |
 | `room:end` | – (host, once someone finished 1st: game over, 1st wins and everyone else loses) |
 | `room:host` | `{ memberId }` (host, lobby only: make an online member the host) |
@@ -137,4 +142,4 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `room:kick` | `{ memberId }` (host only; mid-game the player's cards leave the game) |
 | `friend:invite` | `{ userId }` (logged in, friends only, friend must be online) |
 
-Connect with `io(url, { auth: { token } })` to play as a logged-in account. Server → client: `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud), `chat` (`{ from, kind, index }`), `invite` (`{ fromId, fromName, code }`), `friends:changed` (someone sent, accepted or removed a friend request), `room:kicked`, `session:replaced`.
+Connect with `io(url, { auth: { token } })` to play as a logged-in account. Server → client: `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud), `chat` (`{ from, kind, index }`), `invite` (`{ fromId, fromName, code }`), `friends:changed` (someone sent, accepted or removed a friend request), `watch:admitted` (`{ code, token, name }`: the host let you in, rejoin with it), `watch:denied` (`{ code, reason? }`), `room:kicked`, `session:replaced`. The host's `RoomView.watchRequests` lists pending requests (empty for everyone else). `RoomView.leftPlayers` lists who used Leave game in the current game (for names, the pot and the results), cleared back in the lobby.

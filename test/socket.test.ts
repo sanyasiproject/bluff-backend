@@ -5,14 +5,15 @@ import { createBluffServer } from '../src/server.js';
 import type { Announcement, ChatEvent, RoomView } from '../src/types.js';
 
 type Client = { socket: Socket; state: RoomView | null; notes: Announcement[] };
-type Res = { ok: boolean; error?: string; code?: string; token?: string };
+type Res = { ok: boolean; error?: string; code?: string; token?: string; pending?: boolean };
 
 let server: ReturnType<typeof createBluffServer>;
 let url = '';
 const opened: Client[] = [];
 
 beforeAll(async () => {
-  server = createBluffServer();
+  // every test client shares one address, so the per-network limits get their own test
+  server = createBluffServer({ limits: { createsPerIp: 10_000, liveRoomsPerIp: 10_000 } });
   await new Promise<void>((resolve) => server.httpServer.listen(0, resolve));
   url = `http://localhost:${(server.httpServer.address() as AddressInfo).port}`;
 });
@@ -133,7 +134,16 @@ describe('socket server', () => {
     const { code } = await send(a, 'room:create', { name: 'Host' });
     await send(b, 'room:join', { code, name: 'Guest' });
     await send(a, 'room:start');
-    expect(await send(late, 'room:join', { code, name: 'Late' })).toMatchObject({ ok: true });
+    // mid-game the newcomer asks; only the host sees the request and can let them in
+    expect(await send(late, 'room:join', { code, name: 'Late' })).toEqual({ ok: true, code, pending: true });
+    await until(() => a.state?.watchRequests.length === 1);
+    expect(b.state!.watchRequests).toEqual([]);
+    const requestId = a.state!.watchRequests[0].id;
+    expect(await send(b, 'room:admit', { requestId, accept: true })).toEqual({ ok: false, error: 'Only the host can do that' });
+    const admitted = new Promise<{ code: string; token: string }>((resolve) => late.socket.once('watch:admitted', resolve));
+    expect(await send(a, 'room:admit', { requestId, accept: true })).toEqual({ ok: true });
+    const seatToken = (await admitted).token;
+    expect(await send(late, 'room:rejoin', { code, token: seatToken })).toEqual({ ok: true, code });
     await until(() => late.state?.phase === 'playing');
     expect(late.state!.players.map((p) => p.name)).toEqual(['Host', 'Guest']);
     expect(late.state!.watchers.map((w) => w.name)).toEqual(['Late']);
@@ -385,6 +395,100 @@ describe('socket server', () => {
     expect(s1.state!.partnerHand).toEqual(s3.state!.hand);
     const s1Json = JSON.stringify(s1.state);
     expect([...s2.state!.hand, ...s4.state!.hand].some((c) => s1Json.includes(`"${c.id}"`))).toBe(false);
+  });
+
+  it('asks the host before anyone watches a game in progress, and lets waiting people in back in the lobby', async () => {
+    const [host, b, nope, quitter, later] = [await client(), await client(), await client(), await client(), await client()];
+    const { code } = await send(host, 'room:create', { name: 'Host' });
+    await send(b, 'room:join', { code, name: 'Bee' });
+    await send(host, 'room:start');
+    await until(() => b.state?.phase === 'playing');
+
+    // a no goes back to the asker
+    const denied = new Promise<{ code: string }>((resolve) => nope.socket.once('watch:denied', resolve));
+    await send(nope, 'room:join', { code, name: 'Nope' });
+    await until(() => host.state!.watchRequests.length === 1);
+    expect(await send(host, 'room:admit', { requestId: host.state!.watchRequests[0].id, accept: false })).toEqual({ ok: true });
+    expect(await denied).toEqual({ code });
+    await until(() => host.state!.watchRequests.length === 0);
+
+    // closing the app takes the request away
+    await send(quitter, 'room:join', { code, name: 'Quitter' });
+    await until(() => host.state!.watchRequests.length === 1);
+    quitter.socket.disconnect();
+    await until(() => host.state!.watchRequests.length === 0);
+
+    // still waiting when the host goes back to the lobby: they come straight in
+    const admitted = new Promise<{ token: string }>((resolve) => later.socket.once('watch:admitted', resolve));
+    await send(later, 'room:join', { code, name: 'Later' });
+    await until(() => host.state!.watchRequests.length === 1);
+    await send(host, 'room:lobby');
+    const { token } = await admitted;
+    expect(await send(later, 'room:rejoin', { code, token })).toEqual({ ok: true, code });
+    await until(() => host.state!.players.some((p) => p.name === 'Later'));
+  });
+
+  it('lets a player leave a game in progress as a forfeit', async () => {
+    const [a, b] = [await client(), await client()];
+    const { code } = await send(a, 'room:create', { name: 'Stayer' });
+    await send(b, 'room:join', { code, name: 'Leaver' });
+    await send(a, 'room:start');
+    await until(() => b.state?.phase === 'playing');
+    const room = server.rooms.get(code!);
+    expect(await send(b, 'room:leave')).toEqual({ ok: true });
+    await until(() => a.state?.phase === 'over');
+    expect(a.state!.winnerIds).toEqual([a.state!.meId]);
+    // the leaver is still part of this game's result
+    const leftId = a.state!.loserIds[0];
+    expect(a.state!.leftPlayers).toEqual([{ id: leftId, name: 'Leaver', registered: false, level: null }]);
+    await until(() => a.notes.some((n) => n.text === 'Leaver left the game'));
+    expect(room.snapshot('finished')!.players.map((p) => [p.name, p.won, p.loser, p.kicked])).toEqual([
+      ['Stayer', true, false, false],
+      ['Leaver', false, true, false],
+    ]);
+    // back in the lobby the list is cleared
+    await send(a, 'room:lobby');
+    await until(() => a.state?.phase === 'lobby');
+    expect(a.state!.leftPlayers).toEqual([]);
+  });
+
+  it('limits connections, new rooms and open rooms per network', async () => {
+    const limited = createBluffServer({ limits: { connectionsPerIp: 4, createsPerIp: 3, liveRoomsPerIp: 2 } });
+    await new Promise<void>((resolve) => limited.httpServer.listen(0, resolve));
+    const at = `http://localhost:${(limited.httpServer.address() as AddressInfo).port}`;
+    const from = (ip: string) =>
+      connect(at, { transports: ['websocket'], forceNew: true, reconnection: false, extraHeaders: { 'x-forwarded-for': `6.6.6.6, ${ip}` } });
+    const open = (ip: string) =>
+      new Promise<Socket>((resolve, reject) => {
+        const s = from(ip);
+        s.once('connect', () => resolve(s));
+        s.once('connect_error', reject);
+      });
+    const sockets = [await open('9.9.9.9'), await open('9.9.9.9'), await open('9.9.9.9'), await open('9.9.9.9')];
+    await expect(open('9.9.9.9')).rejects.toThrow('Too many connections');
+    const other = await open('8.8.8.8');
+    const ask = (s: Socket, event: string, payload: object = {}) => s.timeout(2000).emitWithAck(event, payload) as Promise<Res>;
+
+    // moving to a new room closes the empty old one, but still counts as a new room
+    expect(await ask(sockets[0], 'room:create', { name: 'One' })).toMatchObject({ ok: true });
+    expect(await ask(sockets[0], 'room:create', { name: 'One' })).toMatchObject({ ok: true });
+    expect(limited.rooms.size).toBe(1);
+    expect(await ask(sockets[1], 'room:create', { name: 'Two' })).toMatchObject({ ok: true });
+    expect((await ask(sockets[2], 'room:create', { name: 'Three' })).error).toBe('Too many new rooms from your network. Try again in a few minutes');
+    expect(await ask(other, 'room:create', { name: 'Elsewhere' })).toMatchObject({ ok: true });
+
+    const fresh = createBluffServer({ limits: { liveRoomsPerIp: 1 } });
+    await new Promise<void>((resolve) => fresh.httpServer.listen(0, resolve));
+    const at2 = `http://localhost:${(fresh.httpServer.address() as AddressInfo).port}`;
+    const s1 = connect(at2, { transports: ['websocket'], forceNew: true, reconnection: false, extraHeaders: { 'cf-connecting-ip': '7.7.7.7' } });
+    const s2 = connect(at2, { transports: ['websocket'], forceNew: true, reconnection: false, extraHeaders: { 'cf-connecting-ip': '7.7.7.7' } });
+    await Promise.all([s1, s2].map((s) => new Promise<void>((resolve) => s.once('connect', () => resolve()))));
+    expect(await ask(s1, 'room:create', { name: 'Open' })).toMatchObject({ ok: true });
+    expect((await ask(s2, 'room:create', { name: 'Second' })).error).toBe('Your network already has several rooms open. Use one of them');
+
+    [...sockets, other, s1, s2].forEach((s) => s.disconnect());
+    limited.close();
+    fresh.close();
   });
 
   it('blocks browser connections from unknown sites', async () => {

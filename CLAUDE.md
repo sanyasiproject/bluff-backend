@@ -8,7 +8,7 @@ guide, the feature list and the owner's working preferences. Read it first.
 ## Stack
 
 Node 22, TypeScript (ESM, NodeNext), Socket.IO 4.8 + Express 4 on one http server, MongoDB driver 6 (no mongoose),
-vitest + supertest. Accounts are optional: without `MONGODB_URI` the server runs guest-only.
+vitest 5 (vite 8 as dev peer) + supertest. Accounts are optional: without `MONGODB_URI` the server runs guest-only.
 
 ## Map
 
@@ -47,6 +47,9 @@ unset = localhost/LAN only), optional `MONGODB_DB`, `ADMIN_API_KEY`, `DEFAULT_CO
 - Coins are virtual. Stakes, bets and the daily ladder settle only in `GameRecorder.save` for **finished** games; stopped games move nothing; balances never go below zero.
 - New room settings default to **off** and must accept older apps that don't send them (see `parseConfig`).
 - Seated players never get another player's cards (except 2v2 partners via `partnerHand`). Add a test when touching `view()`.
+- Watchers see every hand, so once a game is playing `room:join` becomes a watch request (`requestWatch`) the host approves with `room:admit`; `room:lobby` lets everyone still waiting in.
+- `room:leave` mid-game with cards is a forfeit (`game.leave`): the player is in `losers()` and still pays the stake. A kick (`removePlayer`) pays nothing.
+- Limits: one room per account (`releaseOthers` in `socket.ts`), per-IP sockets/rooms (`RoomLimits`, `MAX_CONNECTIONS_PER_IP`), per-account 20/min on search, profiles and friend actions (`userRateLimit`). Tests use roomy limits; the limits test runs its own server.
 - Admin changes go through `UserService` and are written to the audit log.
 - Announcements: `room.note(kind, text)`; kind `room` is shown but not spoken.
 - Match the existing style; short one-line comments; add vitest tests for new rules.

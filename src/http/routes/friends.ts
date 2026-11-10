@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import { ObjectId } from 'mongodb';
 import type { Presence } from '../../presence.js';
 import type { Store } from '../../services/store.js';
@@ -12,7 +12,7 @@ export type NotifyFriends = (userId: string) => void;
 /** code of the room a user is in, or null */
 export type RoomOfUser = (userId: string) => string | null;
 
-export function friendRoutes(store: Store, presence: Presence, notify: NotifyFriends, roomOf: RoomOfUser): Router {
+export function friendRoutes(store: Store, presence: Presence, notify: NotifyFriends, roomOf: RoomOfUser, limited: RequestHandler): Router {
   const r = Router();
   r.use(requireUser(store));
 
@@ -41,14 +41,17 @@ export function friendRoutes(store: Store, presence: Presence, notify: NotifyFri
 
   r.get(
     '/search',
+    limited,
     ah(async (req, res) => {
       const players = await store.friends.search(currentUser(res)._id, parseSearch(req.query.q));
-      res.json({ players: players.map((p) => ({ ...p, online: presence.isOnline(p.id) })) });
+      // online status only for people who are already friends
+      res.json({ players: players.map((p) => ({ ...p, online: p.status === 'friend' ? presence.isOnline(p.id) : null })) });
     }),
   );
 
   r.post(
     '/request',
+    limited,
     ah(async (req, res) => {
       const { result, otherId } = await store.friends.request(currentUser(res), parseUsername(asPayload(req.body).username));
       notify(otherId.toHexString());
@@ -58,6 +61,7 @@ export function friendRoutes(store: Store, presence: Presence, notify: NotifyFri
 
   r.post(
     '/:id/accept',
+    limited,
     ah(async (req, res) => {
       const otherId = parseUserId(req.params.id);
       await store.friends.accept(currentUser(res)._id, new ObjectId(otherId));
@@ -68,6 +72,7 @@ export function friendRoutes(store: Store, presence: Presence, notify: NotifyFri
 
   r.post(
     '/:id/remove',
+    limited,
     ah(async (req, res) => {
       const otherId = parseUserId(req.params.id);
       await store.friends.remove(currentUser(res)._id, new ObjectId(otherId));

@@ -222,6 +222,10 @@ export interface RoomView {
   swapAsks: { fromId: string; toId: string }[];
   /** 2v2 game: my partner's cards (only ever sent to their partner) */
   partnerHand: Card[] | null;
+  /** host only: people asking to watch the game in progress */
+  watchRequests: { id: string; name: string; registered: boolean; level: number | null }[];
+  /** players who used Leave game in this game: they lost and still pay the stake */
+  leftPlayers: { id: string; name: string; registered: boolean; level: number | null }[];
 }
 
 export type Role = 'user' | 'admin';
@@ -372,7 +376,8 @@ export interface PlayerSearchResult {
   username: string;
   displayName: string;
   level: number;
-  online: boolean;
+  /** null unless they're already a friend */
+  online: boolean | null;
   /** how they relate to me */
   status: 'friend' | 'sent' | 'incoming' | 'none';
 }
@@ -384,7 +389,8 @@ export interface PublicProfile {
   displayName: string;
   level: number;
   joinedAt: string;
-  online: boolean;
+  /** null unless they're a friend (or me) */
+  online: boolean | null;
   stats: LifetimeStats;
   /** how they relate to me */
   status: 'me' | 'friend' | 'sent' | 'incoming' | 'none';

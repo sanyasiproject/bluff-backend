@@ -1,6 +1,6 @@
-import type { Server } from 'socket.io';
+import type { Server, Socket } from 'socket.io';
 import { GameError } from './game.js';
-import type { GameEvent, GameRecord, Member, MemberAccount, SocketHooks, SocketUser } from './models.js';
+import type { GameEvent, GameRecord, Member, MemberAccount, SocketHooks, SocketUser, WatchRequest } from './models.js';
 import { Presence } from './presence.js';
 import type { Room, RoomManager } from './rooms.js';
 import type { Announcement, InviteEvent } from './types.js';
@@ -26,6 +26,17 @@ import {
 const RATE_WINDOW_MS = 10_000;
 const RATE_MAX_EVENTS = 40;
 const SWEEP_EVERY_MS = 30_000;
+/** open connections allowed per network (IP) by default; friends on one Wi-Fi share an address */
+export const MAX_CONNECTIONS_PER_IP = 50;
+
+/** the caller's network address: Cloudflare's header on Render, else the last proxy hop (earlier ones can be forged) */
+export function clientIp(socket: Socket): string {
+  const h = socket.handshake.headers;
+  const cf = h['cf-connecting-ip'];
+  if (typeof cf === 'string' && cf.trim()) return cf.trim();
+  const xff = Array.isArray(h['x-forwarded-for']) ? h['x-forwarded-for'].join(',') : (h['x-forwarded-for'] ?? '');
+  return xff.split(',').map((s) => s.trim()).filter(Boolean).pop() || socket.handshake.address;
+}
 
 type Reply = (res: object) => void;
 type Seat = { room: Room; member: Member };
@@ -39,6 +50,7 @@ export function registerHandlers(
   rooms: RoomManager,
   hooks: SocketHooks = {},
   presence: Presence = new Presence(),
+  maxConnectionsPerIp = MAX_CONNECTIONS_PER_IP,
 ): () => void {
   // every player gets their own view so hands stay private
   const broadcast = (room: Room) => {
@@ -109,6 +121,23 @@ export function registerHandlers(
   };
 
   /** the account a logged-in socket joins with; balance and level are read fresh */
+  /** let a waiting person in (watching mid-game, a seat back in the lobby); their app rejoins with the seat token */
+  const admit = (room: Room, req: WatchRequest) => {
+    // they closed the app while waiting
+    if (!io.sockets.sockets.get(req.socketId)) {
+      broadcast(room);
+      return;
+    }
+    try {
+      const added = room.addMember(req.name, req.account);
+      io.to(req.socketId).emit('watch:admitted', { code: room.code, token: added.token, name: added.name });
+      publish(room, [room.note('room', added.watching ? `${added.name} is watching` : `${added.name} joined`)]);
+    } catch (err) {
+      io.to(req.socketId).emit('watch:denied', { code: room.code, reason: err instanceof GameError ? err.message : undefined });
+      broadcast(room);
+    }
+  };
+
   const accountOf = async (u: SocketUser | undefined): Promise<MemberAccount | null> => {
     if (!u) return null;
     let fresh: { coins: number; level: number } | undefined;
@@ -121,6 +150,14 @@ export function registerHandlers(
   };
 
   // a login token in the handshake makes this socket that account; no or bad token means guest
+  const connections = new Map<string, number>();
+  io.use((socket, next) => {
+    const ip = clientIp(socket);
+    if ((connections.get(ip) ?? 0) >= maxConnectionsPerIp) return next(new Error('Too many connections from your network'));
+    socket.data.ip = ip;
+    next();
+  });
+
   io.use((socket, next) => {
     const token = (socket.handshake.auth as { token?: unknown } | undefined)?.token;
     if (typeof token !== 'string' || !token || !hooks.resolveUser) return next();
@@ -136,7 +173,11 @@ export function registerHandlers(
   io.on('connection', (socket) => {
     const hits: number[] = [];
     const user = socket.data.user as SocketUser | undefined;
+    const ip = socket.data.ip as string;
+    connections.set(ip, (connections.get(ip) ?? 0) + 1);
     if (user) presence.add(user.id, socket.id);
+    /** a room this connection asked to watch, waiting for the host */
+    let pendingIn: Room | null = null;
     // logged-in players always use their account name
     const nameFrom = (p: Payload) => user?.displayName ?? parseName(p.name);
     let seat: Seat | null = null;
@@ -194,9 +235,35 @@ export function registerHandlers(
       });
     };
 
+    /** one room at a time: an old lobby or watcher seat elsewhere is given up; a game you're playing must be finished or left */
+    const releaseOthers = (target: Room | null) => {
+      const old: Seat[] = [];
+      if (seat && seat.room !== target) old.push(seat);
+      const other = user ? rooms.roomOfUser(user.id) : null;
+      if (other && other !== target && !old.some((o) => o.room === other)) {
+        old.push({ room: other, member: other.members.find((m) => m.userId === user!.id)! });
+      }
+      for (const { room, member } of old) {
+        if (member.socketId && member.socketId !== socket.id) {
+          throw new GameError(`You're already in room ${room.code} on another device or tab. Leave it there first`);
+        }
+        if (room.phase === 'playing' && room.game?.order.includes(member.id) && room.game.hand(member.id).length > 0) {
+          throw new GameError(`You're in a game in room ${room.code}. Finish it or leave it first`);
+        }
+      }
+      for (const { room, member } of old) {
+        if (seat?.member === member) detach();
+        room.removeMember(member.id);
+        rooms.dropIfEmpty(room);
+        publish(room, [room.note('room', `${member.name} left`)]);
+      }
+      if (pendingIn && pendingIn !== target && pendingIn.dropWatchRequests(socket.id)) broadcast(pendingIn);
+    };
+
     on('room:create', async (p) => {
       const name = nameFrom(p);
-      const next = rooms.create(name, await accountOf(user));
+      releaseOthers(null);
+      const next = rooms.create(name, await accountOf(user), ip);
       attach(next);
       // nobody else is in a new room yet, so there is nothing to announce
       publish(next.room, []);
@@ -206,7 +273,17 @@ export function registerHandlers(
     on('room:join', async (p) => {
       const code = parseCode(p.code);
       const name = nameFrom(p);
-      const next = rooms.join(code, name, await accountOf(user));
+      const room = rooms.get(code);
+      releaseOthers(room);
+      const account = await accountOf(user);
+      // a game is running: ask the host first; they answer from their requests list
+      if (room.needsApproval) {
+        room.requestWatch(name, account, socket.id);
+        pendingIn = room;
+        broadcast(room);
+        return { code: room.code, pending: true };
+      }
+      const next = rooms.join(code, name, account);
       attach(next);
       const joined = next.member.watching ? `${next.member.name} is watching` : `${next.member.name} joined`;
       publish(next.room, [next.room.note('room', joined)]);
@@ -220,11 +297,32 @@ export function registerHandlers(
       return { code: next.room.code };
     });
 
+    // mid-game this is a forfeit: the player loses and still pays a stake
     on('room:leave', () => {
       const { room, member } = current();
-      room.removeMember(member.id);
+      const inGame = room.phase === 'playing' && !!room.game?.order.includes(member.id);
+      const events = room.removeMember(member.id);
       detach();
-      publish(room, [room.note('room', `${member.name} left`)]);
+      rooms.dropIfEmpty(room);
+      publish(room, [room.note('room', inGame ? `${member.name} left the game` : `${member.name} left`), ...room.announce(events)]);
+      if (events.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot('finished'));
+    });
+
+    on('room:cancelRequest', () => {
+      if (pendingIn?.dropWatchRequests(socket.id)) broadcast(pendingIn);
+      pendingIn = null;
+    });
+
+    // the host lets someone watch the game in progress, or not
+    on('room:admit', (p) => {
+      const { room, member } = current();
+      const req = room.takeWatchRequest(member.id, parseMemberId(p.requestId));
+      if (!parseFlag(p.accept, 'Answer')) {
+        io.to(req.socketId).emit('watch:denied', { code: room.code });
+        broadcast(room);
+        return;
+      }
+      admit(room, req);
     });
 
     on('room:config', (p) => {
@@ -260,6 +358,8 @@ export function registerHandlers(
       saveGame(room, record);
       room.backToLobby(member.id);
       publish(room, wasPlaying ? [room.note('room', `${member.name} stopped the game. No coins moved`)] : []);
+      // anyone still waiting to watch can simply come in now
+      for (const req of room.takeAllWatchRequests()) admit(room, req);
     });
 
     // yourself, or (host only) anyone else in the room
@@ -369,6 +469,10 @@ export function registerHandlers(
 
     socket.on('disconnect', () => {
       if (user) presence.remove(user.id, socket.id);
+      const left = (connections.get(ip) ?? 1) - 1;
+      if (left > 0) connections.set(ip, left);
+      else connections.delete(ip);
+      if (pendingIn?.dropWatchRequests(socket.id)) broadcast(pendingIn);
       const room = detach();
       if (room) broadcast(room);
     });
