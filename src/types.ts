@@ -41,6 +41,9 @@ export const MAX_PEEKS = 3;
 /** coins a caller can bet on a bluff call (never more than the room's stake) */
 export const BET_STEPS = [50, 100, 250, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000] as const;
 
+/** with bots at the table the stake can be at most this; bots have no coins of their own */
+export const BOT_MAX_STAKE = 100;
+
 export interface GameConfig {
   decks: 1 | 2;
   bluffRule: BluffRule;
@@ -95,8 +98,11 @@ export interface ChatEvent {
   index: number;
 }
 
-/** emoji a player throws at someone in the room; everyone sees it fly across */
-export const THROWS = ['🌹', '💋', '👏', '🎉', '😂', '🍅', '🥚', '💣'] as const;
+/** emoji a player throws at someone in the room; everyone sees it fly across. New ones go at the end: the index is what's sent */
+export const THROWS = [
+  '🌹', '💋', '👏', '🎉', '😂', '🍅', '🥚', '💣', '😡', '🪓',
+  '🩴', '👊', '💩', '🎂', '🍻', '😱', '🥺', '🙏', '😝', '🤡',
+] as const;
 
 /** a thrown emoji: member ids in the room, index into THROWS */
 export interface ThrowEvent {
@@ -161,6 +167,8 @@ export interface PublicPlayer {
   username: string | null;
   /** account level; null for guests */
   level: number | null;
+  /** a bot the server plays; never has an account */
+  bot: boolean;
 }
 
 /** how one player's coins changed when a game ended */
@@ -267,6 +275,10 @@ export interface LifetimeStats {
   goodCalls: number;
   wrongCalls: number;
   cardsPickedUp: number;
+  /** plays made (counted since bots came; older games aren't in it) */
+  plays: number;
+  /** plays by others this player could have called bluff on */
+  chances: number;
 }
 
 /** XP from each finished game: playing it, winning, catching a liar, and each bluff nobody caught */
@@ -336,7 +348,7 @@ export interface GameSummary {
   bonus: number;
   my: MyGameStats | null;
   myAwards: { emoji: string; title: string }[];
-  players: { name: string; place: number | null; loser: boolean; guest: boolean; kicked: boolean }[];
+  players: { name: string; place: number | null; loser: boolean; guest: boolean; kicked: boolean; bot: boolean }[];
 }
 
 /** extra numbers for the player's own profile page */
@@ -406,6 +418,8 @@ export interface FriendView {
   level: number;
   /** already in a room: 'here' is the room I'm in; such friends can't be invited */
   inRoom: 'here' | 'other' | null;
+  /** their room's stage when it's another room: lobby or over (join or watch), playing (ask the host to watch) */
+  roomPhase: Phase | null;
 }
 
 /** a player found by name in the Friends search */

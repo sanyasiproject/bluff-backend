@@ -23,6 +23,8 @@ const asLifetime = (p: GamePlayerDoc): LifetimeStats => ({
   goodCalls: p.stats.goodCalls,
   wrongCalls: p.stats.wrongCalls,
   cardsPickedUp: p.stats.pickedUp,
+  plays: p.stats.plays ?? 0,
+  chances: p.stats.chances ?? 0,
 });
 
 /** saves games, settles stakes, pays daily game rewards, and adds to lifetime stats */
@@ -39,7 +41,8 @@ export class GameRecorder {
       memberId: p.memberId,
       userId: p.userId ? new ObjectId(p.userId) : null,
       name: p.name,
-      guest: !p.userId,
+      guest: !p.userId && !p.bot,
+      bot: p.bot,
       place: p.place,
       won: finished && p.won && !p.kicked,
       loser: p.loser,
@@ -106,7 +109,8 @@ export class GameRecorder {
   /** every logged-in, non-kicked player pays the stake; the winner gets the whole pot */
   private async settleStake(players: (GamePlayerDoc & { memberId: string })[], stake: number): Promise<number> {
     if (stake <= 0) return 0;
-    let pot = 0;
+    // bots have no coins, but their seats still count: a person who wins takes the stake for every seat
+    let pot = stake * players.filter((p) => p.bot && !p.kicked).length;
     for (const p of players) {
       if (!p.userId || p.kicked) continue;
       // never below zero: take the stake, or what's left if an admin removed coins mid-game
@@ -119,34 +123,41 @@ export class GameRecorder {
       p.coinChange -= paid;
       pot += paid;
     }
-    // one winner takes it all; a winning 2v2 team splits it (any odd coin goes to the first)
-    const winners = players.filter((p) => p.won && p.userId);
+    // one winner takes it all; a winning 2v2 team splits it (any odd coin goes to the first). A bot's share just goes
+    const winners = players.filter((p) => p.won);
     for (const [i, w] of winners.entries()) {
       const share = Math.floor(pot / winners.length) + (i === 0 ? pot % winners.length : 0);
-      if (share === 0) continue;
+      if (share === 0 || !w.userId) continue;
       await this.cols.users.updateOne({ _id: w.userId! }, { $inc: { coins: share } });
       w.coinChange += share;
     }
     return pot;
   }
 
-  /** each bet's loser pays the winner, never below zero; bets with a removed or guest player don't count */
+  /** each bet's loser pays the winner, never below zero; bets with a removed or guest player don't count.
+   * Bots have no coins: what a person loses to a bot is gone, what they win from one is new */
   private async settleBets(players: (GamePlayerDoc & { memberId: string })[], bets: GameRecord['bets']): Promise<void> {
     const byMember = new Map(players.map((p) => [p.memberId, p]));
+    const counts = (p: GamePlayerDoc | undefined): p is GamePlayerDoc => !!p && !p.kicked && (!!p.userId || !!p.bot);
     for (const bet of bets) {
       const from = byMember.get(bet.from);
       const to = byMember.get(bet.to);
-      if (!from?.userId || !to?.userId || from.kicked || to.kicked) continue;
-      const before = await this.cols.users.findOneAndUpdate(
-        { _id: from.userId },
-        [{ $set: { coins: { $max: [0, { $subtract: ['$coins', bet.amount] }] } } }],
-        { returnDocument: 'before', projection: { coins: 1 } },
-      );
-      const paid = Math.min(before?.coins ?? 0, bet.amount);
-      if (paid === 0) continue;
-      await this.cols.users.updateOne({ _id: to.userId }, { $inc: { coins: paid } });
-      from.betChange = (from.betChange ?? 0) - paid;
-      to.betChange = (to.betChange ?? 0) + paid;
+      if (!counts(from) || !counts(to) || (from.bot && to.bot)) continue;
+      let paid = bet.amount;
+      if (from.userId) {
+        const before = await this.cols.users.findOneAndUpdate(
+          { _id: from.userId },
+          [{ $set: { coins: { $max: [0, { $subtract: ['$coins', bet.amount] }] } } }],
+          { returnDocument: 'before', projection: { coins: 1 } },
+        );
+        paid = Math.min(before?.coins ?? 0, bet.amount);
+        if (paid === 0) continue;
+        from.betChange = (from.betChange ?? 0) - paid;
+      }
+      if (to.userId) {
+        await this.cols.users.updateOne({ _id: to.userId }, { $inc: { coins: paid } });
+        to.betChange = (to.betChange ?? 0) + paid;
+      }
     }
   }
 
@@ -192,6 +203,8 @@ export class GameRecorder {
               'stats.goodCalls': p.stats.goodCalls,
               'stats.wrongCalls': p.stats.wrongCalls,
               'stats.cardsPickedUp': p.stats.pickedUp,
+              'stats.plays': p.stats.plays ?? 0,
+              'stats.chances': p.stats.chances ?? 0,
             },
           },
         },
@@ -222,7 +235,7 @@ export class GameRecorder {
           ? { bluffs: me.stats.bluffs, caught: me.stats.caught, goodCalls: me.stats.goodCalls, wrongCalls: me.stats.wrongCalls, pickedUp: me.stats.pickedUp }
           : null,
         myAwards: me ? g.awards.filter((a) => a.names.includes(me.name)).map((a) => ({ emoji: a.emoji, title: a.title })) : [],
-        players: g.players.map((p) => ({ name: p.name, place: p.place, loser: p.loser, guest: p.guest, kicked: p.kicked ?? false })),
+        players: g.players.map((p) => ({ name: p.name, place: p.place, loser: p.loser, guest: p.guest, kicked: p.kicked ?? false, bot: p.bot ?? false })),
       };
     });
   }

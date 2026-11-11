@@ -4,6 +4,7 @@ import { hashToken, newToken } from '../auth/tokens.js';
 import { istDay } from '../days.js';
 import type { Actor, AuditDoc, Collections, UserDoc } from '../db/documents.js';
 import { ApiError } from '../http/errors.js';
+import type { AccountInfo } from '../models.js';
 import {
   DAILY_GIFT_LIMIT,
   HISTORY_PAGE_SIZE,
@@ -32,6 +33,8 @@ const EMPTY_STATS: LifetimeStats = {
   goodCalls: 0,
   wrongCalls: 0,
   cardsPickedUp: 0,
+  plays: 0,
+  chances: 0,
 };
 
 /** lifetime stats, with zeros for any an older account is missing */
@@ -134,10 +137,10 @@ export class UserService {
     return updated ? { user: updated, bonus: LOGIN_BONUS } : { user, bonus: 0 };
   }
 
-  async getAccounts(userIds: string[]): Promise<Map<string, { coins: number; level: number }>> {
+  async getAccounts(userIds: string[]): Promise<Map<string, AccountInfo>> {
     const ids = userIds.filter((id) => /^[a-f0-9]{24}$/i.test(id)).map((id) => new ObjectId(id));
     const users = await this.cols.users.find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1 } }).toArray();
-    return new Map(users.map((u) => [u._id.toHexString(), { coins: u.coins, level: levelOf(statsOf(u)) }]));
+    return new Map(users.map((u) => [u._id.toHexString(), { coins: u.coins, level: levelOf(statsOf(u)), stats: statsOf(u) }]));
   }
 
   async logout(token: string): Promise<void> {

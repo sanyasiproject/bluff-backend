@@ -50,10 +50,12 @@ export interface SessionDoc {
 }
 
 export interface GamePlayerDoc {
-  /** null for guests */
+  /** null for guests and bots */
   userId: ObjectId | null;
   name: string;
   guest: boolean;
+  /** a bot the server played (older games don't have it) */
+  bot?: boolean;
   place: number | null;
   won: boolean;
   loser: boolean;

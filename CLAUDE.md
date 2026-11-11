@@ -16,13 +16,14 @@ vitest 5 (vite 8 as dev peer) + supertest. Accounts are optional: without `MONGO
 |---|---|
 | `src/types.ts` | Shapes and constants shared with the app. **The frontend copy must stay identical** (only the "Keep in sync" header differs). Shared logic too: `levelOf`, `xpOf`, `XP_RULES`, `DAILY_GAME_REWARDS`, `BET_STEPS`, `MAX_PEEKS` |
 | `src/game.ts` | Pure game rules (deal, play, pass, bluff, peek, bets, 2v2 teams, finishing, winners/losers). No sockets |
+| `src/bots/` | Bot engine: `personality.ts` (6 styles, names), `memory.ts` (public events a bot saw), `brain.ts` (pure decisions from `room.view(botId)`), `driver.ts` (timers; moves go through `Game` and `afterMove` like a person's) |
 | `src/rooms.ts` | Room and RoomManager: members, host, settings, watch mode, 2v2 slots and swaps, per-member `view()`, announcements, game snapshot |
 | `src/socket.ts` | Thin event handlers (`room:*`, `game:*`, `chat:send`, `friend:invite`), rate limit, coin checks at start, saving finished games |
 | `src/validate.ts` | Every incoming payload is parsed here; throw `GameError` with a message safe to show players |
 | `src/models.ts` | Server-only shapes (Member, GameRecord, hooks) |
 | `src/services/` | `UserService` (accounts, sessions, coins, admin, audit), `GameRecorder` (save game, stakes, bets, daily ladder, stats), `FriendService` |
 | `src/http/` | Express app, middleware, routes: `auth`, `me`, `friends`, `players`, `admin` |
-| `test/` | `game.test.ts` (rules), `socket.test.ts` (no DB), `api.test.ts` (needs MongoDB) |
+| `test/` | `game.test.ts` (rules), `bots.test.ts` (engine plays hundreds of games), `socket.test.ts` and `bots-socket.test.ts` (no DB), `api.test.ts` (needs MongoDB) |
 
 The socket events and HTTP routes are listed in `README.md`. Keep those tables updated.
 
@@ -45,6 +46,7 @@ unset = localhost/LAN only), optional `MONGODB_DB`, `ADMIN_API_KEY`, `DEFAULT_CO
 ## Rules of thumb
 
 - Coins are virtual. Stakes, bets and the daily ladder settle only in `GameRecorder.save` for **finished** games; stopped games move nothing; balances never go below zero.
+- Bots: never a room of only bots (`hasPeople`, `afterExit`, `endIfOnlyBots`); stake capped at `BOT_MAX_STAKE`; bots pay nothing, a person who wins takes every seat's stake, coins lost to a bot are gone. Bots decide only from `room.view(botId)` and public events, never another hand, and never touch the database during a game (player reads come from `Member.stats`, loaded at join). When tuning the engine, check behaviour with a simulation (lie %, call %, call accuracy, win % per style), not by eye.
 - New room settings default to **off** and must accept older apps that don't send them (see `parseConfig`).
 - Seated players never get another player's cards (except 2v2 partners via `partnerHand`). Add a test when touching `view()`.
 - Watchers see every hand, so once a game is playing `room:join` becomes a watch request (`requestWatch`) the host approves with `room:admit`; `room:lobby` lets everyone still waiting in.

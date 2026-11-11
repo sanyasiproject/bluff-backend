@@ -693,6 +693,71 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     targetApp.socket.disconnect();
   });
 
+  it('settles stakes and bets against bots: a winner takes every seat\'s stake, coins lost to a bot are gone', async () => {
+    const reg = await register('bot_fan');
+    const userId = reg.body.user.id as string;
+    const zero = { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0, plays: 0, chances: 0 };
+    const game = (won: boolean, bets: GameRecord['bets'] = []): GameRecord => ({
+      roomCode: 'BOTS',
+      config: { decks: 1, bluffRule: 'one', stake: 100, peeks: 0, bets: true, teams: false },
+      status: 'finished',
+      startedAt: new Date(Date.now() - 90_000),
+      endedAt: new Date(),
+      players: [
+        { memberId: 'me', userId, name: 'bot_fan', place: won ? 1 : null, loser: !won, kicked: false, won, bot: false, stats: zero },
+        ...['b1', 'b2', 'b3'].map((id, i) => ({
+          memberId: id, userId: null, name: `Bot${i}`, place: !won && i === 0 ? 1 : null, loser: false, kicked: false, won: !won && i === 0, bot: true, stats: zero,
+        })),
+      ],
+      awards: [],
+      bets,
+    });
+    const mine = async (record: GameRecord) => (await store.games.save(record)).find((r) => r.playerId === 'me')!;
+    // 1 person + 3 bots at 100: a win pays 100 in and takes 400
+    expect(await mine(game(true))).toMatchObject({ change: 300, bonus: 100, coins: 1600 });
+    // a bot wins: the person's 100 is simply gone
+    expect(await mine(game(false))).toMatchObject({ change: -100, coins: 1500 });
+    // bets against bots: a lost bet is gone, a won bet is new coins (3rd game today also pays 300)
+    expect(await mine(game(false, [{ from: 'me', to: 'b1', amount: 50 }]))).toMatchObject({ change: -100, bets: -50, coins: 1650 });
+    expect(await mine(game(false, [{ from: 'b2', to: 'me', amount: 100 }]))).toMatchObject({ change: -100, bets: 100, coins: 1650 });
+    const games = (await api().get('/api/me/games').set(bearer(reg.body.token))).body.games as GameSummary[];
+    expect(games[0].players.filter((p) => p.bot && !p.guest)).toHaveLength(3);
+  });
+
+  it('lets friends join or watch from the Friends list, and asks the host once a game is on', async () => {
+    const a = await register('join_a', 'secret-pass-1', 'Ja');
+    const b = await register('join_b', 'secret-pass-1', 'Jb');
+    const c = await register('join_c', 'secret-pass-1', 'Jc');
+    await api().post('/api/friends/request').set(bearer(a.body.token)).send({ username: 'join_b' });
+    await api().post(`/api/friends/${a.body.user.id}/accept`).set(bearer(b.body.token));
+    const [aS, bS, cS] = [await socketClient(a.body.token), await socketClient(b.body.token), await socketClient(c.body.token)];
+    const { code } = await send(aS, 'room:create', {});
+    const friendOfB = async () => ((await api().get('/api/friends').set(bearer(b.body.token))).body as FriendsResponse).friends[0];
+    expect(await friendOfB()).toMatchObject({ username: 'join_a', inRoom: 'other', roomPhase: 'lobby' });
+
+    expect(await send(cS, 'friend:join', { userId: a.body.user.id })).toEqual({ ok: false, error: 'You can only join friends' });
+    // lobby: straight in, here as a watcher by choice
+    expect(await send(bS, 'friend:join', { userId: a.body.user.id, watch: true })).toMatchObject({ ok: true, code });
+    await until(() => aS.state!.watchers.some((w) => w.name === 'Jb' && w.byChoice));
+    expect(await send(bS, 'friend:join', { userId: a.body.user.id })).toEqual({ ok: false, error: "You're already in this room" });
+    expect(await friendOfB()).toMatchObject({ inRoom: 'here', roomPhase: null });
+    await send(bS, 'room:leave');
+
+    // once a game is on, joining is a request the host answers; after a no, a 10 s wait
+    await send(aS, 'room:addBot');
+    expect(await send(aS, 'room:start')).toEqual({ ok: true });
+    await until(() => aS.state?.phase === 'playing');
+    expect(await friendOfB()).toMatchObject({ inRoom: 'other', roomPhase: 'playing' });
+    expect(await send(bS, 'friend:join', { userId: a.body.user.id })).toEqual({ ok: true, code, pending: true });
+    await until(() => aS.state!.watchRequests.length === 1);
+    expect(await send(aS, 'room:admit', { requestId: aS.state!.watchRequests[0].id, accept: false })).toEqual({ ok: true });
+    expect(await send(bS, 'friend:join', { userId: a.body.user.id })).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/^Wait \d+ s before asking again$/),
+    });
+    [aS, bS, cS].forEach((x) => x.socket.disconnect());
+  });
+
   it('allows API calls only from allowed sites', async () => {
     const ok = await api().options('/api/me').set('Origin', 'http://localhost:5173');
     expect(ok.headers['access-control-allow-origin']).toBe('http://localhost:5173');

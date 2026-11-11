@@ -411,6 +411,8 @@ describe('socket server', () => {
     expect(await send(host, 'room:admit', { requestId: host.state!.watchRequests[0].id, accept: false })).toEqual({ ok: true });
     expect(await denied).toEqual({ code });
     await until(() => host.state!.watchRequests.length === 0);
+    // after a no they wait 10 s before asking again
+    expect(await send(nope, 'room:join', { code, name: 'Nope' })).toMatchObject({ ok: false, error: expect.stringMatching(/^Wait \d+ s before asking again$/) });
 
     // closing the app takes the request away
     await send(quitter, 'room:join', { code, name: 'Quitter' });
@@ -468,6 +470,8 @@ describe('socket server', () => {
     expect(await send(b, 'chat:throw', { to: them, index: 0 })).toEqual({ ok: false, error: 'Pick someone else' });
     expect(await send(b, 'chat:throw', { to: me, index: 99 })).toEqual({ ok: false, error: 'Invalid emoji' });
     expect(await send(b, 'chat:throw', { to: 'abcdefabcdef', index: 0 })).toEqual({ ok: false, error: 'That player has left' });
+    // the newest throw (🤡, last of the 20) goes through like the first ones
+    expect(await send(b, 'chat:throw', { to: me, index: 19 })).toEqual({ ok: true });
     // guests can't send coins
     expect(await send(a, 'friend:gift', { memberId: them, amount: 10 })).toEqual({ ok: false, error: 'Log in to send coins' });
     a.socket.disconnect();

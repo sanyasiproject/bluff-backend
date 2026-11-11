@@ -1,9 +1,10 @@
 import type { Server, Socket } from 'socket.io';
+import { BotDriver } from './bots/driver.js';
 import { GameError } from './game.js';
-import type { GameEvent, GameRecord, Member, MemberAccount, SocketHooks, SocketUser, WatchRequest } from './models.js';
+import type { AccountInfo, GameEvent, GameRecord, Member, MemberAccount, SocketHooks, SocketUser, WatchRequest } from './models.js';
 import { Presence } from './presence.js';
 import type { Room, RoomManager } from './rooms.js';
-import type { Announcement, GiftEvent, GiftReceived, InviteEvent } from './types.js';
+import { BOT_MAX_STAKE, type Announcement, type GiftEvent, type GiftReceived, type InviteEvent } from './types.js';
 import {
   asPayload,
   parseBet,
@@ -53,10 +54,13 @@ export function registerHandlers(
   hooks: SocketHooks = {},
   presence: Presence = new Presence(),
   maxConnectionsPerIp = MAX_CONNECTIONS_PER_IP,
+  /** bots' thinking pace: 1 = human-like; tests use a small number */
+  botSpeed = 1,
 ): () => void {
-  // every player gets their own view so hands stay private
+  // every player gets their own view so hands stay private; bots then plan their next move
   const broadcast = (room: Room) => {
     for (const m of room.members) if (m.socketId) io.to(m.socketId).emit('state', room.view(m.id));
+    bots.wake(room);
   };
 
   const publish = (room: Room, notes: Announcement[]) => {
@@ -83,10 +87,33 @@ export function registerHandlers(
       .catch((err: Error) => console.error('[games] could not save game:', err.message));
   };
 
-  const afterMove = (room: Room, events: GameEvent[]) => {
-    publish(room, room.announce(events));
-    if (events.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot(room.game?.aborted ? 'ended_early' : 'finished'));
+  const afterMove = (room: Room, events: GameEvent[], notes: Announcement[] = []) => {
+    // once no person holds cards against the bots, the result is settled
+    const all = [...events, ...room.endIfOnlyBots()];
+    bots.observe(room, all);
+    publish(room, [...notes, ...room.announce(all)]);
+    if (all.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot(room.game?.aborted ? 'ended_early' : 'finished'));
   };
+
+  /** after someone leaves: a room with no person left never carries on with bots alone */
+  const afterExit = (room: Room, events: GameEvent[], notes: Announcement[]) => {
+    if (room.hasPeople) return afterMove(room, events, notes);
+    const all = [...events, ...room.endGameNow()];
+    if (all.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot('finished'));
+    room.clearBots();
+    bots.forget(room);
+    rooms.dropIfEmpty(room);
+  };
+
+  const bots = new BotDriver(
+    {
+      onMove: (room, events) => afterMove(room, events),
+      onPeek: (room, bot) => publish(room, [room.note('room', `${bot.name} used a peek 🔍`)]),
+      onChat: (room, chat) => io.to(room.code).emit('chat', chat),
+    },
+    (room) => rooms.isOpen(room),
+    botSpeed,
+  );
 
   /** coin checks for a staked game, then deal; shared by Start and Play again */
   const startGame = async (room: Room, member: Member, label: string) => {
@@ -94,7 +121,10 @@ export function registerHandlers(
     if (stake > 0) {
       if (room.starting) throw new GameError('Already starting');
       const seated = room.players();
-      const guests = seated.filter((m) => !m.userId);
+      if (stake > BOT_MAX_STAKE && seated.some((m) => m.bot)) throw new GameError(`With bots at the table the stake can be up to ${BOT_MAX_STAKE}`);
+      // bots have no coins: only the people pay in
+      const people = seated.filter((m) => !m.bot);
+      const guests = people.filter((m) => !m.userId);
       if (guests.length > 0) {
         throw new GameError(`${listNames(guests)}: guests can only play Free games. Log in or set the stake to Free`);
       }
@@ -103,9 +133,13 @@ export function registerHandlers(
       try {
         await room.saving;
         // coins only move at the end; here we just make sure everyone can pay
-        const accounts = await hooks.getAccounts(seated.map((m) => m.userId!));
-        for (const m of seated) m.coins = accounts.get(m.userId!)?.coins ?? 0;
-        const short = seated.filter((m) => (m.coins ?? 0) < stake);
+        const accounts = await hooks.getAccounts(people.map((m) => m.userId!));
+        for (const m of people) {
+          const a = accounts.get(m.userId!);
+          m.coins = a?.coins ?? 0;
+          if (a) m.stats = a.stats;
+        }
+        const short = people.filter((m) => (m.coins ?? 0) < stake);
         if (short.length > 0) {
           broadcast(room);
           throw new GameError(`Not enough coins for a ${formatCoins(stake)} stake: ${listNames(short)}`);
@@ -142,13 +176,13 @@ export function registerHandlers(
 
   const accountOf = async (u: SocketUser | undefined): Promise<MemberAccount | null> => {
     if (!u) return null;
-    let fresh: { coins: number; level: number } | undefined;
+    let fresh: AccountInfo | undefined;
     try {
       fresh = (await hooks.getAccounts?.([u.id]))?.get(u.id);
     } catch {
       // shown as unknown until the next game ends
     }
-    return { userId: u.id, username: u.username, coins: fresh?.coins ?? null, level: fresh?.level ?? null };
+    return { userId: u.id, username: u.username, coins: fresh?.coins ?? null, level: fresh?.level ?? null, stats: fresh?.stats ?? null };
   };
 
   // a login token in the handshake makes this socket that account; no or bad token means guest
@@ -255,9 +289,7 @@ export function registerHandlers(
       }
       for (const { room, member } of old) {
         if (seat?.member === member) detach();
-        room.removeMember(member.id);
-        rooms.dropIfEmpty(room);
-        publish(room, [room.note('room', `${member.name} left`)]);
+        afterExit(room, room.removeMember(member.id), [room.note('room', `${member.name} left`)]);
       }
       if (pendingIn && pendingIn !== target && pendingIn.dropWatchRequests(socket.id)) broadcast(pendingIn);
     };
@@ -278,25 +310,45 @@ export function registerHandlers(
       return { code: next.room.code, token: next.member.token };
     });
 
-    on('room:join', async (p) => {
-      assertMayPlay();
-      const code = parseCode(p.code);
-      const name = nameFrom(p);
-      const room = rooms.get(code);
+    /** an account waits by account before asking again; a guest by network and name */
+    const requestKey = (name: string) => (user ? `u:${user.id}` : `g:${ip}:${name.toLowerCase()}`);
+    const watchFlag = (p: Payload) => (p.watch === undefined ? false : parseFlag(p.watch, 'Watch'));
+
+    /** watch: sit out and watch (lobby); once a game is on, every join is a request to the host */
+    const joinRoom = async (room: Room, name: string, watch: boolean) => {
       releaseOthers(room);
       const account = await accountOf(user);
       // a game is running: ask the host first; they answer from their requests list
       if (room.needsApproval) {
-        room.requestWatch(name, account, socket.id);
+        room.requestWatch(name, account, socket.id, requestKey(name));
         pendingIn = room;
         broadcast(room);
         return { code: room.code, pending: true };
       }
-      const next = rooms.join(code, name, account);
+      const next = rooms.join(room.code, name, account, watch);
       attach(next);
       const joined = next.member.watching ? `${next.member.name} is watching` : `${next.member.name} joined`;
       publish(next.room, [next.room.note('room', joined)]);
       return { code: next.room.code, token: next.member.token };
+    };
+
+    on('room:join', async (p) => {
+      assertMayPlay();
+      const code = parseCode(p.code);
+      const name = nameFrom(p);
+      return joinRoom(rooms.get(code), name, watchFlag(p));
+    });
+
+    // straight from the Friends list: join or watch their room in the lobby, ask the host once a game is on
+    on('friend:join', async (p) => {
+      if (!user) throw new GameError('Log in to join friends');
+      const friendId = parseUserId(p.userId);
+      const watch = watchFlag(p);
+      if (!hooks.areFriends || !(await hooks.areFriends(user.id, friendId))) throw new GameError('You can only join friends');
+      const room = rooms.roomOfUser(friendId);
+      if (!room) throw new GameError('Your friend is not in a room right now');
+      if (room === seat?.room) throw new GameError("You're already in this room");
+      return joinRoom(room, user.displayName, watch);
     });
 
     on('room:rejoin', (p) => {
@@ -312,9 +364,7 @@ export function registerHandlers(
       const inGame = room.phase === 'playing' && !!room.game?.order.includes(member.id);
       const events = room.removeMember(member.id);
       detach();
-      rooms.dropIfEmpty(room);
-      publish(room, [room.note('room', inGame ? `${member.name} left the game` : `${member.name} left`), ...room.announce(events)]);
-      if (events.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot('finished'));
+      afterExit(room, events, [room.note('room', inGame ? `${member.name} left the game` : `${member.name} left`)]);
     });
 
     on('room:cancelRequest', () => {
@@ -325,8 +375,9 @@ export function registerHandlers(
     // the host lets someone watch the game in progress, or not
     on('room:admit', (p) => {
       const { room, member } = current();
-      const req = room.takeWatchRequest(member.id, parseMemberId(p.requestId));
-      if (!parseFlag(p.accept, 'Answer')) {
+      const accept = parseFlag(p.accept, 'Answer');
+      const req = room.takeWatchRequest(member.id, parseMemberId(p.requestId), accept);
+      if (!accept) {
         io.to(req.socketId).emit('watch:denied', { code: room.code });
         broadcast(room);
         return;
@@ -382,6 +433,15 @@ export function registerHandlers(
       publish(room, [room.note('room', text)]);
     });
 
+    // the host seats a bot; with bots the stake is capped
+    on('room:addBot', () => {
+      const { room, member } = current();
+      const { bot, stakeLowered } = bots.add(room, member.id);
+      const notes = [room.note('room', `${member.name} added ${bot.name} 🤖`)];
+      if (stakeLowered) notes.push(room.note('room', `With bots at the table the stake is now ${BOT_MAX_STAKE}`));
+      publish(room, notes);
+    });
+
     on('room:slot', (p) => {
       const { room, member } = current();
       room.moveToSlot(member.id, parseSlot(p.slot));
@@ -391,6 +451,12 @@ export function registerHandlers(
     on('room:swap', (p) => {
       const { room, member } = current();
       const target = room.askSwap(member.id, parseMemberId(p.memberId));
+      // bots always say yes
+      if (target.bot) {
+        room.answerSwap(target.id, member.id, true);
+        publish(room, [room.note('room', `${member.name} and ${target.name} swapped places`)]);
+        return;
+      }
       publish(room, [room.note('room', `${member.name} asked ${target.name} to swap places`)]);
     });
 
@@ -426,8 +492,7 @@ export function registerHandlers(
         target?.leave(room.code);
         target?.emit('room:kicked', { code: room.code });
       }
-      publish(room, [room.note('room', `${kicked.name} was removed by the host`), ...room.announce(events)]);
-      if (events.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot(room.game?.aborted ? 'ended_early' : 'finished'));
+      afterExit(room, events, [room.note('room', `${kicked.name} was removed by the host`)]);
     });
 
     on('friend:invite', async (p) => {
@@ -526,7 +591,13 @@ export function registerHandlers(
     });
   });
 
-  const timer = setInterval(() => rooms.sweep().forEach(broadcast), SWEEP_EVERY_MS);
+  const timer = setInterval(() => {
+    rooms.sweep().forEach(broadcast);
+    bots.prune();
+  }, SWEEP_EVERY_MS);
   timer.unref();
-  return () => clearInterval(timer);
+  return () => {
+    clearInterval(timer);
+    bots.stop();
+  };
 }

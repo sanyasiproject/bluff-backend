@@ -1,4 +1,4 @@
-import type { Award, Card, CoinResult, GameConfig, Rank } from './types.js';
+import type { Award, Card, CoinResult, GameConfig, LifetimeStats, Rank } from './types.js';
 
 // Server-only shapes, never sent to clients as-is
 export interface Member {
@@ -22,6 +22,10 @@ export interface Member {
   username: string | null;
   /** account level as last seen; null for guests */
   level: number | null;
+  /** lifetime stats read when they joined, so bots can size up the player without the database; null for guests and bots */
+  stats: LifetimeStats | null;
+  /** played by the server */
+  bot: boolean;
 }
 
 /** the account behind a logged-in member */
@@ -30,6 +34,7 @@ export interface MemberAccount {
   username: string;
   coins: number | null;
   level: number | null;
+  stats: LifetimeStats | null;
 }
 
 /** someone asking to watch a game in progress; the host lets them in or not */
@@ -38,6 +43,8 @@ export interface WatchRequest {
   name: string;
   account: MemberAccount | null;
   socketId: string;
+  /** the account, or a guest's network and name, for the wait before asking again */
+  key: string;
 }
 
 /** logged-in account attached to a socket */
@@ -57,6 +64,7 @@ export interface GameRecordPlayer {
   kicked: boolean;
   /** 1st place, or on the winning team */
   won: boolean;
+  bot: boolean;
   stats: PlayerStats;
 }
 
@@ -83,8 +91,8 @@ export interface GameRecord {
 /** optional server features wired in by server.ts (accounts, coins, friends) */
 export interface SocketHooks {
   resolveUser?: (token: string) => Promise<SocketUser | null>;
-  /** current balance and level by user id */
-  getAccounts?: (userIds: string[]) => Promise<Map<string, { coins: number; level: number }>>;
+  /** current balance, level and lifetime stats by user id */
+  getAccounts?: (userIds: string[]) => Promise<Map<string, AccountInfo>>;
   /** saves the game, moves stake coins, pays daily game rewards; resolves with each player's coin change */
   onGameEnd?: (record: GameRecord) => Promise<CoinResult[]>;
   areFriends?: (a: string, b: string) => Promise<boolean>;
@@ -92,6 +100,13 @@ export interface SocketHooks {
   guestsAllowed?: () => boolean;
   /** moves coins to a friend within the daily gift limit; throws GameError with a reason players can read */
   giftCoins?: (fromUserId: string, toUserId: string, amount: number) => Promise<GiftResult>;
+}
+
+/** what a room needs to know about an account */
+export interface AccountInfo {
+  coins: number;
+  level: number;
+  stats: LifetimeStats;
 }
 
 /** balances after a gift between friends */
@@ -108,6 +123,9 @@ export interface PlayerStats {
   goodCalls: number;
   wrongCalls: number;
   pickedUp: number;
+  plays: number;
+  /** plays by others this player could have called bluff on */
+  chances: number;
 }
 
 export interface PlayRecord {

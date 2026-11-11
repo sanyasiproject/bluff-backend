@@ -320,9 +320,10 @@ describe('end-of-game awards', () => {
     g.callBluff('b', g.lastPlay!.id);
     g.play('b', ids(k1, k2), 'K');
     g.callBluff('c', g.lastPlay!.id);
-    expect(g.stats.get('a')).toEqual({ bluffs: 1, caught: 1, goodCalls: 0, wrongCalls: 0, pickedUp: 1 });
-    expect(g.stats.get('b')).toEqual({ bluffs: 0, caught: 0, goodCalls: 1, wrongCalls: 0, pickedUp: 0 });
-    expect(g.stats.get('c')).toEqual({ bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 1, pickedUp: 2 });
+    // plays made, and plays by others each could have called
+    expect(g.stats.get('a')).toEqual({ bluffs: 1, caught: 1, goodCalls: 0, wrongCalls: 0, pickedUp: 1, plays: 1, chances: 1 });
+    expect(g.stats.get('b')).toEqual({ bluffs: 0, caught: 0, goodCalls: 1, wrongCalls: 0, pickedUp: 0, plays: 1, chances: 1 });
+    expect(g.stats.get('c')).toEqual({ bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 1, pickedUp: 2, plays: 0, chances: 2 });
     expect(computeAwards(g.stats)).toEqual([
       { emoji: '🤥', title: 'Biggest liar', playerIds: ['a'], detail: '1 bluff' },
       { emoji: '🕵️', title: 'Best detective', playerIds: ['b'], detail: 'caught 1 bluff' },

@@ -18,6 +18,8 @@ export interface ServerDeps {
   authAttempts?: number;
   /** abuse limits per network; defaults suit production */
   limits?: Partial<RoomLimits & { connectionsPerIp: number }>;
+  /** bots' thinking pace: 1 = human-like (tests use a small number) */
+  botSpeed?: number;
 }
 
 export function createBluffServer(deps: ServerDeps = {}) {
@@ -31,7 +33,10 @@ export function createBluffServer(deps: ServerDeps = {}) {
     authAttempts: deps.authAttempts,
     presence,
     notifyFriends: (userId) => notifyFriends(userId),
-    roomOfUser: (userId) => rooms.roomOfUser(userId)?.code ?? null,
+    roomOfUser: (userId) => {
+      const room = rooms.roomOfUser(userId);
+      return room ? { code: room.code, phase: room.phase } : null;
+    },
     onSettingsChanged: (settings) => settingsChanged(settings),
   });
   const httpServer = createServer(app);
@@ -78,6 +83,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
       : {},
     presence,
     deps.limits?.connectionsPerIp ?? MAX_CONNECTIONS_PER_IP,
+    deps.botSpeed,
   );
 
   return {

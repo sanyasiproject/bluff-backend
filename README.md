@@ -42,10 +42,14 @@ Everything else has a built-in default: database `bluff`; collections `users`, `
 - **Stakes** (host picks in the lobby): Free, 50, 100, 250, 500, 1K, 5K, 10K, 50K, 1L, 5L, 10L per player. Start checks everyone can pay; guests can only play Free games.
 - Coins move only when a game **finishes**: every logged-in player pays the stake and the winner (1st place) gets the whole pot. A game stopped by the host, or by kicks leaving one player before anyone finished, moves nothing. A kicked player pays nothing and wins nothing. A player who uses **Leave game** mid-game forfeits: they lose and still pay the stake (in 2v2 their team loses; if one player is left, they win).
 - Every finished game stores the stake, pot and each player's coin change in `games`.
+- **Bots** have no coins. With a bot seated the stake is at most 100 (`BOT_MAX_STAKE`; adding a bot lowers a higher stake). People pay in as usual; bots put in nothing, but their seats count: a person who wins takes the stake for every seat. If a bot wins, the people's stakes are simply gone. Bets work the same way (lost to a bot: gone; won from a bot: paid in full). Bot games count for XP, stats and the daily ladder like any other.
 - **Gifts:** friends can give each other 10 / 25 / 50 / 100 coins, at most 100 a day in total per giver (one atomic update checks balance and limit). Both sides get an audit entry (`gift`), shown in the admin history. `PublicUser.giftLeft` says what's left today.
 
 ## Rules worth knowing
 
+- **Bots** (`src/bots/`): the host adds them in the lobby (`room:addBot`). A person must be seated to start; when the last person leaves, the bots go and the room closes; once no person holds cards, the game ends at once (2v2 plays on). Bots can't host, watch or be invited; in 2v2 they accept swaps at once. They pause while no person is connected.
+- **Bot engine**: each bot draws its own numbers from one of six styles (shark, maniac, rock, detective, trickster, gambler; never two of the same at a table) and drifts a little every game. It decides only from `room.view(botId)` (exactly what a seated player gets) plus its own memory of public events: card counting with its own cards, piles it saw picked up or discarded, and a read on every player (lie rate, call rate, call accuracy) from their lifetime stats (read once at join into `Member.stats`, never during a game) and what it saw at the table. Choices are weighted at random, and think time is drawn before deciding, so a pause never gives a lie away. `test/bots.test.ts` plays hundreds of bot games through the real rules.
+- New lifetime stats `plays` and `chances` (plays by others you could have called) feed the bots' read on each player; older accounts fall back to estimates.
 - A player can call **Bluff at most 2 times in a row**; after that the call is refused until they play or pass on their own turn (`MAX_BLUFF_CALLS_IN_A_ROW` in `src/types.ts`).
 - New rooms start on the **pick one card** bluff rule; the host can switch to show all in the lobby.
 
@@ -65,7 +69,7 @@ All bodies are JSON. Protected routes need `Authorization: Bearer <token>` (the 
 | `GET /api/me` | logged in | – | `{ user, bonus, friendRequests }` (bonus = daily +200 if just paid) |
 | `GET /api/me/games` | logged in | `?limit=20` | `{ games }` most recent first, with per-game stats and coins |
 | `GET /api/me/overview` | logged in | – | `{ coinRank, players, friends, loginBonusToday, gameBonusToday }` for the profile page |
-| `GET /api/friends` | logged in | – | `{ friends, incoming, outgoing }` with `online` |
+| `GET /api/friends` | logged in | – | `{ friends, incoming, outgoing }` with `online`, `inRoom` and `roomPhase` (the stage of a friend's other room) |
 | `GET /api/players/:username` | logged in | – | `{ profile }`: name, level, joined date, online (friends and yourself only, else `null`), game stats and friend status; never coins, role or login times |
 | `GET /api/friends/search` | logged in | `?q=` (2+ letters; username start or display name) | `{ players }` with `level`, `online` (friends only, else `null`), `status` |
 | `POST /api/friends/request` | logged in | `{ username }` | `{ result: 'sent' \| 'accepted' }` |
@@ -102,7 +106,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 - Free instances sleep after 15 min without traffic; the first connection after that takes up to about a minute.
 - Rooms live in memory: a redeploy or restart ends running games, and players land back on the home screen. Don't deploy while friends are playing.
 - Without `CLIENT_ORIGIN` only localhost and home-network (192.168.x / 10.x / 172.16–31.x) pages can connect.
-- Limits: 5 players + up to 7 watchers per room (12 people), 200 rooms, 40 events per 10 s per connection, one chat message per 0.7 s, names up to 16 characters.
+- Limits: 5 players + up to 7 watchers per room (12 people, bots included), 200 rooms, 40 events per 10 s per connection, one chat message per 0.7 s, names up to 16 characters.
 - When 5 are seated, newcomers watch; they take free seats when the room returns to the lobby. After a game has started, a join becomes a request the host approves; anyone still waiting is let in when the room returns to the lobby.
 - Chat only sends an index into the fixed `REACTIONS` / `QUICK_MESSAGES` lists in `src/types.ts`, so there is no free text to moderate.
 
@@ -111,6 +115,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | File | What it does |
 |---|---|
 | `src/game.ts` | Game rules: deal, play, pass, bluff (both rules), finishing order, per-player stats |
+| `src/bots/` | Bots: `personality.ts` (styles, names), `memory.ts` (what a bot saw), `brain.ts` (decisions), `driver.ts` (timers, moves through the same rules) |
 | `src/rooms.ts` | Rooms, seats and watchers, host, lobby settings, chat throttle, game snapshots, spoken announcements |
 | `src/awards.ts` | End-of-game awards (Biggest liar, Best detective, …) |
 | `src/socket.ts` | Socket events, per-player state, login token check, saving finished games |
@@ -125,9 +130,11 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | Client → server | Payload |
 |---|---|
 | `room:create` | `{ name }` → `{ code, token }` (name ignored when logged in) |
-| `room:join` | `{ code, name }` → `{ code, token }`, or `{ code, pending: true }` once a game has started (waits for the host) |
+| `room:join` | `{ code, name, watch? }` → `{ code, token }`, or `{ code, pending: true }` once a game has started (waits for the host). `watch`: join the lobby as a watcher |
+| `friend:join` | `{ userId, watch? }` (logged in, friends only): join or watch the friend's room; once their game is on it's a request to the host, like `room:join` |
+| `room:addBot` | – (host, lobby, free seat: a bot sits down; a stake over 100 drops to 100) |
 | `room:cancelRequest` | – (withdraw a pending join request) |
-| `room:admit` | `{ requestId, accept }` (host: let a pending request in to watch, or turn it down) |
+| `room:admit` | `{ requestId, accept }` (host: let a pending request in to watch, or turn it down). After asking, or a no, the same account (a guest: network + name) waits 10 s before asking again |
 | `room:rejoin` | `{ code, token }` |
 | `room:config` | `{ decks: 1 \| 2, bluffRule: 'all' \| 'one', stake, peeks: 0–3, bets: boolean, teams: boolean }` (host, lobby; new fields default to off) |
 | `room:start` / `room:lobby` / `room:leave` | – (`room:leave` mid-game with cards is a forfeit: a loss that still pays the stake) |

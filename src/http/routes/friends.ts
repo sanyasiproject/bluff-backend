@@ -2,25 +2,26 @@ import { Router, type RequestHandler } from 'express';
 import { ObjectId } from 'mongodb';
 import type { Presence } from '../../presence.js';
 import type { Store } from '../../services/store.js';
-import type { FriendsResponse, FriendView } from '../../types.js';
+import type { FriendsResponse, FriendView, Phase } from '../../types.js';
 import { asPayload, parseSearch, parseUserId, parseUsername } from '../../validate.js';
 import { ah, currentUser, requireUser } from '../middleware.js';
 
 /** tells a user's open apps that their friends or requests changed */
 export type NotifyFriends = (userId: string) => void;
 
-/** code of the room a user is in, or null */
-export type RoomOfUser = (userId: string) => string | null;
+/** the room a user is in (its code and stage), or null */
+export type RoomOfUser = (userId: string) => { code: string; phase: Phase } | null;
 
 export function friendRoutes(store: Store, presence: Presence, notify: NotifyFriends, roomOf: RoomOfUser, limited: RequestHandler): Router {
   const r = Router();
   r.use(requireUser(store));
 
-  /** live parts: online now, and whether they're in my room, another room, or free to invite */
+  /** live parts: online now, whether they're in my room, another room (and its stage), or free to invite */
   const live = (list: FriendView[], myRoom: string | null): FriendView[] =>
     list.map((f) => {
       const theirs = roomOf(f.id);
-      return { ...f, online: presence.isOnline(f.id), inRoom: !theirs ? null : theirs === myRoom ? 'here' : 'other' };
+      const here = theirs?.code === myRoom;
+      return { ...f, online: presence.isOnline(f.id), inRoom: !theirs ? null : here ? 'here' : 'other', roomPhase: theirs && !here ? theirs.phase : null };
     });
 
   r.get(
@@ -28,7 +29,7 @@ export function friendRoutes(store: Store, presence: Presence, notify: NotifyFri
     ah(async (_req, res) => {
       const me = currentUser(res)._id;
       const lists = await store.friends.list(me);
-      const myRoom = roomOf(me.toHexString());
+      const myRoom = roomOf(me.toHexString())?.code ?? null;
       const body: FriendsResponse = {
         // online friends first, then by name
         friends: live(lists.friends, myRoom).sort((a, b) => Number(b.online) - Number(a.online)),

@@ -3,7 +3,7 @@ import { computeAwards } from './awards.js';
 import { describeClaim, ordinal } from './cards.js';
 import { Game, GameError } from './game.js';
 import type { GameEvent, GameRecord, Member, MemberAccount, WatchRequest } from './models.js';
-import type { AnnounceKind, Announcement, ChatEvent, ChatKind, CoinResult, GameConfig, Phase, RoomView, ThrowEvent } from './types.js';
+import { BOT_MAX_STAKE, type AnnounceKind, type Announcement, type ChatEvent, type ChatKind, type CoinResult, type GameConfig, type Phase, type RoomView, type ThrowEvent } from './types.js';
 
 export const MAX_PLAYERS = 5;
 /** seated players plus watchers */
@@ -18,6 +18,8 @@ const ROOM_IDLE_MS = 30 * 60_000;
 const CHAT_GAP_MS = 700;
 /** people waiting for the host to let them watch */
 const MAX_WATCH_REQUESTS = 10;
+/** after asking to watch, or being turned down, wait this long before asking again */
+export const WATCH_ASK_GAP_MS = 10_000;
 /** room creation per network (IP), so one script can't fill the server */
 const CREATE_WINDOW_MS = 10 * 60_000;
 
@@ -48,6 +50,8 @@ export class Room {
   private swapAsks = new Map<string, string>();
   /** after the game has started, newcomers ask the host before they can watch */
   private watchRequests: WatchRequest[] = [];
+  /** when each requester last asked or was turned down, by WatchRequest.key */
+  private askedAt = new Map<string, number>();
   /** network that created the room, for the per-network room limit */
   creatorIp = '';
   private announceSeq = 0;
@@ -71,7 +75,8 @@ export class Room {
     return m;
   }
 
-  addMember(name: string, account: MemberAccount | null = null): Member {
+  /** watch: join as a watcher by choice (lobby) */
+  addMember(name: string, account: MemberAccount | null = null, watch = false): Member {
     if (this.members.length >= MAX_MEMBERS) throw new GameError(`Room is full (max ${MAX_MEMBERS})`);
     if (account && this.members.some((m) => m.userId === account.userId)) throw new GameError('Your account is already in this room');
     if (this.members.some((m) => m.name.toLowerCase() === name.toLowerCase())) {
@@ -84,13 +89,15 @@ export class Room {
       socketId: null,
       lastSeen: Date.now(),
       // late or extra people watch, and get a seat in the next game
-      watching: this.phase === 'playing' || this.players().length >= MAX_PLAYERS,
-      watchByChoice: false,
+      watching: watch || this.phase === 'playing' || this.players().length >= MAX_PLAYERS,
+      watchByChoice: watch,
       slot: null,
       userId: account?.userId ?? null,
       coins: account?.coins ?? null,
       username: account?.username ?? null,
       level: account?.level ?? null,
+      stats: account?.stats ?? null,
+      bot: false,
     };
     this.members.push(member);
     if (!this.hostId) this.hostId = member.id;
@@ -110,8 +117,55 @@ export class Room {
     this.lastChat.delete(id);
     this.forgetSwaps(id);
     if (this.phase === 'lobby') this.fillSeats();
-    if (this.hostId === id) this.hostId = (this.players()[0] ?? this.members[0])?.id ?? '';
+    if (this.hostId === id) {
+      // the host role only ever goes to a person
+      const people = this.members.filter((m) => !m.bot);
+      this.hostId = (people.find((m) => !m.watching) ?? people[0])?.id ?? '';
+    }
     return events;
+  }
+
+  /** host seats a bot in the lobby; bots cap the stake. Returns the bot and whether the stake came down */
+  addBot(by: string, name: string): { bot: Member; stakeLowered: boolean } {
+    this.assertHost(by);
+    if (this.phase !== 'lobby') throw new GameError('Bots can only join in the lobby');
+    if (this.players().length >= MAX_PLAYERS) throw new GameError(`All ${MAX_PLAYERS} seats are taken`);
+    const bot = this.addMember(name);
+    bot.bot = true;
+    const stakeLowered = this.config.stake > BOT_MAX_STAKE;
+    if (stakeLowered) this.config = { ...this.config, stake: BOT_MAX_STAKE };
+    return { bot, stakeLowered };
+  }
+
+  /** at least one person is here; a room is never left to bots alone */
+  get hasPeople(): boolean {
+    return this.members.some((m) => !m.bot);
+  }
+
+  get hasBots(): boolean {
+    return this.members.some((m) => m.bot);
+  }
+
+  /** the last person left: the bots go with them */
+  clearBots(): void {
+    this.members = this.members.filter((m) => !m.bot);
+  }
+
+  /** the last person is leaving: a running game ends at once */
+  endGameNow(): GameEvent[] {
+    return this.game && !this.game.over ? this.game.close() : [];
+  }
+
+  /** nobody but bots holds cards any more, so the result is settled: end the game now (2v2 plays on to find the team) */
+  endIfOnlyBots(): GameEvent[] {
+    const g = this.game;
+    if (!g || g.over || g.teams) return [];
+    const people = g.order.filter((id) => !this.isBot(id));
+    return people.every((id) => g.hand(id).length === 0) ? g.close() : [];
+  }
+
+  isBot(id: string): boolean {
+    return (this.members.find((m) => m.id === id) ?? this.departed.get(id))?.bot ?? false;
   }
 
   /** a game is running: newcomers ask the host instead of joining straight away */
@@ -119,24 +173,30 @@ export class Room {
     return this.phase === 'playing';
   }
 
-  requestWatch(name: string, account: MemberAccount | null, socketId: string): WatchRequest {
+  requestWatch(name: string, account: MemberAccount | null, socketId: string, key: string): WatchRequest {
+    const now = Date.now();
+    for (const [k, at] of this.askedAt) if (now - at >= WATCH_ASK_GAP_MS) this.askedAt.delete(k);
+    const last = this.askedAt.get(key);
+    if (last !== undefined) throw new GameError(`Wait ${Math.ceil((WATCH_ASK_GAP_MS - (now - last)) / 1000)} s before asking again`);
     if (this.members.length >= MAX_MEMBERS) throw new GameError(`Room is full (max ${MAX_MEMBERS})`);
     if (this.watchRequests.length >= MAX_WATCH_REQUESTS) throw new GameError('The host has a lot of requests, try again soon');
     if (account && this.members.some((m) => m.userId === account.userId)) throw new GameError('Your account is already in this room');
     const taken = [...this.members.map((m) => m.name), ...this.watchRequests.map((r) => r.name)];
     if (taken.some((n) => n.toLowerCase() === name.toLowerCase())) throw new GameError('That name is taken in this room');
     this.dropWatchRequests(socketId);
-    const req: WatchRequest = { id: randomBytes(6).toString('hex'), name, account, socketId };
+    const req: WatchRequest = { id: randomBytes(6).toString('hex'), name, account, socketId, key };
     this.watchRequests.push(req);
+    this.askedAt.set(key, now);
     return req;
   }
 
-  /** the host answers one request; it's removed either way */
-  takeWatchRequest(by: string, id: string): WatchRequest {
+  /** the host answers one request; it's removed either way, and a no starts the wait before asking again */
+  takeWatchRequest(by: string, id: string, accept: boolean): WatchRequest {
     this.assertHost(by);
     const req = this.watchRequests.find((r) => r.id === id);
     if (!req) throw new GameError('That request was cancelled');
     this.watchRequests = this.watchRequests.filter((r) => r !== req);
+    if (!accept) this.askedAt.set(req.key, Date.now());
     return req;
   }
 
@@ -177,6 +237,7 @@ export class Room {
     if (this.phase !== 'lobby') throw new GameError('The host can only be changed in the lobby');
     if (targetId === by) throw new GameError("You're already the host");
     const target = this.member(targetId);
+    if (target.bot) throw new GameError("A bot can't be the host");
     if (!target.socketId) throw new GameError(`${target.name} is offline`);
     this.hostId = target.id;
     return target;
@@ -187,6 +248,7 @@ export class Room {
     if (targetId !== by) this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('You can switch between playing and watching in the lobby');
     const m = this.member(targetId);
+    if (m.bot) throw new GameError('Bots always play. Remove the bot instead');
     if (watching) {
       m.watching = true;
       m.watchByChoice = true;
@@ -203,6 +265,7 @@ export class Room {
   setConfig(by: string, config: GameConfig): void {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Settings can only change in the lobby');
+    if (this.hasBots && config.stake > BOT_MAX_STAKE) throw new GameError(`With bots at the table the stake can be up to ${BOT_MAX_STAKE}`);
     this.config = config;
     if (!config.teams) this.swapAsks.clear();
   }
@@ -283,6 +346,7 @@ export class Room {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Game already started');
     if (this.players().length < 2) throw new GameError('Need at least 2 players');
+    if (!this.players().some((m) => !m.bot)) throw new GameError('Someone has to play with the bots');
     if (this.config.teams && this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
   }
 
@@ -349,6 +413,7 @@ export class Room {
         loser: status === 'finished' && g.losers().includes(id),
         won: status === 'finished' && g.winners().includes(id),
         kicked: g.kicked.has(id),
+        bot: member(id)?.bot ?? false,
         stats: { ...g.stats.get(id)! },
       })),
       awards: status === 'finished' ? computeAwards(g.stats) : [],
@@ -422,13 +487,14 @@ export class Room {
       players: seated.map((m) => ({
         id: m.id,
         name: m.name,
-        connected: m.socketId !== null,
+        connected: m.bot || m.socketId !== null,
         cardCount: g?.hands.get(m.id)?.length ?? 0,
         place: g ? g.places.indexOf(m.id) + 1 || null : null,
         registered: m.userId !== null,
         coins: m.coins,
         username: m.username,
         level: m.level,
+        bot: m.bot,
       })),
       watchers: this.members
         .filter((m) => !seatedIds.has(m.id))
@@ -522,6 +588,10 @@ export class Room {
           return ['over', this.game.endedEarly ? `The host ended the game. ${won} win` : `Game over. ${won} win`];
         }
         if (this.game?.endedEarly) return ['over', `The host ended the game. ${n(this.game.places[0])} wins`];
+        if (this.game?.closed) {
+          const first = this.game.places[0];
+          return ['over', first ? `Game over. Only bots are left playing. ${n(first)} wins` : 'Game over. Only bots are left playing'];
+        }
         const liar =this.game ? computeAwards(this.game.stats).find((a) => a.title === 'Biggest liar') : undefined;
         const loser = e.loserId ? `Game over. ${n(e.loserId)} is the loser` : 'Game over';
         return ['over', liar ? `${loser}. Biggest liar: ${liar.playerIds.map(n).join(' and ')}` : loser];
@@ -571,12 +641,17 @@ export class RoomManager {
 
   /** a room nobody is in any more goes away at once */
   dropIfEmpty(room: Room): void {
-    if (room.members.length === 0) this.rooms.delete(room.code);
+    if (!room.hasPeople) this.rooms.delete(room.code);
   }
 
-  join(code: string, name: string, account: MemberAccount | null = null): { room: Room; member: Member } {
+  join(code: string, name: string, account: MemberAccount | null = null, watch = false): { room: Room; member: Member } {
     const room = this.get(code);
-    return { room, member: room.addMember(name, account) };
+    return { room, member: room.addMember(name, account, watch) };
+  }
+
+  /** the room still exists (bots stop playing in one that's gone) */
+  isOpen(room: Room): boolean {
+    return this.rooms.get(room.code) === room;
   }
 
   rejoin(code: string, token: string): { room: Room; member: Member } {
@@ -609,15 +684,20 @@ export class RoomManager {
       else this.created.delete(ip);
     }
     for (const room of this.rooms.values()) {
-      if (room.members.every((m) => !m.socketId && now - m.lastSeen > ROOM_IDLE_MS)) {
+      // bots never count as someone being here
+      if (room.members.every((m) => m.bot || (!m.socketId && now - m.lastSeen > ROOM_IDLE_MS))) {
         this.rooms.delete(room.code);
         continue;
       }
       const stale = room.members.filter(
-        (m) => !m.socketId && now - m.lastSeen > LOBBY_GRACE_MS && (room.phase === 'lobby' || m.watching),
+        (m) => !m.bot && !m.socketId && now - m.lastSeen > LOBBY_GRACE_MS && (room.phase === 'lobby' || m.watching),
       );
       if (stale.length === 0) continue;
       stale.forEach((m) => room.removeMember(m.id));
+      if (!room.hasPeople) {
+        this.rooms.delete(room.code);
+        continue;
+      }
       changed.push(room);
     }
     return changed;

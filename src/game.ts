@@ -27,6 +27,8 @@ export class Game {
   aborted = false;
   /** the host ended it after someone won: 1st place wins, everyone else loses */
   endedEarly = false;
+  /** ended because only bots were left with cards */
+  closed = false;
   /** 2v2 partners, seated alternately (1st & 3rd vs 2nd & 4th); null when everyone plays alone */
   readonly teams: [string[], string[]] | null;
   /** coins bet on bluff calls; paid when the game is saved */
@@ -47,7 +49,7 @@ export class Game {
     this.teams = config.teams ? [[order[0], order[2]], [order[1], order[3]]] : null;
     for (const id of order) {
       this.hands.set(id, []);
-      this.stats.set(id, { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0 });
+      this.stats.set(id, { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0, plays: 0, chances: 0 });
     }
     shuffle(buildDeck(config.decks), rand).forEach((card, i) => this.hand(order[i % order.length]).push(card));
     for (const id of order) sortHand(this.hand(id));
@@ -77,7 +79,12 @@ export class Game {
     if (this.over) return events;
 
     if (cards.some((c) => c.rank !== claim)) this.stat(playerId).bluffs++;
+    this.stat(playerId).plays++;
     this.hands.set(playerId, hand.filter((c) => !picked.has(c.id)));
+    // everyone still in who may challenge this play had a chance to call it
+    for (const id of this.order) {
+      if (id !== playerId && this.hand(id).length > 0 && this.partnerOf(id) !== playerId) this.stat(id).chances++;
+    }
     this.pile.push(...cards);
     this.roundRank = claim;
     this.lastPlay = { id: randomUUID(), playerId, cards, rank: claim };
@@ -195,6 +202,16 @@ export class Game {
     return [{ kind: 'gameOver', loserId: null }];
   }
 
+  /** no person is left holding cards (only bots play on): 1st place, if any, wins; whoever still holds cards loses */
+  close(): GameEvent[] {
+    if (this.over) return [];
+    this.over = true;
+    this.closed = true;
+    this.turnId = null;
+    this.loserId = null;
+    return [{ kind: 'gameOver', loserId: null }];
+  }
+
   /** 1st place, or both partners of the winning team */
   winners(): string[] {
     if (this.aborted || !this.over) return [];
@@ -205,6 +222,8 @@ export class Game {
   /** the last player holding cards plus anyone who walked out; everyone but the winners when the host ended it or teams played */
   losers(): string[] {
     if (this.aborted) return [];
+    // closed with bots still holding cards: they never finished, and anyone who walked out lost
+    if (this.closed) return [...this.forfeited, ...this.order.filter((id) => this.hand(id).length > 0 && !this.kicked.has(id))];
     if (this.endedEarly || this.teams) {
       const won = this.winners();
       return won.length === 0 ? [] : this.order.filter((id) => !won.includes(id) && !this.kicked.has(id));

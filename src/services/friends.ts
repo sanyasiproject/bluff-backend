@@ -21,7 +21,7 @@ export class FriendService {
     const view = (f: FriendDoc): FriendView[] => {
       const u = byId.get(otherOf(f).toHexString());
       return u
-        ? [{ id: u._id.toHexString(), username: u.username, displayName: u.displayName, online: false, level: levelOf(statsOf(u)), inRoom: null }]
+        ? [{ id: u._id.toHexString(), username: u.username, displayName: u.displayName, online: false, level: levelOf(statsOf(u)), inRoom: null, roomPhase: null }]
         : [];
     };
     const byName = (a: FriendView, b: FriendView) => a.displayName.localeCompare(b.displayName);
