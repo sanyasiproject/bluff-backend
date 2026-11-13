@@ -50,8 +50,9 @@ async function crazyRoom(names: string[]) {
   for (const [i, p] of people.slice(1).entries()) expect(await send(p, 'room:join', { code: created.code, name: names[i + 1] })).toMatchObject({ ok: true });
   expect(await send(people[0], 'room:config', { ...C7, teams: true, peeks: 2 })).toEqual({ ok: true });
   await until(() => people.every((p) => p.state?.config.game === 'crazy7'));
-  // Bluff's extras switch off for Crazy 7
-  expect(people[1].state!.config).toMatchObject({ teams: false, peeks: 0, bets: false, handSize: 5, maxPicks: 2 });
+  // Bluff's extras are kept for when the host switches back, and Crazy 7 ignores them (3 players start despite teams)
+  expect(people[1].state!.config).toMatchObject({ teams: true, peeks: 2, handSize: 5, maxPicks: 2 });
+  expect(people[1].state!.slots).toBe(null);
   expect(await send(people[0], 'room:start')).toEqual({ ok: true });
   await until(() => people.every((p) => p.state?.phase === 'playing' && p.state.crazy7 !== null));
   return people;

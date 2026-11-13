@@ -317,7 +317,7 @@ export class Room {
   /** a seated player in a 2v2 lobby */
   private teamLobbyMember(id: string): Member {
     if (this.phase !== 'lobby') throw new GameError('Teams can only change in the lobby');
-    if (!this.config.teams) throw new GameError('Turn on 2 vs 2 teams first');
+    if (!this.bluffTeams) throw new GameError('Turn on 2 vs 2 teams first');
     const m = this.member(id);
     if (m.watching) throw new GameError(`${m.name} is watching, not playing`);
     return m;
@@ -358,7 +358,12 @@ export class Room {
     if (this.phase !== 'lobby') throw new GameError('Game already started');
     if (this.players().length < 2) throw new GameError('Need at least 2 players');
     if (!this.players().some((m) => !m.bot)) throw new GameError('Someone has to play with the bots');
-    if (this.config.teams && this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
+    if (this.bluffTeams && this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
+  }
+
+  /** 2v2 is on and the game is Bluff (Crazy 7 keeps the setting but ignores it) */
+  private get bluffTeams(): boolean {
+    return this.config.teams && this.config.game !== 'crazy7';
   }
 
   /** host swaps partners: the 1st player gets a different partner (the 2nd or the 4th seat, at random) */
@@ -366,7 +371,7 @@ export class Room {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Teams can only change in the lobby');
     const slots = this.slotIds();
-    if (!this.config.teams || slots.includes(null) || this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
+    if (!this.bluffTeams || slots.includes(null) || this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
     // partners hold slots 0 & 2; swapping slot 2 with slot 1 or 3 pairs slot 0 with someone new
     const a = this.member(slots[2]!);
     const b = this.member(slots[randomInt(2) === 0 ? 1 : 3]!);
@@ -502,7 +507,7 @@ export class Room {
     const seated = g ? g.order.flatMap((id) => this.members.filter((m) => m.id === id)) : this.players();
     const me = this.members.find((m) => m.id === meId);
     // 2v2 lobby: who sits in which team slot
-    const lobbySlots = !g && this.config.teams ? this.slotIds() : null;
+    const lobbySlots = !g && this.bluffTeams ? this.slotIds() : null;
     const seatedIds = new Set(seated.map((m) => m.id));
     return {
       code: this.code,
@@ -597,6 +602,8 @@ export class Room {
       missed: [...c.missed],
       atRisk: c.atRisk,
       last: c.last ? { ...c.last } : null,
+      turn: c.turnSeq,
+      topBy: c.topBy,
     };
   }
 
@@ -669,9 +676,13 @@ export class Room {
         return ['bluff', `Caught! ${n(e.playerId)} didn't say last card`];
       case 'c7shuffle':
         return ['room', 'The pile was shuffled into a new deck'];
+      case 'c7pass':
+        // a person whose whole turn went by itself should know why
+        return e.auto && !this.isBot(e.playerId) ? ['room', `${n(e.playerId)} had no match and passed`] : null;
       case 'gameOver':
         if (c.aborted) return ['over', 'Game stopped, not enough players left. No coins moved'];
         if (c.closed) return ['over', 'Game over. Only bots are left playing'];
+        if (c.stalled) return ['over', `Nobody can play and the deck is empty. ${n(c.places[0] ?? null)} wins with the fewest cards`];
         return ['over', `Game over. ${n(c.places[0] ?? null)} wins`];
       default:
         // picks, passes and the winner's last card show on the table instead

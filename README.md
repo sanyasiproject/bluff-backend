@@ -52,14 +52,19 @@ XP, the daily ladder, kicks, leaving and Stop game work the same for both.
 
 - 5 or 7 cards each (`handSize`), 1 or 2 decks; the rest is the face-down deck and its top card starts the pile (never a 7).
 - On your turn play ONE card of the top card's suit or number. With no matching card the server picks one for you; after that you
-  may pick more, up to `maxPicks` (1–7) in the turn, then play a matching card or pass. Passing needs at least one pick; reaching the
-  limit with nothing to play passes the turn by itself. You may also pick on purpose while you could play.
+  may pick more, up to `maxPicks` (1–7) in the turn. Pass only stops picking early: it needs at least one pick and more picks still
+  allowed, so a 1-pick room has no Pass, and at the limit a card that fits must be played. Reaching the limit with nothing to play
+  passes the turn by itself. You may also pick on purpose while you could play.
 - A 7 makes the next player pick 2 and lose the turn. With `stack7` on they can answer with their own 7 and the next player picks 4,
-  then 6… Without a 7 the pick is taken for them.
-- Going down to one card, say "last card" (`c7:call`): on your turn with two cards, or right after, until another player moves. Miss it
-  and on your next turn you pick 1 and miss the turn.
-- The first player out wins at once; everyone else loses (the stake works as in Bluff). An empty deck is refilled from the pile.
-- Bluff's extras (bluff rule, peeks, bets, teams) are off in Crazy 7, and End game doesn't apply.
+  then 6…; everyone facing a pick taps Pick N themselves (`c7:pick`), so a pause never shows who holds a 7. With stacking off the pick
+  is taken for them.
+- Going down to one card, say "last card" (`c7:call`): on your turn with two cards, or right after, until ANOTHER player makes a
+  deliberate move (play, pick or pass). If the turn comes back through automatic steps, nobody caught you. Caught: on your next turn
+  you pick 1 (plus any waiting 7 pick) and miss the turn. Bots wait at least 3.5 s while a person is at risk, and sometimes forget too.
+- The first player out wins at once; everyone else loses (the stake works as in Bluff). An empty deck is refilled from the pile; if
+  nobody can play and nothing is left to pick, the fewest cards win.
+- Bluff's extras (bluff rule, peeks, bets, teams) stay in the settings but are ignored in Crazy 7; End game doesn't apply.
+- Lifetime stats count Crazy 7 games in `crazy7Games` (Bluff bots read only Bluff games); Crazy 7 picks don't count as cards picked up.
 - Code: `src/crazy7/game.ts` (rules), `src/crazy7/driver.ts` + `brain.ts` + `memory.ts` (bots that search ahead from what they've seen).
 
 ## Rules worth knowing
@@ -170,7 +175,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `game:peek` | `{ playId, cardIndex }` → `{ card }` only to the player who peeks (rooms with peeks on) |
 | `c7:play` | `{ cardId }` (Crazy 7, your turn: one card of the top card's suit or number; only a 7 while a pick waits) |
 | `c7:pick` | – (Crazy 7, your turn: pick one card, up to `maxPicks` a turn; while a 7's pick waits, take it) |
-| `c7:pass` | – (Crazy 7, your turn, after picking at least once) |
+| `c7:pass` | – (Crazy 7, your turn: stop picking early; only after a pick and while more picks are allowed) |
 | `c7:call` | – (Crazy 7: "last card", with one card left, or on your turn with two) |
 | `chat:send` | `{ kind: 'reaction' \| 'message', index }` |
 | `chat:throw` | `{ to: memberId, index }` (index into `THROWS`; shares the chat speed limit) |

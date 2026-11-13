@@ -1,4 +1,4 @@
-import type { Card, Rank, RoomView } from '../types.js';
+import type { Card, LifetimeStats, Rank, RoomView } from '../types.js';
 import { partnerIn, type BotMemory } from './memory.js';
 import type { BotMove, Personality, Rand } from './models.js';
 
@@ -9,6 +9,9 @@ const PRIOR_CALL = 0.12;
 /** floors for accounts from before plays and chances were counted */
 const PLAYS_PER_GAME = 8;
 const CHANCES_PER_GAME = 15;
+
+/** Bluff games only: Crazy 7 games say nothing about how someone lies or calls */
+const bluffGames = (life: LifetimeStats) => life.gamesPlayed - (life.crazy7Games ?? 0);
 
 /** everything a decision looks at: the table exactly as this bot's seat sees it, plus its memory */
 export interface Situation {
@@ -67,8 +70,8 @@ export function bluffRate(s: Situation, id: string): number {
   let a = prior * 6;
   let b = (1 - prior) * 6;
   const life = s.mem.lifetime.get(id);
-  if (life && life.gamesPlayed > 0) {
-    const plays = Math.max(life.plays, life.bluffs, life.gamesPlayed * PLAYS_PER_GAME);
+  if (life && bluffGames(life) > 0) {
+    const plays = Math.max(life.plays, life.bluffs, bluffGames(life) * PLAYS_PER_GAME);
     // a lifetime counts as at most 30 plays, so today's table still matters
     const w = Math.min(30, plays) / plays;
     a += life.bluffs * w;
@@ -87,9 +90,9 @@ export function callRate(s: Situation, id: string): number {
   let a = PRIOR_CALL * 10;
   let b = (1 - PRIOR_CALL) * 10;
   const life = s.mem.lifetime.get(id);
-  if (life && life.gamesPlayed > 0) {
+  if (life && bluffGames(life) > 0) {
     const calls = life.goodCalls + life.wrongCalls;
-    const chances = Math.max(life.chances, calls, life.gamesPlayed * CHANCES_PER_GAME);
+    const chances = Math.max(life.chances, calls, bluffGames(life) * CHANCES_PER_GAME);
     const w = Math.min(40, chances) / chances;
     a += calls * w;
     b += (chances - calls) * w;

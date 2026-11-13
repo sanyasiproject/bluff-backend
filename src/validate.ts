@@ -55,10 +55,8 @@ export function parseConfig(p: Payload): GameConfig {
   const stack7 = p.stack7 === undefined ? true : typeof p.stack7 === 'boolean' ? p.stack7 : null;
   if (!decks || !bluffRule || stake === null || peeks === null || bets === null || teams === null) throw new GameError('Invalid settings');
   if (!game || handSize === null || maxPicks === null || stack7 === null) throw new GameError('Invalid settings');
-  // Bluff's extras don't apply to Crazy 7
-  const c7 = game === 'crazy7';
-  // bets need coins at stake
-  return { game, decks, bluffRule, stake, peeks: c7 ? 0 : peeks, bets: !c7 && bets && stake > 0, teams: !c7 && teams, handSize, maxPicks, stack7 };
+  // Bluff's extras are kept while Crazy 7 is picked (it ignores them), so switching back keeps them; bets need coins at stake
+  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7 };
 }
 
 /** a card id like "7S1" */

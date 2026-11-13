@@ -130,6 +130,8 @@ export interface PlayerStats {
   sevens?: number;
   /** Crazy 7: times they forgot to say last card */
   missedCalls?: number;
+  /** Crazy 7: cards picked (kept apart from Bluff's pickedUp, which feeds the Collector achievement) */
+  picks?: number;
 }
 
 /** what a room reads from whichever game is on (Bluff's Game or Crazy7Game) */

@@ -15,6 +15,12 @@ export interface Crazy7BotHooks {
 
 type Timer = ReturnType<typeof setTimeout>;
 
+/** a person who just went down to one card gets this long to say "last card" before a bot moves on */
+const LAST_CALL_GRACE_MS = 3500;
+
+/** chance a bot forgets to say "last card" before playing its second-last card, by style; it may say it late and get caught */
+const FORGET: Record<string, number> = { hunter: 0.06, guardian: 0.03, switcher: 0.08, counter: 0.02 };
+
 interface Seat {
   id: string;
   me: Crazy7Personality;
@@ -24,6 +30,8 @@ interface Seat {
   /** the table state a planned move was planned for */
   key: string | null;
   callTimer: Timer | null;
+  /** forgot to say "last card" with its second-last card */
+  forgot?: boolean;
 }
 
 // lines a bot may say after big moments
@@ -82,7 +90,9 @@ export class Crazy7Bots {
       this.memoryOf(seat, g);
       // down to one card without saying it (it always says it before playing, so only as a safety net)
       if (g.atRisk === seat.id && !seat.callTimer) {
-        seat.callTimer = setTimeout(() => this.sayLastCard(room, seat, g), (300 + this.rand() * 400) * this.speed);
+        // a bot that forgot remembers a little late, so a quick player can catch it
+        const late = seat.forgot ? 1500 + this.rand() * 3000 : 300 + this.rand() * 400;
+        seat.callTimer = setTimeout(() => this.sayLastCard(room, seat, g), late * this.speed);
       }
       if (g.turnId !== seat.id) {
         this.clearTurn(seat);
@@ -91,7 +101,7 @@ export class Crazy7Bots {
       if (seat.key === key) continue;
       this.clearTurn(seat);
       seat.key = key;
-      seat.timer = setTimeout(() => this.turn(room, seat, g, key), this.thinkMs(seat, g));
+      seat.timer = setTimeout(() => this.turn(room, seat, g, key), this.thinkMs(seat, g, room));
     }
   }
 
@@ -137,10 +147,10 @@ export class Crazy7Bots {
     try {
       const events: GameEvent[] = [];
       if (action.kind === 'play') {
-        if (g.hand(seat.id).length === 2 && g.canCall(seat.id)) events.push(...g.call(seat.id));
+        seat.forgot = g.hand(seat.id).length === 2 && this.rand() < (FORGET[seat.me.style] ?? 0.04);
+        if (g.hand(seat.id).length === 2 && g.canCall(seat.id) && !seat.forgot) events.push(...g.call(seat.id));
         events.push(...g.play(seat.id, action.cardId));
-        // a waiting 7 doesn't allow saying it before; say it straight after
-        if (g.atRisk === seat.id && g.canCall(seat.id)) events.push(...g.call(seat.id));
+        if (g.atRisk === seat.id && g.canCall(seat.id) && !seat.forgot) events.push(...g.call(seat.id));
       } else if (action.kind === 'pick') {
         events.push(...g.pick(seat.id));
       } else {
@@ -240,9 +250,12 @@ export class Crazy7Bots {
   }
 
   /** drawn before it knows what it'll do, so a pause never gives anything away; a follow-up after a pick is quicker */
-  private thinkMs(seat: Seat, g: Crazy7Game): number {
+  private thinkMs(seat: Seat, g: Crazy7Game, room: Room): number {
     const base = g.picks > 0 ? 500 + this.rand() * 700 : 900 + this.rand() * 1700;
-    return base * seat.me.tempo * this.speed;
+    const ms = base * seat.me.tempo * this.speed;
+    // never catch a person out before they've had a fair moment to tap the button
+    const person = g.atRisk !== null && !room.isBot(g.atRisk);
+    return person ? Math.max(ms, LAST_CALL_GRACE_MS * this.speed) : ms;
   }
 
   private live(room: Room, g: Crazy7Game): boolean {

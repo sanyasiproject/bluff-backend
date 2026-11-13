@@ -115,6 +115,10 @@ export interface Crazy7View {
   /** went down to one card without saying it; still time to say it */
   atRisk: string | null;
   last: Crazy7Move | null;
+  /** goes up by one each time a turn starts, even when the same player gets it again */
+  turn: number;
+  /** who put the top card down; null for the starting card */
+  topBy: string | null;
 }
 
 export type Phase = 'lobby' | 'playing' | 'over';
@@ -342,6 +346,8 @@ export interface LifetimeStats {
   plays: number;
   /** plays by others this player could have called bluff on */
   chances: number;
+  /** of gamesPlayed, how many were Crazy 7 (Bluff bots read only Bluff games) */
+  crazy7Games: number;
 }
 
 /** XP from each finished game: playing it, winning, catching a liar, and each bluff nobody caught */

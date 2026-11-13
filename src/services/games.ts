@@ -14,7 +14,7 @@ import {
 import { statsOf } from './users.js';
 
 /** one game's numbers in the shape of lifetime stats */
-const asLifetime = (p: GamePlayerDoc): LifetimeStats => ({
+const asLifetime = (p: GamePlayerDoc, crazy7 = false): LifetimeStats => ({
   gamesPlayed: 1,
   wins: p.won ? 1 : 0,
   losses: p.loser ? 1 : 0,
@@ -25,6 +25,7 @@ const asLifetime = (p: GamePlayerDoc): LifetimeStats => ({
   cardsPickedUp: p.stats.pickedUp,
   plays: p.stats.plays ?? 0,
   chances: p.stats.chances ?? 0,
+  crazy7Games: crazy7 ? 1 : 0,
 });
 
 /** saves games, settles stakes, pays daily game rewards, and adds to lifetime stats */
@@ -79,7 +80,7 @@ export class GameRecorder {
       })),
     });
 
-    if (finished) await this.addLifetimeStats(players);
+    if (finished) await this.addLifetimeStats(players, record.config.game === 'crazy7');
 
     const today = istDay();
     const accounts = await this.cols.users
@@ -187,7 +188,7 @@ export class GameRecorder {
     }
   }
 
-  private async addLifetimeStats(players: GamePlayerDoc[]): Promise<void> {
+  private async addLifetimeStats(players: GamePlayerDoc[], crazy7: boolean): Promise<void> {
     const updates: AnyBulkWriteOperation<UserDoc>[] = players
       .filter((p) => p.userId && !p.kicked)
       .map((p) => ({
@@ -205,6 +206,7 @@ export class GameRecorder {
               'stats.cardsPickedUp': p.stats.pickedUp,
               'stats.plays': p.stats.plays ?? 0,
               'stats.chances': p.stats.chances ?? 0,
+              'stats.crazy7Games': crazy7 ? 1 : 0,
             },
           },
         },

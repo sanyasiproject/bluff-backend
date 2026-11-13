@@ -20,7 +20,7 @@ const RULES: AwardRule[] = [
 
 const CRAZY7_RULES: AwardRule[] = [
   { emoji: '🎯', title: 'Sevens master', score: (s) => s.sevens ?? 0, detail: (n) => `played ${plural(n, 'seven')}` },
-  { emoji: '🧲', title: 'Card collector', score: (s) => s.pickedUp, detail: (n) => `picked up ${plural(n, 'card')}` },
+  { emoji: '🧲', title: 'Card collector', score: (s) => s.picks ?? 0, detail: (n) => `picked up ${plural(n, 'card')}` },
   { emoji: '🙊', title: 'Forgot to call', score: (s) => s.missedCalls ?? 0, detail: (n) => `missed last card ${plural(n, 'time')}` },
 ];
 
