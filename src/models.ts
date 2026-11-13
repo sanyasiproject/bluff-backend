@@ -126,6 +126,35 @@ export interface PlayerStats {
   plays: number;
   /** plays by others this player could have called bluff on */
   chances: number;
+  /** Crazy 7: sevens played */
+  sevens?: number;
+  /** Crazy 7: times they forgot to say last card */
+  missedCalls?: number;
+}
+
+/** what a room reads from whichever game is on (Bluff's Game or Crazy7Game) */
+export interface TableGame {
+  readonly order: string[];
+  readonly config: GameConfig;
+  readonly hands: Map<string, Card[]>;
+  readonly stats: Map<string, PlayerStats>;
+  readonly kicked: Set<string>;
+  readonly forfeited: Set<string>;
+  readonly teams: [string[], string[]] | null;
+  readonly bets: BetResult[];
+  readonly endedEarly: boolean;
+  pile: Card[];
+  places: string[];
+  turnId: string | null;
+  over: boolean;
+  aborted: boolean;
+  closed: boolean;
+  hand(id: string): Card[];
+  winners(): string[];
+  losers(): string[];
+  leave(id: string): GameEvent[];
+  removePlayer(id: string): GameEvent[];
+  close(): GameEvent[];
 }
 
 export interface PlayRecord {
@@ -142,4 +171,14 @@ export type GameEvent =
   | { kind: 'newRound'; starterId: string }
   | { kind: 'roundEnd'; starterId: string; discarded: number }
   | { kind: 'finish'; playerId: string; place: number }
-  | { kind: 'gameOver'; loserId: string | null };
+  | { kind: 'gameOver'; loserId: string | null }
+  // Crazy 7
+  | { kind: 'c7play'; playerId: string; card: Card; penalty: number }
+  /** forced: picked automatically because nothing matched top */
+  | { kind: 'c7pick'; playerId: string; count: number; forced: boolean; top: Card | null }
+  /** missed: forgot last card; forced: had no 7 to answer with */
+  | { kind: 'c7penalty'; playerId: string; count: number; missed: boolean; forced: boolean }
+  | { kind: 'c7pass'; playerId: string; auto: boolean }
+  | { kind: 'c7call'; playerId: string }
+  | { kind: 'c7missed'; playerId: string }
+  | { kind: 'c7shuffle'; count: number };

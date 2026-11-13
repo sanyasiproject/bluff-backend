@@ -1,5 +1,5 @@
 import { randomInt } from 'node:crypto';
-import { RANKS, SUITS, type Card, type Rank } from './types.js';
+import { RANKS, SUITS, type Card, type Rank, type Suit } from './types.js';
 
 export type RandomInt = (max: number) => number;
 
@@ -52,6 +52,13 @@ export function sortHand(cards: Card[]): Card[] {
 export function describeClaim(count: number, rank: Rank): string {
   const [one, many] = RANK_NAMES[rank];
   return `${COUNT_WORDS[count] ?? count} ${count === 1 ? one : many}`;
+}
+
+const SUIT_NAMES: Record<Suit, string> = { S: 'Spades', H: 'Hearts', D: 'Diamonds', C: 'Clubs' };
+
+/** "Seven of Spades" */
+export function cardName(card: Card): string {
+  return `${RANK_NAMES[card.rank][0]} of ${SUIT_NAMES[card.suit]}`;
 }
 
 export function ordinal(n: number): string {

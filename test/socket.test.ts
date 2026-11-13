@@ -51,7 +51,7 @@ describe('socket server', () => {
     const code = created.code!;
     // new rooms start on the "pick one card" bluff rule
     await until(() => a.state !== null);
-    expect(a.state!.config).toEqual({ decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false });
+    expect(a.state!.config).toEqual({ game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true });
     expect(await send(b, 'room:join', { code: code.toLowerCase(), name: 'Ravi' })).toMatchObject({ ok: true });
     expect(await send(c, 'room:join', { code, name: 'ravi' })).toEqual({ ok: false, error: 'That name is taken in this room' });
     expect(await send(c, 'room:join', { code, name: 'Meena' })).toMatchObject({ ok: true });
@@ -90,6 +90,13 @@ describe('socket server', () => {
     const loser = truth ? caller : mover;
     await until(() => played.every((x) => loser.state!.hand.some((h) => h.id === x.id)));
     expect(a.notes.some((n) => n.kind === 'bluff')).toBe(true);
+  });
+
+  it('tells every new connection whether accounts are on and guests may play', async () => {
+    const s = connect(url, { transports: ['websocket'], forceNew: true });
+    const info = await new Promise<unknown>((resolve) => s.once('server:info', resolve));
+    expect(info).toEqual({ accounts: false, guestsAllowed: true });
+    s.disconnect();
   });
 
   it('lets a player rejoin their seat with the saved token', async () => {

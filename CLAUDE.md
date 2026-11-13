@@ -16,6 +16,7 @@ vitest 5 (vite 8 as dev peer) + supertest. Accounts are optional: without `MONGO
 |---|---|
 | `src/types.ts` | Shapes and constants shared with the app. **The frontend copy must stay identical** (only the "Keep in sync" header differs). Shared logic too: `levelOf`, `xpOf`, `XP_RULES`, `DAILY_GAME_REWARDS`, `BET_STEPS`, `MAX_PEEKS` |
 | `src/game.ts` | Pure game rules (deal, play, pass, bluff, peek, bets, 2v2 teams, finishing, winners/losers). No sockets |
+| `src/crazy7/` | Second game, Crazy 7: `game.ts` (pure rules; `fromState` copies for bot search), bots (`driver.ts` timers, `brain.ts` search, `memory.ts` public events). The room holds `game` (Bluff) or `c7`; `room.table` is whichever is on (`TableGame` in `models.ts`) |
 | `src/bots/` | Bot engine: `personality.ts` (6 styles, names), `memory.ts` (public events a bot saw), `brain.ts` (pure decisions from `room.view(botId)`), `driver.ts` (timers; moves go through `Game` and `afterMove` like a person's) |
 | `src/rooms.ts` | Room and RoomManager: members, host, settings, watch mode, 2v2 slots and swaps, per-member `view()`, announcements, game snapshot |
 | `src/socket.ts` | Thin event handlers (`room:*`, `game:*`, `chat:send`, `friend:invite`), rate limit, coin checks at start, saving finished games |
@@ -47,7 +48,8 @@ unset = localhost/LAN only), optional `MONGODB_DB`, `ADMIN_API_KEY`, `DEFAULT_CO
 
 - Coins are virtual. Stakes, bets and the daily ladder settle only in `GameRecorder.save` for **finished** games; stopped games move nothing; balances never go below zero.
 - Bots: never a room of only bots (`hasPeople`, `afterExit`, `endIfOnlyBots`); stake capped at `BOT_MAX_STAKE`; bots pay nothing, a person who wins takes every seat's stake, coins lost to a bot are gone. Bots decide only from `room.view(botId)` and public events, never another hand, and never touch the database during a game (player reads come from `Member.stats`, loaded at join). When tuning the engine, check behaviour with a simulation (lie %, call %, call accuracy, win % per style), not by eye.
-- New room settings default to **off** and must accept older apps that don't send them (see `parseConfig`).
+- New room settings default to **off** and must accept older apps that don't send them (see `parseConfig`). `config.game` picks Bluff or Crazy 7; Crazy 7 forces Bluff's extras off.
+- Code that works for both games goes through `room.table`; Bluff-only code uses `room.game`, Crazy 7 `room.c7`.
 - Seated players never get another player's cards (except 2v2 partners via `partnerHand`). Add a test when touching `view()`.
 - Watchers see every hand, so once a game is playing `room:join` becomes a watch request (`requestWatch`) the host approves with `room:admit`; `room:lobby` lets everyone still waiting in.
 - `room:leave` mid-game with cards is a forfeit (`game.leave`): the player is in `losers()` and still pays the stake. A kick (`removePlayer`) pays nothing.

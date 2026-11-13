@@ -222,6 +222,7 @@ export class GameRecorder {
         endedAt: g.endedAt.toISOString(),
         durationSec: g.durationSec,
         status: g.status,
+        game: g.config.game ?? 'bluff',
         decks: g.config.decks,
         stake: g.stake ?? 0,
         place: me?.place ?? null,

@@ -36,6 +36,8 @@ export function createApi(store: Store | null, opts: ApiOptions): express.Expres
   app.use(express.json({ limit: '10kb' }));
 
   app.get('/health', (_req, res) => {
+    // never served from a cache: the guest switch can change at any time
+    res.set('Cache-Control', 'no-store');
     // guests can always play on a guest-only server
     res.json({ ok: true, accounts: store ? 'on' : 'off', guests: store ? store.settings.guestsAllowed : true });
   });

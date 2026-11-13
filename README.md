@@ -8,7 +8,7 @@ Real-time server for the Bluff card game (Node + Socket.IO + Express). It holds 
 npm install
 npm run dev      # http://localhost:3001  (restarts on file changes)
 npm test         # game rules + socket tests (account tests are skipped)
-TEST_MONGODB_URI=mongodb://127.0.0.1:27017 npm test   # also runs the account tests on a throwaway database
+TEST_MONGODB_URI=mongodb://127.0.0.1:27099 npm test   # also runs the account tests on a throwaway database
 ```
 
 For accounts locally, copy `.env.example` values into your shell (at least `MONGODB_URI`).
@@ -44,6 +44,23 @@ Everything else has a built-in default: database `bluff`; collections `users`, `
 - Every finished game stores the stake, pot and each player's coin change in `games`.
 - **Bots** have no coins. With a bot seated the stake is at most 100 (`BOT_MAX_STAKE`; adding a bot lowers a higher stake). People pay in as usual; bots put in nothing, but their seats count: a person who wins takes the stake for every seat. If a bot wins, the people's stakes are simply gone. Bets work the same way (lost to a bot: gone; won from a bot: paid in full). Bot games count for XP, stats and the daily ladder like any other.
 - **Gifts:** friends can give each other 10 / 25 / 50 / 100 coins, at most 100 a day in total per giver (one atomic update checks balance and limit). Both sides get an audit entry (`gift`), shown in the admin history. `PublicUser.giftLeft` says what's left today.
+
+## Crazy 7 (second game)
+
+The host picks the game in the lobby (`config.game`: `bluff`, the default, or `crazy7`). Rooms, seats (2–5), watchers, bots, stakes,
+XP, the daily ladder, kicks, leaving and Stop game work the same for both.
+
+- 5 or 7 cards each (`handSize`), 1 or 2 decks; the rest is the face-down deck and its top card starts the pile (never a 7).
+- On your turn play ONE card of the top card's suit or number. With no matching card the server picks one for you; after that you
+  may pick more, up to `maxPicks` (1–7) in the turn, then play a matching card or pass. Passing needs at least one pick; reaching the
+  limit with nothing to play passes the turn by itself. You may also pick on purpose while you could play.
+- A 7 makes the next player pick 2 and lose the turn. With `stack7` on they can answer with their own 7 and the next player picks 4,
+  then 6… Without a 7 the pick is taken for them.
+- Going down to one card, say "last card" (`c7:call`): on your turn with two cards, or right after, until another player moves. Miss it
+  and on your next turn you pick 1 and miss the turn.
+- The first player out wins at once; everyone else loses (the stake works as in Bluff). An empty deck is refilled from the pile.
+- Bluff's extras (bluff rule, peeks, bets, teams) are off in Crazy 7, and End game doesn't apply.
+- Code: `src/crazy7/game.ts` (rules), `src/crazy7/driver.ts` + `brain.ts` + `memory.ts` (bots that search ahead from what they've seen).
 
 ## Rules worth knowing
 
@@ -115,6 +132,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | File | What it does |
 |---|---|
 | `src/game.ts` | Game rules: deal, play, pass, bluff (both rules), finishing order, per-player stats |
+| `src/crazy7/` | Crazy 7: `game.ts` (rules), bots (`driver.ts`, `brain.ts`, `memory.ts`) |
 | `src/bots/` | Bots: `personality.ts` (styles, names), `memory.ts` (what a bot saw), `brain.ts` (decisions), `driver.ts` (timers, moves through the same rules) |
 | `src/rooms.ts` | Rooms, seats and watchers, host, lobby settings, chat throttle, game snapshots, spoken announcements |
 | `src/awards.ts` | End-of-game awards (Biggest liar, Best detective, …) |
@@ -136,7 +154,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `room:cancelRequest` | – (withdraw a pending join request) |
 | `room:admit` | `{ requestId, accept }` (host: let a pending request in to watch, or turn it down). After asking, or a no, the same account (a guest: network + name) waits 10 s before asking again |
 | `room:rejoin` | `{ code, token }` |
-| `room:config` | `{ decks: 1 \| 2, bluffRule: 'all' \| 'one', stake, peeks: 0–3, bets: boolean, teams: boolean }` (host, lobby; new fields default to off) |
+| `room:config` | `{ game: 'bluff' \| 'crazy7', decks: 1 \| 2, bluffRule: 'all' \| 'one', stake, peeks: 0–3, bets: boolean, teams: boolean, handSize: 5 \| 7, maxPicks: 1–7, stack7: boolean }` (host, lobby; missing fields: Bluff, off, 7 cards, 1 pick, stacking on; Crazy 7 turns Bluff's extras off) |
 | `room:start` / `room:lobby` / `room:leave` | – (`room:leave` mid-game with cards is a forfeit: a loss that still pays the stake) |
 | `room:rematch` | – (host, after game over: same table, same settings, dealt again) |
 | `room:end` | – (host, once someone finished 1st: game over, 1st wins and everyone else loses) |
@@ -150,10 +168,14 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `game:pass` | – |
 | `game:bluff` | `{ playId, cardIndex?, bet? }` (`cardIndex` for the "pick one" rule; `bet` from `BET_STEPS`, at most the stake, coin games with bets on) |
 | `game:peek` | `{ playId, cardIndex }` → `{ card }` only to the player who peeks (rooms with peeks on) |
+| `c7:play` | `{ cardId }` (Crazy 7, your turn: one card of the top card's suit or number; only a 7 while a pick waits) |
+| `c7:pick` | – (Crazy 7, your turn: pick one card, up to `maxPicks` a turn; while a 7's pick waits, take it) |
+| `c7:pass` | – (Crazy 7, your turn, after picking at least once) |
+| `c7:call` | – (Crazy 7: "last card", with one card left, or on your turn with two) |
 | `chat:send` | `{ kind: 'reaction' \| 'message', index }` |
 | `chat:throw` | `{ to: memberId, index }` (index into `THROWS`; shares the chat speed limit) |
 | `friend:gift` | `{ memberId \| userId, amount }` (logged in, friends only; amount from `GIFT_STEPS`; at most `DAILY_GIFT_LIMIT` = 100 coins given per IST day in total) → `{ coins, giftLeft }` |
 | `room:kick` | `{ memberId }` (host only; mid-game the player's cards leave the game) |
 | `friend:invite` | `{ userId }` (logged in, friends only, friend must be online) |
 
-Connect with `io(url, { auth: { token } })` to play as a logged-in account. Server → client: `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud), `chat` (`{ from, kind, index }`), `invite` (`{ fromId, fromName, code }`), `friends:changed` (someone sent, accepted or removed a friend request), `throw` (`{ from, to, index }`), `gift` (`{ from, to, amount }`, member ids, only when both are in the same room), `gift:received` (`{ fromName, amount }`, to whoever got coins), `watch:admitted` (`{ code, token, name }`: the host let you in, rejoin with it), `watch:denied` (`{ code, reason? }`), `room:kicked`, `session:replaced`. The host's `RoomView.watchRequests` lists pending requests (empty for everyone else). `RoomView.leftPlayers` lists who used Leave game in the current game (for names, the pot and the results), cleared back in the lobby.
+Connect with `io(url, { auth: { token } })` to play as a logged-in account. Server → client: `server:info` (`{ accounts, guestsAllowed }`, on every connection and to a guest who is turned away, so the app shows Log in and the guest lock even when its `/health` check is blocked), `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud), `chat` (`{ from, kind, index }`), `invite` (`{ fromId, fromName, code }`), `friends:changed` (someone sent, accepted or removed a friend request), `throw` (`{ from, to, index }`), `gift` (`{ from, to, amount }`, member ids, only when both are in the same room), `gift:received` (`{ fromName, amount }`, to whoever got coins), `watch:admitted` (`{ code, token, name }`: the host let you in, rejoin with it), `watch:denied` (`{ code, reason? }`), `room:kicked`, `session:replaced`. `RoomView.crazy7` carries the Crazy 7 table (top card, deck and pile counts, waiting pick, my playable cards and choices, who said last card, the last move). The host's `RoomView.watchRequests` lists pending requests (empty for everyone else). `RoomView.leftPlayers` lists who used Leave game in the current game (for names, the pot and the results), cleared back in the lobby.

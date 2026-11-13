@@ -16,9 +16,10 @@ import type {
   PlayerSearchResult,
   PublicUser,
   RoomView,
+  ServerInfo,
 } from '../src/types.js';
 
-// run with TEST_MONGODB_URI=mongodb://127.0.0.1:27017 (a throwaway database is created and dropped)
+// run with TEST_MONGODB_URI=mongodb://127.0.0.1:27099 (a throwaway database is created and dropped)
 const MONGO = process.env.TEST_MONGODB_URI;
 const DB = `bluff_test_${Date.now()}`;
 const ADMIN_KEY = 'test-admin-key-123';
@@ -635,9 +636,21 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect(off.body.settings).toMatchObject({ guestsAllowed: false, updatedBy: 'switch_boss' });
     await until(() => changes.length === 1);
     expect(changes[0]).toEqual({ guestsAllowed: false });
-    expect((await api().get('/health')).body).toMatchObject({ guests: false });
+    const health = await api().get('/health');
+    expect(health.body).toMatchObject({ guests: false });
+    expect(health.headers['cache-control']).toBe('no-store');
+    // a refused guest is told again, so an app that missed the switch shows the log-in card
+    const infos: ServerInfo[] = [];
+    guest.socket.on('server:info', (i: ServerInfo) => infos.push(i));
     const refused = { ok: false, error: 'Guest play is off right now. Log in to play' };
     expect(await send(guest, 'room:create', { name: 'Guesty' })).toEqual(refused);
+    await until(() => infos.length > 0);
+    expect(infos[0]).toEqual({ accounts: true, guestsAllowed: false });
+    // and every new connection hears it straight away
+    const late = connect(url, { transports: ['websocket'], forceNew: true });
+    const first = await new Promise<ServerInfo>((resolve) => late.once('server:info', resolve));
+    expect(first).toEqual({ accounts: true, guestsAllowed: false });
+    late.disconnect();
     expect(await send(guest, 'room:join', { code, name: 'Guesty' })).toEqual(refused);
     // logged-in players are not affected
     const member = await socketClient((await register('switch_member')).body.token);

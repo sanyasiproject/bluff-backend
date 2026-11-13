@@ -1,13 +1,15 @@
 import type { Server, Socket } from 'socket.io';
 import { BotDriver } from './bots/driver.js';
+import { Crazy7Bots } from './crazy7/driver.js';
 import { GameError } from './game.js';
 import type { AccountInfo, GameEvent, GameRecord, Member, MemberAccount, SocketHooks, SocketUser, WatchRequest } from './models.js';
 import { Presence } from './presence.js';
 import type { Room, RoomManager } from './rooms.js';
-import { BOT_MAX_STAKE, type Announcement, type GiftEvent, type GiftReceived, type InviteEvent } from './types.js';
+import { BOT_MAX_STAKE, type Announcement, type GiftEvent, type GiftReceived, type InviteEvent, type ServerInfo } from './types.js';
 import {
   asPayload,
   parseBet,
+  parseCardId,
   parseCardIds,
   parseCardIndex,
   parseChat,
@@ -61,6 +63,7 @@ export function registerHandlers(
   const broadcast = (room: Room) => {
     for (const m of room.members) if (m.socketId) io.to(m.socketId).emit('state', room.view(m.id));
     bots.wake(room);
+    c7bots.wake(room);
   };
 
   const publish = (room: Room, notes: Announcement[]) => {
@@ -71,7 +74,7 @@ export function registerHandlers(
   /** saves in the background, then shows everyone the coin changes */
   const saveGame = (room: Room, record: GameRecord | null) => {
     if (!record || !hooks.onGameEnd) return;
-    const game = room.game;
+    const game = room.table;
     // a quick rematch waits for this, so coin balances are settled before they're checked
     room.saving = hooks
       .onGameEnd(record)
@@ -81,7 +84,7 @@ export function registerHandlers(
           if (m && r.coins !== null) m.coins = r.coins;
           if (m && r.level !== null) m.level = r.level;
         }
-        if (room.game === game) room.coinResults = results;
+        if (room.table === game) room.coinResults = results;
         broadcast(room);
       })
       .catch((err: Error) => console.error('[games] could not save game:', err.message));
@@ -91,8 +94,9 @@ export function registerHandlers(
     // once no person holds cards against the bots, the result is settled
     const all = [...events, ...room.endIfOnlyBots()];
     bots.observe(room, all);
+    c7bots.observe(room, all);
     publish(room, [...notes, ...room.announce(all)]);
-    if (all.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot(room.game?.aborted ? 'ended_early' : 'finished'));
+    if (all.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot(room.table?.aborted ? 'ended_early' : 'finished'));
   };
 
   /** after someone leaves: a room with no person left never carries on with bots alone */
@@ -102,6 +106,7 @@ export function registerHandlers(
     if (all.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot('finished'));
     room.clearBots();
     bots.forget(room);
+    c7bots.forget(room);
     rooms.dropIfEmpty(room);
   };
 
@@ -109,6 +114,16 @@ export function registerHandlers(
     {
       onMove: (room, events) => afterMove(room, events),
       onPeek: (room, bot) => publish(room, [room.note('room', `${bot.name} used a peek 🔍`)]),
+      onChat: (room, chat) => io.to(room.code).emit('chat', chat),
+    },
+    (room) => rooms.isOpen(room),
+    botSpeed,
+  );
+
+  // Crazy 7 bots: same table, their own brain
+  const c7bots = new Crazy7Bots(
+    {
+      onMove: (room, events) => afterMove(room, events),
       onChat: (room, chat) => io.to(room.code).emit('chat', chat),
     },
     (room) => rooms.isOpen(room),
@@ -151,9 +166,13 @@ export function registerHandlers(
       }
     }
     room.start(member.id);
-    const first = room.member(room.game!.turnId!).name;
-    const pot = stake > 0 ? `. Pot: ${formatCoins(stake * room.game!.order.length)} coins` : '';
-    publish(room, [room.note('round', `${label}. ${first} goes first${pot}`)]);
+    const table = room.table!;
+    const first = table.turnId ? room.member(table.turnId).name : 'Someone';
+    const pot = stake > 0 ? `. Pot: ${formatCoins(stake * table.order.length)} coins` : '';
+    // Crazy 7's first turn may already have picked a card for that player
+    const opening = room.c7?.opening ?? [];
+    c7bots.observe(room, opening);
+    publish(room, [room.note('round', `${label}. ${first} goes first${pot}`), ...room.announce(opening)]);
   };
 
   /** the account a logged-in socket joins with; balance and level are read fresh */
@@ -185,6 +204,9 @@ export function registerHandlers(
     return { userId: u.id, username: u.username, coins: fresh?.coins ?? null, level: fresh?.level ?? null, stats: fresh?.stats ?? null };
   };
 
+  /** accounts on or off, and whether guests may play right now */
+  const serverInfo = (): ServerInfo => ({ accounts: !!hooks.resolveUser, guestsAllowed: hooks.guestsAllowed ? hooks.guestsAllowed() : true });
+
   // a login token in the handshake makes this socket that account; no or bad token means guest
   const connections = new Map<string, number>();
   io.use((socket, next) => {
@@ -212,6 +234,8 @@ export function registerHandlers(
     const ip = socket.data.ip as string;
     connections.set(ip, (connections.get(ip) ?? 0) + 1);
     if (user) presence.add(user.id, socket.id);
+    // the app shows Log in and the guest lock from this even when its /health check is blocked
+    socket.emit('server:info', serverInfo());
     /** a room this connection asked to watch, waiting for the host */
     let pendingIn: Room | null = null;
     // logged-in players always use their account name
@@ -283,7 +307,7 @@ export function registerHandlers(
         if (member.socketId && member.socketId !== socket.id) {
           throw new GameError(`You're already in room ${room.code} on another device or tab. Leave it there first`);
         }
-        if (room.phase === 'playing' && room.game?.order.includes(member.id) && room.game.hand(member.id).length > 0) {
+        if (room.phase === 'playing' && room.table?.order.includes(member.id) && room.table.hand(member.id).length > 0) {
           throw new GameError(`You're in a game in room ${room.code}. Finish it or leave it first`);
         }
       }
@@ -296,7 +320,11 @@ export function registerHandlers(
 
     // an admin can turn guest play off; guests already in a room keep their seat
     const assertMayPlay = () => {
-      if (!user && hooks.guestsAllowed && !hooks.guestsAllowed()) throw new GameError('Guest play is off right now. Log in to play');
+      if (!user && hooks.guestsAllowed && !hooks.guestsAllowed()) {
+        // this app may have missed the switch: it shows the log-in card straight away
+        socket.emit('server:info', serverInfo());
+        throw new GameError('Guest play is off right now. Log in to play');
+      }
     };
 
     on('room:create', async (p) => {
@@ -361,7 +389,7 @@ export function registerHandlers(
     // mid-game this is a forfeit: the player loses and still pays a stake
     on('room:leave', () => {
       const { room, member } = current();
-      const inGame = room.phase === 'playing' && !!room.game?.order.includes(member.id);
+      const inGame = room.phase === 'playing' && !!room.table?.order.includes(member.id);
       const events = room.removeMember(member.id);
       detach();
       afterExit(room, events, [room.note('room', inGame ? `${member.name} left the game` : `${member.name} left`)]);
@@ -527,6 +555,27 @@ export function registerHandlers(
       afterMove(room, game.callBluff(member.id, parsePlayId(p.playId), parseCardIndex(p.cardIndex), bet));
     });
 
+    // Crazy 7: one card on the pile, pick from the deck, end the turn, or say last card
+    on('c7:play', (p) => {
+      const { room, member } = current();
+      afterMove(room, room.requireCrazy7().play(member.id, parseCardId(p.cardId)));
+    });
+
+    on('c7:pick', () => {
+      const { room, member } = current();
+      afterMove(room, room.requireCrazy7().pick(member.id));
+    });
+
+    on('c7:pass', () => {
+      const { room, member } = current();
+      afterMove(room, room.requireCrazy7().pass(member.id));
+    });
+
+    on('c7:call', () => {
+      const { room, member } = current();
+      afterMove(room, room.requireCrazy7().call(member.id));
+    });
+
     // the card goes back only to this player; everyone else just learns a peek happened
     on('game:peek', (p) => {
       const { room, member } = current();
@@ -594,10 +643,12 @@ export function registerHandlers(
   const timer = setInterval(() => {
     rooms.sweep().forEach(broadcast);
     bots.prune();
+    c7bots.prune();
   }, SWEEP_EVERY_MS);
   timer.unref();
   return () => {
     clearInterval(timer);
     bots.stop();
+    c7bots.stop();
   };
 }

@@ -44,7 +44,19 @@ export const BET_STEPS = [50, 100, 250, 500, 1_000, 5_000, 10_000, 50_000, 100_0
 /** with bots at the table the stake can be at most this; bots have no coins of their own */
 export const BOT_MAX_STAKE = 100;
 
+/** which game a room plays */
+export type GameKind = 'bluff' | 'crazy7';
+
+/** Crazy 7: cards dealt to each player */
+export const CRAZY7_HAND_SIZES = [5, 7] as const;
+/** Crazy 7: the most cards a player may pick in one turn (the room setting goes from 1 to this) */
+export const CRAZY7_MAX_PICKS = 7;
+/** Crazy 7: cards the next player must pick for each 7 */
+export const SEVEN_PENALTY = 2;
+
 export interface GameConfig {
+  /** Bluff (default) or Crazy 7; older apps don't send it */
+  game: GameKind;
   decks: 1 | 2;
   bluffRule: BluffRule;
   stake: number;
@@ -54,6 +66,55 @@ export interface GameConfig {
   bets: boolean;
   /** 2 vs 2: exactly 4 players, partners sit opposite */
   teams: boolean;
+  /** Crazy 7: cards dealt to each player */
+  handSize: 5 | 7;
+  /** Crazy 7: cards a player may pick in one turn (the first one is automatic when nothing matches) */
+  maxPicks: number;
+  /** Crazy 7: a 7 can be answered with another 7, passing a bigger pick on */
+  stack7: boolean;
+}
+
+/** one move at a Crazy 7 table, for seat labels and animations */
+export interface Crazy7Move {
+  /** goes up by one with every move */
+  id: number;
+  kind: 'play' | 'pick' | 'penalty' | 'pass' | 'call' | 'missed' | 'shuffle';
+  playerId: string | null;
+  /** the card played */
+  card: Card | null;
+  /** cards picked */
+  count: number;
+}
+
+/** the Crazy 7 part of a room view; everything here is public except the my-turn fields */
+export interface Crazy7View {
+  /** top card of the pile: the next card must match its suit or number */
+  top: Card | null;
+  /** a few cards under the top, oldest first */
+  under: Card[];
+  pileCount: number;
+  deckCount: number;
+  /** cards the player on turn must pick because of 7s (0 = none) */
+  penalty: number;
+  /** cards the player on turn has picked this turn */
+  picks: number;
+  /** my cards that can go on the pile now; empty when it isn't my turn */
+  playable: string[];
+  /** I may pick a card now (or take the 7 penalty) */
+  canPick: boolean;
+  /** I may end my turn now (only after picking) */
+  canPass: boolean;
+  /** I may say "last card" now */
+  canCall: boolean;
+  /** cards I picked this turn */
+  picked: string[];
+  /** players who said "last card" */
+  called: string[];
+  /** players who forgot: they pick 1 and miss their next turn */
+  missed: string[];
+  /** went down to one card without saying it; still time to say it */
+  atRisk: string | null;
+  last: Crazy7Move | null;
 }
 
 export type Phase = 'lobby' | 'playing' | 'over';
@@ -261,6 +322,8 @@ export interface RoomView {
   watchRequests: { id: string; name: string; registered: boolean; level: number | null }[];
   /** players who used Leave game in this game: they lost and still pay the stake */
   leftPlayers: { id: string; name: string; registered: boolean; level: number | null }[];
+  /** the Crazy 7 table while a Crazy 7 game is on, else null */
+  crazy7: Crazy7View | null;
 }
 
 export type Role = 'user' | 'admin';
@@ -337,6 +400,8 @@ export interface GameSummary {
   endedAt: string;
   durationSec: number;
   status: 'finished' | 'ended_early';
+  /** older games are Bluff */
+  game: GameKind;
   decks: 1 | 2;
   stake: number;
   place: number | null;
@@ -370,6 +435,14 @@ export interface AdminUser extends PublicUser {
 }
 
 export type AuditAction = 'coins' | 'make_admin' | 'update' | 'password' | 'gift' | 'settings';
+
+/** sent on every connection (and to a guest who is turned away), so the app never depends on one HTTP check */
+export interface ServerInfo {
+  /** the server has accounts (a database) */
+  accounts: boolean;
+  /** guests may create and join rooms */
+  guestsAllowed: boolean;
+}
 
 /** switches an admin can flip for the whole app */
 export interface AppSettings {

@@ -1,9 +1,10 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { computeAwards } from './awards.js';
-import { describeClaim, ordinal } from './cards.js';
+import { cardName, describeClaim, ordinal } from './cards.js';
+import { Crazy7Game } from './crazy7/game.js';
 import { Game, GameError } from './game.js';
-import type { GameEvent, GameRecord, Member, MemberAccount, WatchRequest } from './models.js';
-import { BOT_MAX_STAKE, type AnnounceKind, type Announcement, type ChatEvent, type ChatKind, type CoinResult, type GameConfig, type Phase, type RoomView, type ThrowEvent } from './types.js';
+import type { GameEvent, GameRecord, Member, MemberAccount, TableGame, WatchRequest } from './models.js';
+import { BOT_MAX_STAKE, type AnnounceKind, type Announcement, type ChatEvent, type ChatKind, type CoinResult, type Crazy7View, type GameConfig, type Phase, type RoomView, type ThrowEvent } from './types.js';
 
 export const MAX_PLAYERS = 5;
 /** seated players plus watchers */
@@ -35,8 +36,11 @@ export const DEFAULT_ROOM_LIMITS: RoomLimits = { createsPerIp: 10, liveRoomsPerI
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false };
+  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true };
+  /** a Bluff game */
   game: Game | null = null;
+  /** a Crazy 7 game */
+  c7: Crazy7Game | null = null;
   startedAt: Date | null = null;
   /** coin changes of the last finished game, filled once it's saved */
   coinResults: CoinResult[] | null = null;
@@ -59,9 +63,15 @@ export class Room {
 
   constructor(readonly code: string) {}
 
+  /** whichever game is on */
+  get table(): TableGame | null {
+    return this.game ?? this.c7;
+  }
+
   get phase(): Phase {
-    if (!this.game) return 'lobby';
-    return this.game.over ? 'over' : 'playing';
+    const g = this.table;
+    if (!g) return 'lobby';
+    return g.over ? 'over' : 'playing';
   }
 
   /** members with a seat */
@@ -108,8 +118,8 @@ export class Room {
   removeMember(id: string): GameEvent[] {
     const leaving = this.member(id);
     let events: GameEvent[] = [];
-    if (this.phase === 'playing' && this.game?.order.includes(id)) {
-      events = this.game.leave(id);
+    if (this.phase === 'playing' && this.table?.order.includes(id)) {
+      events = this.table.leave(id);
       // kept so the saved game still has their name
       this.departed.set(id, leaving);
     }
@@ -153,12 +163,13 @@ export class Room {
 
   /** the last person is leaving: a running game ends at once */
   endGameNow(): GameEvent[] {
-    return this.game && !this.game.over ? this.game.close() : [];
+    const g = this.table;
+    return g && !g.over ? g.close() : [];
   }
 
   /** nobody but bots holds cards any more, so the result is settled: end the game now (2v2 plays on to find the team) */
   endIfOnlyBots(): GameEvent[] {
-    const g = this.game;
+    const g = this.table;
     if (!g || g.over || g.teams) return [];
     const people = g.order.filter((id) => !this.isBot(id));
     return people.every((id) => g.hand(id).length === 0) ? g.close() : [];
@@ -220,8 +231,8 @@ export class Room {
     if (targetId === by) throw new GameError("You can't remove yourself");
     const target = this.member(targetId);
     let events: GameEvent[] = [];
-    if (this.phase === 'playing' && this.game?.order.includes(targetId)) {
-      events = this.game.removePlayer(targetId);
+    if (this.phase === 'playing' && this.table?.order.includes(targetId)) {
+      events = this.table.removePlayer(targetId);
       this.departed.set(targetId, target);
     }
     this.members = this.members.filter((m) => m.id !== targetId);
@@ -383,20 +394,26 @@ export class Room {
 
   start(by: string): void {
     this.assertCanStart(by);
+    this.startedAt = new Date();
+    this.swapAsks.clear();
+    this.coinResults = null;
+    this.departed.clear();
+    if (this.config.game === 'crazy7') {
+      this.game = null;
+      this.c7 = new Crazy7Game(this.players().map((m) => m.id), this.config);
+      return;
+    }
+    this.c7 = null;
     this.game = new Game(
       // 2v2 plays in slot order, so the teams alternate turns
       this.config.teams ? (this.slotIds().filter((id) => id !== null) as string[]) : this.players().map((m) => m.id),
       this.config,
     );
-    this.startedAt = new Date();
-    this.swapAsks.clear();
-    this.coinResults = null;
-    this.departed.clear();
   }
 
   /** the current game as a record to save; take it before the game is cleared */
   snapshot(status: GameRecord['status']): GameRecord | null {
-    const g = this.game;
+    const g = this.table;
     if (!g) return null;
     const member = (id: string) => this.members.find((m) => m.id === id) ?? this.departed.get(id);
     return {
@@ -416,7 +433,7 @@ export class Room {
         bot: member(id)?.bot ?? false,
         stats: { ...g.stats.get(id)! },
       })),
-      awards: status === 'finished' ? computeAwards(g.stats) : [],
+      awards: status === 'finished' ? computeAwards(g.stats, g.config.game) : [],
       bets: status === 'finished' ? [...g.bets] : [],
     };
   }
@@ -427,6 +444,7 @@ export class Room {
       throw new GameError('Only the host can end the game');
     }
     this.game = null;
+    this.c7 = null;
     this.coinResults = null;
     this.departed.clear();
     this.fillSeats();
@@ -435,6 +453,7 @@ export class Room {
   /** host ends the game once someone has won; 1st place wins and everyone else loses */
   endGame(by: string): GameEvent[] {
     this.assertHost(by);
+    if (this.c7) throw new GameError('In Crazy 7 the first player out wins. Use Stop game instead');
     return this.requireGame().endEarly();
   }
 
@@ -448,6 +467,11 @@ export class Room {
   requireGame(): Game {
     if (!this.game || this.game.over) throw new GameError('No game in progress');
     return this.game;
+  }
+
+  requireCrazy7(): Crazy7Game {
+    if (!this.c7 || this.c7.over) throw new GameError('No Crazy 7 game in progress');
+    return this.c7;
   }
 
   chat(by: string, kind: ChatKind, index: number): ChatEvent {
@@ -470,8 +494,10 @@ export class Room {
   }
 
   view(meId: string): RoomView {
-    const g = this.game;
-    const lp = g?.lastPlay;
+    // g is whichever game is on; b only while it's Bluff
+    const g = this.table;
+    const b = this.game;
+    const lp = b?.lastPlay;
     // during a game the seats are that game's players; everyone else watches
     const seated = g ? g.order.flatMap((id) => this.members.filter((m) => m.id === id)) : this.players();
     const me = this.members.find((m) => m.id === meId);
@@ -507,16 +533,16 @@ export class Room {
           byChoice: m.watchByChoice,
         })),
       turnId: g?.turnId ?? null,
-      roundRank: g?.roundRank ?? null,
+      roundRank: b?.roundRank ?? null,
       pileCount: g?.pile.length ?? 0,
       lastPlay: lp ? { id: lp.id, playerId: lp.playerId, count: lp.cards.length, rank: lp.rank } : null,
-      passedIds: g ? [...g.passed] : [],
-      reveal: g?.reveal ?? null,
+      passedIds: b ? [...b.passed] : [],
+      reveal: b?.reveal ?? null,
       hand: [...(g?.hands.get(meId) ?? [])],
-      loserId: g?.loserId ?? null,
+      loserId: b?.loserId ?? null,
       loserIds: g?.over ? g.losers() : [],
       endedEarly: g?.endedEarly ?? false,
-      awards: g?.over ? computeAwards(g.stats) : [],
+      awards: g?.over ? computeAwards(g.stats, g.config.game) : [],
       // only people without a seat see the cards; seated players never get this
       watch:
         g && !seatedIds.has(meId)
@@ -527,16 +553,16 @@ export class Room {
           : null,
       coinResults: this.coinResults,
       stopped: g?.aborted ?? false,
-      bluffCallsLeft: g && seatedIds.has(meId) ? g.bluffCallsLeft(meId) : 0,
-      peeksLeft: g && seatedIds.has(meId) ? g.peeksLeft(meId) : 0,
-      betLimit: me && g?.config.bets && seatedIds.has(meId) ? Math.min(g.config.stake, this.betRoom(me)) : 0,
+      bluffCallsLeft: b && seatedIds.has(meId) ? b.bluffCallsLeft(meId) : 0,
+      peeksLeft: b && seatedIds.has(meId) ? b.peeksLeft(meId) : 0,
+      betLimit: me && b?.config.bets && seatedIds.has(meId) ? Math.min(b.config.stake, this.betRoom(me)) : 0,
       // in the lobby, show who would pair up if the game started now
       teams: g ? g.teams : lobbySlots && !lobbySlots.includes(null) ? [[lobbySlots[0]!, lobbySlots[2]!], [lobbySlots[1]!, lobbySlots[3]!]] : null,
       winnerIds: g ? g.winners() : [],
       slots: lobbySlots,
       swapAsks: [...this.swapAsks].map(([toId, fromId]) => ({ fromId, toId })),
       // partners plan together: each sees the other's hand; nobody else gets it
-      partnerHand: g?.teams && seatedIds.has(meId) ? [...(g.hands.get(g.partnerOf(meId) ?? '') ?? [])] : null,
+      partnerHand: b?.teams && seatedIds.has(meId) ? [...(b.hands.get(b.partnerOf(meId) ?? '') ?? [])] : null,
       watchRequests:
         meId === this.hostId
           ? this.watchRequests.map((r) => ({ id: r.id, name: r.name, registered: r.account !== null, level: r.account?.level ?? null }))
@@ -547,6 +573,30 @@ export class Room {
             return m ? [{ id, name: m.name, registered: m.userId !== null, level: m.level }] : [];
           })
         : [],
+      crazy7: this.c7 ? this.crazy7View(meId) : null,
+    };
+  }
+
+  /** the Crazy 7 table as one member sees it: the my-turn fields are filled only for the player on turn */
+  private crazy7View(meId: string): Crazy7View {
+    const c = this.c7!;
+    const seated = c.order.includes(meId);
+    return {
+      top: c.top(),
+      under: c.pile.slice(-4, -1),
+      pileCount: c.pile.length,
+      deckCount: c.deck.length,
+      penalty: c.penalty,
+      picks: c.picks,
+      playable: seated ? c.playable(meId).map((card) => card.id) : [],
+      canPick: seated && c.canPick(meId),
+      canPass: seated && c.canPass(meId),
+      canCall: seated && c.canCall(meId),
+      picked: seated && c.turnId === meId ? [...c.picked] : [],
+      called: [...c.called],
+      missed: [...c.missed],
+      atRisk: c.atRisk,
+      last: c.last ? { ...c.last } : null,
     };
   }
 
@@ -555,11 +605,16 @@ export class Room {
   }
 
   announce(events: GameEvent[]): Announcement[] {
-    return events.map((e) => this.note(...this.describe(e)));
+    return events.flatMap((e) => {
+      const said = this.describe(e);
+      return said ? [this.note(...said)] : [];
+    });
   }
 
-  private describe(e: GameEvent): [AnnounceKind, string] {
+  /** what the table hears; null for moves that only show on the seats */
+  private describe(e: GameEvent): [AnnounceKind, string] | null {
     const n = (id: string | null) => this.members.find((m) => m.id === id)?.name ?? 'Someone';
+    if (this.c7) return this.describeCrazy7(e, n);
     switch (e.kind) {
       case 'play':
         return ['play', `${n(e.playerId)} played ${describeClaim(e.count, e.rank)}`];
@@ -596,6 +651,31 @@ export class Room {
         const loser = e.loserId ? `Game over. ${n(e.loserId)} is the loser` : 'Game over';
         return ['over', liar ? `${loser}. Biggest liar: ${liar.playerIds.map(n).join(' and ')}` : loser];
       }
+      default:
+        return null;
+    }
+  }
+
+  private describeCrazy7(e: GameEvent, n: (id: string | null) => string): [AnnounceKind, string] | null {
+    const c = this.c7!;
+    switch (e.kind) {
+      case 'c7play':
+        return ['play', `${n(e.playerId)} played ${cardName(e.card)}` + (e.penalty > 0 ? `. Pick ${e.penalty}!` : '')];
+      case 'c7penalty':
+        return ['pass', e.missed ? `${n(e.playerId)} picks ${e.count} and misses a turn` : `${n(e.playerId)} picks ${e.count}`];
+      case 'c7call':
+        return ['round', `${n(e.playerId)}: last card!`];
+      case 'c7missed':
+        return ['bluff', `Caught! ${n(e.playerId)} didn't say last card`];
+      case 'c7shuffle':
+        return ['room', 'The pile was shuffled into a new deck'];
+      case 'gameOver':
+        if (c.aborted) return ['over', 'Game stopped, not enough players left. No coins moved'];
+        if (c.closed) return ['over', 'Game over. Only bots are left playing'];
+        return ['over', `Game over. ${n(c.places[0] ?? null)} wins`];
+      default:
+        // picks, passes and the winner's last card show on the table instead
+        return null;
     }
   }
 

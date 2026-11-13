@@ -1,6 +1,8 @@
 import { GameError } from './game.js';
 import {
   BET_STEPS,
+  CRAZY7_HAND_SIZES,
+  CRAZY7_MAX_PICKS,
   GIFT_STEPS,
   MAX_PEEKS,
   QUICK_MESSAGES,
@@ -45,9 +47,24 @@ export function parseConfig(p: Payload): GameConfig {
   const peeks = p.peeks === undefined ? 0 : Number.isInteger(p.peeks) && (p.peeks as number) >= 0 && (p.peeks as number) <= MAX_PEEKS ? (p.peeks as number) : null;
   const bets = p.bets === undefined ? false : typeof p.bets === 'boolean' ? p.bets : null;
   const teams = p.teams === undefined ? false : typeof p.teams === 'boolean' ? p.teams : null;
+  // the game and its Crazy 7 settings came later; older apps don't send them
+  const game = p.game === undefined ? 'bluff' : p.game === 'bluff' || p.game === 'crazy7' ? p.game : null;
+  const handSize = p.handSize === undefined ? 7 : (CRAZY7_HAND_SIZES as readonly unknown[]).includes(p.handSize) ? (p.handSize as 5 | 7) : null;
+  const maxPicks =
+    p.maxPicks === undefined ? 1 : Number.isInteger(p.maxPicks) && (p.maxPicks as number) >= 1 && (p.maxPicks as number) <= CRAZY7_MAX_PICKS ? (p.maxPicks as number) : null;
+  const stack7 = p.stack7 === undefined ? true : typeof p.stack7 === 'boolean' ? p.stack7 : null;
   if (!decks || !bluffRule || stake === null || peeks === null || bets === null || teams === null) throw new GameError('Invalid settings');
+  if (!game || handSize === null || maxPicks === null || stack7 === null) throw new GameError('Invalid settings');
+  // Bluff's extras don't apply to Crazy 7
+  const c7 = game === 'crazy7';
   // bets need coins at stake
-  return { decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams };
+  return { game, decks, bluffRule, stake, peeks: c7 ? 0 : peeks, bets: !c7 && bets && stake > 0, teams: !c7 && teams, handSize, maxPicks, stack7 };
+}
+
+/** a card id like "7S1" */
+export function parseCardId(value: unknown): string {
+  if (typeof value !== 'string' || !/^(?:[2-9]|10|[AJQK])[SHDC][12]$/.test(value)) throw new GameError('Invalid card');
+  return value;
 }
 
 /** a bet on a bluff call: 0 for none, otherwise one of BET_STEPS */
