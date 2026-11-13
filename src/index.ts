@@ -6,6 +6,9 @@ import {
   MONGODB_URI,
   PORT,
   SESSION_TTL_DAYS,
+  VAPID_PRIVATE_KEY,
+  VAPID_PUBLIC_KEY,
+  VAPID_SUBJECT,
 } from './config.js';
 import { createBluffServer } from './server.js';
 import { createStore, type Store } from './services/store.js';
@@ -13,8 +16,13 @@ import { createStore, type Store } from './services/store.js';
 let store: Store | null = null;
 if (MONGODB_URI) {
   try {
-    store = await createStore(MONGODB_URI, DB_NAMES, { defaultCoins: DEFAULT_COINS, sessionTtlDays: SESSION_TTL_DAYS });
+    store = await createStore(MONGODB_URI, DB_NAMES, {
+      defaultCoins: DEFAULT_COINS,
+      sessionTtlDays: SESSION_TTL_DAYS,
+      push: { publicKey: VAPID_PUBLIC_KEY, privateKey: VAPID_PRIVATE_KEY, subject: VAPID_SUBJECT },
+    });
     console.log(`MongoDB connected: database "${DB_NAMES.db}"`);
+    console.log(store.push.ready ? 'Invite notifications: ready' : 'Invite notifications: off (VAPID keys not set)');
   } catch (err) {
     // keep the game playable for guests even if the database is down
     console.error('MongoDB connection failed, running guest-only:', (err as Error).message);

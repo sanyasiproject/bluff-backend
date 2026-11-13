@@ -42,7 +42,9 @@ npx tsc --noEmit -p . && TEST_MONGODB_URI=mongodb://127.0.0.1:27099 npx vitest r
 ```
 
 Env: `MONGODB_URI` (only one required for accounts), `CLIENT_ORIGIN` (allowed app origin(s), comma separated;
-unset = localhost/LAN only), optional `MONGODB_DB`, `ADMIN_API_KEY`, `DEFAULT_COINS` (1000), `SESSION_TTL_DAYS` (30), `PORT`.
+unset = localhost/LAN only), optional `MONGODB_DB`, `ADMIN_API_KEY`, `DEFAULT_COINS` (1000), `SESSION_TTL_DAYS` (30), `PORT`,
+and for friend-invite notifications `VAPID_PUBLIC_KEY` + `VAPID_PRIVATE_KEY` (secret) + optional `VAPID_SUBJECT` (`services/push.ts`;
+without the keys push is off; an admin can also switch it off in the app).
 
 ## Rules of thumb
 

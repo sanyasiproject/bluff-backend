@@ -18,6 +18,7 @@ export const DB_NAMES: DbNames = {
   audit: process.env.AUDIT_COLLECTION?.trim() || 'audit_log',
   friends: process.env.FRIENDS_COLLECTION?.trim() || 'friends',
   settings: process.env.SETTINGS_COLLECTION?.trim() || 'settings',
+  push: process.env.PUSH_COLLECTION?.trim() || 'push_subscriptions',
 };
 
 /** coins every new account starts with */
@@ -34,6 +35,12 @@ export const CLIENT_ORIGINS = (process.env.CLIENT_ORIGIN ?? '')
   .split(',')
   .map((o) => o.trim().replace(/\/$/, ''))
   .filter(Boolean);
+
+/** Web Push keys for friend-invite notifications (make them with: npx web-push generate-vapid-keys); without both, push is off */
+export const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY?.trim() ?? '';
+export const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY?.trim() ?? '';
+/** how push services can reach the app's owner: mailto:… or an https URL; defaults to the first CLIENT_ORIGIN */
+export const VAPID_SUBJECT = process.env.VAPID_SUBJECT?.trim() || CLIENT_ORIGINS[0] || '';
 
 const LOCAL_ORIGIN =
   /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/;

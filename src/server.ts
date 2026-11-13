@@ -53,7 +53,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
   };
   // every open app hears about it, so home screens show or hide guest play right away
   settingsChanged = (settings) => {
-    io.emit('settings:changed', { guestsAllowed: settings.guestsAllowed });
+    io.emit('settings:changed', { guestsAllowed: settings.guestsAllowed, pushInvites: !!store?.push.ready && settings.pushInvites });
   };
 
   const rooms = new RoomManager({ ...DEFAULT_ROOM_LIMITS, ...deps.limits });
@@ -71,6 +71,8 @@ export function createBluffServer(deps: ServerDeps = {}) {
           onGameEnd: (record) => store.games.save(record),
           areFriends: (a, b) => store.friends.areFriends(a, b),
           guestsAllowed: () => store.settings.guestsAllowed,
+          pushInvitesOn: () => store.push.ready && store.settings.pushInvites,
+          pushInvite: (toUserId, invite) => (store.push.ready && store.settings.pushInvites ? store.push.sendInvite(toUserId, invite) : Promise.resolve(0)),
           giftCoins: async (fromId, toId, amount) => {
             try {
               const { from, to } = await store.users.giftCoins(fromId, toId, amount);

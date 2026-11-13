@@ -59,6 +59,31 @@ export function parseConfig(p: Payload): GameConfig {
   return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7 };
 }
 
+// only the browsers' own push services: the server never posts to any other address a client sends
+const PUSH_HOSTS = /(^|\.)(fcm\.googleapis\.com|android\.googleapis\.com|push\.services\.mozilla\.com|notify\.windows\.com|push\.apple\.com)$/;
+
+/** a push service address for this phone */
+export function parsePushEndpoint(value: unknown): string {
+  let url: URL | null = null;
+  try {
+    url = typeof value === 'string' && value.length <= 2048 ? new URL(value) : null;
+  } catch {
+    url = null;
+  }
+  if (!url || url.protocol !== 'https:' || !PUSH_HOSTS.test(url.hostname)) throw new GameError('This browser\'s notifications are not supported');
+  return url.href;
+}
+
+/** the browser's PushSubscription.toJSON(): endpoint plus its two encryption keys */
+export function parsePushSubscription(p: Payload): { endpoint: string; p256dh: string; auth: string } {
+  const keys = asPayload(p.keys);
+  const key = (v: unknown) => (typeof v === 'string' && /^[A-Za-z0-9_-]{8,200}={0,2}$/.test(v) ? v : null);
+  const p256dh = key(keys.p256dh);
+  const auth = key(keys.auth);
+  if (!p256dh || !auth) throw new GameError('Invalid notification settings');
+  return { endpoint: parsePushEndpoint(p.endpoint), p256dh, auth };
+}
+
 /** a card id like "7S1" */
 export function parseCardId(value: unknown): string {
   if (typeof value !== 'string' || !/^(?:[2-9]|10|[AJQK])[SHDC][12]$/.test(value)) throw new GameError('Invalid card');

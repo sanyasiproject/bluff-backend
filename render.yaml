@@ -13,3 +13,9 @@ services:
         sync: false
       - key: MONGODB_URI
         sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false

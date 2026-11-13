@@ -33,6 +33,8 @@ const RATE_MAX_EVENTS = 40;
 const SWEEP_EVERY_MS = 30_000;
 /** open connections allowed per network (IP) by default; friends on one Wi-Fi share an address */
 export const MAX_CONNECTIONS_PER_IP = 50;
+/** the same friend can be invited again after this long */
+const INVITE_GAP_MS = 30_000;
 
 /** the caller's network address: Cloudflare's header on Render, else the last proxy hop (earlier ones can be forged) */
 export function clientIp(socket: Socket): string {
@@ -205,7 +207,14 @@ export function registerHandlers(
   };
 
   /** accounts on or off, and whether guests may play right now */
-  const serverInfo = (): ServerInfo => ({ accounts: !!hooks.resolveUser, guestsAllowed: hooks.guestsAllowed ? hooks.guestsAllowed() : true });
+  const serverInfo = (): ServerInfo => ({
+    accounts: !!hooks.resolveUser,
+    guestsAllowed: hooks.guestsAllowed ? hooks.guestsAllowed() : true,
+    pushInvites: hooks.pushInvitesOn ? hooks.pushInvitesOn() : false,
+  });
+
+  /** when each player last invited each friend, so nobody's phone gets spammed */
+  const invitedAt = new Map<string, number>();
 
   // a login token in the handshake makes this socket that account; no or bad token means guest
   const connections = new Map<string, number>();
@@ -532,10 +541,25 @@ export function registerHandlers(
       const theirRoom = rooms.roomOfUser(friendId);
       if (theirRoom === room) throw new GameError('Your friend is already in this room');
       if (theirRoom) throw new GameError('Your friend is already in another room');
-      const sockets = presence.socketsOf(friendId);
-      if (sockets.length === 0) throw new GameError('Your friend is offline. Send the WhatsApp link instead');
+      const now = Date.now();
+      for (const [k, at] of invitedAt) if (now - at >= INVITE_GAP_MS) invitedAt.delete(k);
+      const pair = `${user.id}:${friendId}`;
+      if (invitedAt.has(pair)) throw new GameError('You just invited them. Try again in a few seconds');
       const invite: InviteEvent = { fromId: user.id, fromName: user.displayName, code: room.code };
-      for (const id of sockets) io.to(id).emit('invite', invite);
+      const sockets = presence.socketsOf(friendId);
+      if (sockets.length > 0) {
+        for (const id of sockets) io.to(id).emit('invite', invite);
+        invitedAt.set(pair, now);
+        return;
+      }
+      // offline: a notification on their phone, if they turned them on (and an admin hasn't switched them off)
+      const on = hooks.pushInvitesOn?.() ?? false;
+      const sent = on && hooks.pushInvite ? await hooks.pushInvite(friendId, invite) : 0;
+      if (sent === 0) {
+        throw new GameError(on ? "Your friend is offline and hasn't turned on notifications. Send the WhatsApp link instead" : 'Your friend is offline. Send the WhatsApp link instead');
+      }
+      invitedAt.set(pair, now);
+      return { pushed: true };
     });
 
     on('game:play', (p) => {

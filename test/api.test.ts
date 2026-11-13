@@ -635,7 +635,7 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     const off = await api().post('/api/admin/settings').set(bossAuth).send({ guestsAllowed: false });
     expect(off.body.settings).toMatchObject({ guestsAllowed: false, updatedBy: 'switch_boss' });
     await until(() => changes.length === 1);
-    expect(changes[0]).toEqual({ guestsAllowed: false });
+    expect(changes[0]).toEqual({ guestsAllowed: false, pushInvites: false });
     const health = await api().get('/health');
     expect(health.body).toMatchObject({ guests: false });
     expect(health.headers['cache-control']).toBe('no-store');
@@ -645,11 +645,11 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     const refused = { ok: false, error: 'Guest play is off right now. Log in to play' };
     expect(await send(guest, 'room:create', { name: 'Guesty' })).toEqual(refused);
     await until(() => infos.length > 0);
-    expect(infos[0]).toEqual({ accounts: true, guestsAllowed: false });
+    expect(infos[0]).toEqual({ accounts: true, guestsAllowed: false, pushInvites: false });
     // and every new connection hears it straight away
     const late = connect(url, { transports: ['websocket'], forceNew: true });
     const first = await new Promise<ServerInfo>((resolve) => late.once('server:info', resolve));
-    expect(first).toEqual({ accounts: true, guestsAllowed: false });
+    expect(first).toEqual({ accounts: true, guestsAllowed: false, pushInvites: false });
     late.disconnect();
     expect(await send(guest, 'room:join', { code, name: 'Guesty' })).toEqual(refused);
     // logged-in players are not affected
@@ -670,6 +670,88 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect((await api().post('/api/admin/settings').set(bossAuth).send({ guestsAllowed: true })).body.settings.guestsAllowed).toBe(true);
     expect((await send(guest, 'room:create', { name: 'Guesty' })).ok).toBe(true);
     [guest, host, member].forEach((c) => c.socket.disconnect());
+  });
+
+  it('sends a friend invite to an offline friend\'s phone, and an admin can switch it off', async () => {
+    const sent: { endpoint: string; payload: string; ttl: number }[] = [];
+    let failWith: number | null = null;
+    const pushStore = await createStore(
+      MONGO!,
+      { db: DB, users: 'users', sessions: 'sessions', games: 'games', audit: 'audit_log', friends: 'friends', settings: 'settings' },
+      {
+        defaultCoins: 1000,
+        sessionTtlDays: 30,
+        push: {
+          publicKey: 'test-public-key',
+          privateKey: 'test-private-key',
+          subject: 'https://example.com',
+          send: async (target, payload, opts) => {
+            if (failWith) throw Object.assign(new Error('gone'), { statusCode: failWith });
+            sent.push({ endpoint: target.endpoint, payload, ttl: opts.TTL });
+          },
+        },
+      },
+    );
+    const pushServer = createBluffServer({ store: pushStore, adminApiKey: ADMIN_KEY, authAttempts: 1000 });
+    await new Promise<void>((resolve) => pushServer.httpServer.listen(0, resolve));
+    const pushUrl = `http://localhost:${(pushServer.httpServer.address() as AddressInfo).port}`;
+    const papi = () => request(pushServer.app);
+    const reg = async (u: string) => (await papi().post('/api/auth/register').send({ username: u, password: 'secret-pass-1' })).body;
+    const [host, away, third] = [await reg('push_host'), await reg('push_away'), await reg('push_third')];
+    type Account = { token: string; user: { id: string; username: string } };
+    const befriend = async (a: Account, b: Account) => {
+      await papi().post('/api/friends/request').set(bearer(a.token)).send({ username: b.user.username });
+      await papi().post(`/api/friends/${a.user.id}/accept`).set(bearer(b.token));
+    };
+    await befriend(host, away);
+    await befriend(third, away);
+
+    expect((await papi().get('/api/push/key')).body).toEqual({ publicKey: 'test-public-key', enabled: true });
+    const phone = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc123', keys: { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' } };
+    expect((await papi().post('/api/push/subscribe').set(bearer(away.token)).send({ ...phone, endpoint: 'https://evil.example.com/x' })).status).toBe(400);
+    expect((await papi().post('/api/push/subscribe').send(phone)).status).toBe(401);
+    expect((await papi().post('/api/push/subscribe').set(bearer(away.token)).send(phone)).status).toBe(204);
+
+    const hostSocket = connect(pushUrl, { transports: ['websocket'], forceNew: true, auth: { token: host.token } });
+    const ask = (event: string, payload: object = {}) => hostSocket.timeout(3000).emitWithAck(event, payload) as Promise<{ ok: boolean; code?: string; error?: string; pushed?: boolean }>;
+    await new Promise<void>((resolve) => hostSocket.once('connect', () => resolve()));
+    const { code } = await ask('room:create', {});
+    expect(await ask('friend:invite', { userId: away.user.id })).toEqual({ ok: true, pushed: true });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ endpoint: phone.endpoint, ttl: 600 });
+    expect(JSON.parse(sent[0].payload)).toEqual({
+      kind: 'invite',
+      title: `${host.user.displayName} invited you to Bluff`,
+      body: `Tap to join room ${code}`,
+      url: `/?room=${code}`,
+      tag: `invite-${host.user.id}`,
+    });
+    expect((await ask('friend:invite', { userId: away.user.id })).error).toBe('You just invited them. Try again in a few seconds');
+
+    // an admin switches it off: no key for new phones, and offline friends only get the WhatsApp hint
+    await papi().post('/api/admin/make-admin').set('X-Admin-Key', ADMIN_KEY).send({ username: 'push_third' });
+    const off = await papi().post('/api/admin/settings').set(bearer(third.token)).send({ pushInvites: false });
+    expect(off.body.settings).toMatchObject({ pushInvites: false, guestsAllowed: true });
+    expect((await papi().get('/api/push/key')).body).toEqual({ publicKey: 'test-public-key', enabled: false });
+    expect((await papi().post('/api/push/subscribe').set(bearer(away.token)).send(phone)).status).toBe(503);
+    const thirdSocket = connect(pushUrl, { transports: ['websocket'], forceNew: true, auth: { token: third.token } });
+    await new Promise<void>((resolve) => thirdSocket.once('connect', () => resolve()));
+    const ask3 = (event: string, payload: object = {}) => thirdSocket.timeout(3000).emitWithAck(event, payload) as Promise<{ ok: boolean; error?: string }>;
+    await ask3('room:create', {});
+    expect((await ask3('friend:invite', { userId: away.user.id })).error).toBe('Your friend is offline. Send the WhatsApp link instead');
+    expect(sent).toHaveLength(1);
+
+    // back on; a phone the push service no longer knows is forgotten
+    await papi().post('/api/admin/settings').set(bearer(third.token)).send({ pushInvites: true });
+    failWith = 410;
+    expect((await ask3('friend:invite', { userId: away.user.id })).error).toBe("Your friend is offline and hasn't turned on notifications. Send the WhatsApp link instead");
+    expect(await pushStore.push['cols'].push.countDocuments({ endpoint: phone.endpoint })).toBe(0);
+    expect((await papi().post('/api/push/unsubscribe').set(bearer(away.token)).send({ endpoint: phone.endpoint })).status).toBe(204);
+
+    hostSocket.disconnect();
+    thirdSocket.disconnect();
+    pushServer.close();
+    await pushStore.close();
   });
 
   it('makes a player who leaves a staked game lose and still pay', async () => {

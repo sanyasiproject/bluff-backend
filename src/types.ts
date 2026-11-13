@@ -448,12 +448,16 @@ export interface ServerInfo {
   accounts: boolean;
   /** guests may create and join rooms */
   guestsAllowed: boolean;
+  /** friend invites reach offline phones as notifications (set up on the server and switched on by an admin) */
+  pushInvites: boolean;
 }
 
 /** switches an admin can flip for the whole app */
 export interface AppSettings {
   /** false: everyone must log in to create or join a room */
   guestsAllowed: boolean;
+  /** friend invites go to offline friends as phone notifications; an admin can switch it off */
+  pushInvites: boolean;
   /** the admin who last changed it, and when; null if never changed */
   updatedBy: string | null;
   updatedAt: string | null;

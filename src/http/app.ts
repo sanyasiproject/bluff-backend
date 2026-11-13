@@ -11,6 +11,7 @@ import { authRoutes } from './routes/auth.js';
 import { friendRoutes, type NotifyFriends, type RoomOfUser } from './routes/friends.js';
 import { meRoutes } from './routes/me.js';
 import { playerRoutes } from './routes/players.js';
+import { pushRoutes } from './routes/push.js';
 
 export interface ApiOptions {
   adminApiKey: string;
@@ -53,6 +54,7 @@ export function createApi(store: Store | null, opts: ApiOptions): express.Expres
     const social = userRateLimit(20, 60_000);
     app.use('/api/friends', friendRoutes(store, opts.presence, opts.notifyFriends ?? (() => {}), opts.roomOfUser ?? (() => null), social));
     app.use('/api/players', playerRoutes(store, opts.presence, social));
+    app.use('/api/push', pushRoutes(store, social));
     app.use('/api/admin', adminRoutes(store, opts.adminApiKey, limited, opts.onSettingsChanged ?? (() => {})));
   } else {
     app.use('/api', (_req, _res, next) => next(new ApiError(503, 'Accounts are not set up on this server')));

@@ -11,6 +11,8 @@ export interface DbNames {
   audit: string;
   friends: string;
   settings: string;
+  /** phones that get friend-invite notifications; push_subscriptions by default */
+  push?: string;
 }
 
 export interface UserDoc {
@@ -113,10 +115,26 @@ export interface FriendDoc {
   acceptedAt?: Date;
 }
 
+/** one phone (browser) that gets friend-invite notifications for an account */
+export interface PushSubscriptionDoc {
+  _id: ObjectId;
+  userId: ObjectId;
+  /** where the browser's push service takes messages for this phone; unique */
+  endpoint: string;
+  /** the browser's keys for encrypting messages to it */
+  p256dh: string;
+  auth: string;
+  createdAt: Date;
+  updatedAt: Date;
+  lastSentAt?: Date;
+}
+
 /** the one app-wide settings document */
 export interface SettingsDoc {
   _id: 'app';
   guestsAllowed: boolean;
+  /** missing in older documents: on */
+  pushInvites?: boolean;
   updatedBy: ObjectId | null;
   updatedAt: Date;
 }
@@ -128,6 +146,7 @@ export interface Collections {
   audit: Collection<AuditDoc>;
   friends: Collection<FriendDoc>;
   settings: Collection<SettingsDoc>;
+  push: Collection<PushSubscriptionDoc>;
 }
 
 /** who performed an admin action */

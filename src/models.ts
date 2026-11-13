@@ -1,4 +1,4 @@
-import type { Award, Card, CoinResult, GameConfig, LifetimeStats, Rank } from './types.js';
+import type { Award, Card, CoinResult, GameConfig, InviteEvent, LifetimeStats, Rank } from './types.js';
 
 // Server-only shapes, never sent to clients as-is
 export interface Member {
@@ -98,6 +98,10 @@ export interface SocketHooks {
   areFriends?: (a: string, b: string) => Promise<boolean>;
   /** false when an admin turned guest play off: guests can't create or join rooms */
   guestsAllowed?: () => boolean;
+  /** a friend invite to an offline friend's phones; resolves with how many took it (0: none turned on, or switched off) */
+  pushInvite?: (toUserId: string, invite: InviteEvent) => Promise<number>;
+  /** invite notifications are set up and an admin has them on */
+  pushInvitesOn?: () => boolean;
   /** moves coins to a friend within the daily gift limit; throws GameError with a reason players can read */
   giftCoins?: (fromUserId: string, toUserId: string, amount: number) => Promise<GiftResult>;
 }

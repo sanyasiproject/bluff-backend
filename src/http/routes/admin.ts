@@ -3,6 +3,7 @@ import { ObjectId } from 'mongodb';
 import { sameSecret } from '../../auth/tokens.js';
 import type { Actor } from '../../db/documents.js';
 import type { Store } from '../../services/store.js';
+import type { SettingsChange } from '../../services/settings.js';
 import type { UserChanges } from '../../services/users.js';
 import type { AdminUserDetail, AppSettings } from '../../types.js';
 import {
@@ -39,15 +40,22 @@ export function adminRoutes(
     }),
   );
 
-  // guest play on or off for the whole app; open apps update at once
+  // guest play and invite notifications, on or off for the whole app; open apps update at once
   r.post(
     '/settings',
     ...admin,
     ah(async (req, res) => {
-      const on = parseFlag(asPayload(req.body).guestsAllowed, 'Guest play');
+      const b = asPayload(req.body);
+      const change: SettingsChange = {};
+      if (b.guestsAllowed !== undefined) change.guestsAllowed = parseFlag(b.guestsAllowed, 'Guest play');
+      if (b.pushInvites !== undefined) change.pushInvites = parseFlag(b.pushInvites, 'Invite notifications');
+      if (Object.keys(change).length === 0) throw new ApiError(400, 'Nothing to change');
       const by = actorOf(res);
-      const settings = await store.settings.setGuestsAllowed(on, by.userId);
-      await store.users.logSetting(by, on ? 'Guest play turned on' : 'Guest play turned off');
+      const settings = await store.settings.update(change, by.userId);
+      if (change.guestsAllowed !== undefined) await store.users.logSetting(by, change.guestsAllowed ? 'Guest play turned on' : 'Guest play turned off');
+      if (change.pushInvites !== undefined) {
+        await store.users.logSetting(by, change.pushInvites ? 'Invite notifications turned on' : 'Invite notifications turned off');
+      }
       onSettingsChanged(settings);
       res.json({ settings });
     }),

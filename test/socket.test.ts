@@ -95,7 +95,7 @@ describe('socket server', () => {
   it('tells every new connection whether accounts are on and guests may play', async () => {
     const s = connect(url, { transports: ['websocket'], forceNew: true });
     const info = await new Promise<unknown>((resolve) => s.once('server:info', resolve));
-    expect(info).toEqual({ accounts: false, guestsAllowed: true });
+    expect(info).toEqual({ accounts: false, guestsAllowed: true, pushInvites: false });
     s.disconnect();
   });
 

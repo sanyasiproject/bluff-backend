@@ -30,8 +30,20 @@ For accounts locally, copy `.env.example` values into your shell (at least `MONG
 | `CLIENT_ORIGIN` | `https://bluff-frontend.vercel.app` | browsers allowed to connect (comma-separated) |
 | `NODE_VERSION` | `22` | Render's Node version |
 | `MONGODB_URI` | `mongodb+srv://…` (secret) | accounts; empty = guest-only |
+| `VAPID_PUBLIC_KEY` | `BEl6…` (from `npx web-push generate-vapid-keys`) | friend-invite notifications; empty = off |
+| `VAPID_PRIVATE_KEY` | `x3Kq…` (secret, same command) | friend-invite notifications |
+| `VAPID_SUBJECT` | `mailto:you@example.com` or `https://bluff-frontend.vercel.app` | how push services can reach you; defaults to the first `CLIENT_ORIGIN` |
 
-Everything else has a built-in default: database `bluff`; collections `users`, `sessions`, `games`, `audit_log`, `friends` (created with their indexes on first start); 1000 starting coins; logins last 30 days.
+Everything else has a built-in default: database `bluff`; collections `users`, `sessions`, `games`, `audit_log`, `friends`, `settings`, `push_subscriptions` (created with their indexes on first start); 1000 starting coins; logins last 30 days.
+
+## Friend-invite notifications (Web Push)
+
+- When a friend is offline, **Invite** reaches their phone as a notification (if they turned it on in their Profile). Tapping it opens `/?room=CODE`. Online friends get the in-app popup as before.
+- Works on Android browsers and the installed app, desktop Chrome/Edge/Firefox, and on iPhone/iPad (iOS 16.4+) only in the app added to the Home Screen.
+- **Set up once:** run `npx web-push generate-vapid-keys` on your computer, then add `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and (optionally) `VAPID_SUBJECT` in Render → Environment, and redeploy. Keep the private key secret; changing the keys later means everyone must turn notifications on again. Nothing is needed on Vercel: the app reads the public key from `/api/push/key`.
+- Each phone is a row in `push_subscriptions` (account, the push service address and its two keys). Logging out removes that phone; addresses the push service reports gone (404/410) are deleted on the next send. The server only posts to the browsers' own push services (Google, Mozilla, Microsoft, Apple).
+- **Admin switch:** Admin → Invite notifications on/off (`pushInvites` in `/api/admin/settings`), saved and logged like Guest play. While off, offline friends just get the WhatsApp hint and phones can't sign up; phones already signed up stay saved.
+- The same friend can be invited at most once every 30 s. An invite notification expires after 10 minutes if the phone stays offline.
 
 ## Coins
 
@@ -104,7 +116,10 @@ All bodies are JSON. Protected routes need `Authorization: Bearer <token>` (the 
 | `POST /api/admin/users/:id/password` | admin | `{ password }` | 204; logs them out everywhere |
 | `POST /api/admin/users/:id/coins` | admin | `{ amount, reason? }` (negative takes coins) | `{ user }` |
 | `GET /api/admin/settings` | admin | – | `{ settings }`: `{ guestsAllowed, updatedBy, updatedAt }` |
-| `POST /api/admin/settings` | admin | `{ guestsAllowed }` | `{ settings }`; saved in the `settings` collection, logged in the admin's history, every open app gets `settings:changed` |
+| `POST /api/admin/settings` | admin | any of `{ guestsAllowed, pushInvites }` | `{ settings }`; saved in the `settings` collection, logged in the admin's history, every open app gets `settings:changed` |
+| `GET /api/push/key` | anyone | – | `{ publicKey, enabled }`: null key = notifications not set up; `enabled` false = an admin switched invites off |
+| `POST /api/push/subscribe` | logged in | the browser's `PushSubscription.toJSON()` | 204; this phone gets the account's invite notifications (503 while switched off) |
+| `POST /api/push/unsubscribe` | logged in | `{ endpoint }` | 204 |
 | `POST /api/admin/make-admin` | admin, or header `X-Admin-Key` | `{ username }` | `{ user }` |
 
 Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128 characters; display names follow the in-game name rules (1–16 characters). Coins never go below zero. Login, register and make-admin allow 20 attempts per IP per 15 minutes. Search, player profiles and friend actions share a limit of 20 per minute per account (429 after that).
@@ -181,6 +196,6 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `chat:throw` | `{ to: memberId, index }` (index into `THROWS`; shares the chat speed limit) |
 | `friend:gift` | `{ memberId \| userId, amount }` (logged in, friends only; amount from `GIFT_STEPS`; at most `DAILY_GIFT_LIMIT` = 100 coins given per IST day in total) → `{ coins, giftLeft }` |
 | `room:kick` | `{ memberId }` (host only; mid-game the player's cards leave the game) |
-| `friend:invite` | `{ userId }` (logged in, friends only, friend must be online) |
+| `friend:invite` | `{ userId }` (logged in, friends only, not already in a room; once per friend per 30 s) → `{}` when online (popup), `{ pushed: true }` when offline and a notification went to their phone(s) |
 
 Connect with `io(url, { auth: { token } })` to play as a logged-in account. Server → client: `server:info` (`{ accounts, guestsAllowed }`, on every connection and to a guest who is turned away, so the app shows Log in and the guest lock even when its `/health` check is blocked), `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud), `chat` (`{ from, kind, index }`), `invite` (`{ fromId, fromName, code }`), `friends:changed` (someone sent, accepted or removed a friend request), `throw` (`{ from, to, index }`), `gift` (`{ from, to, amount }`, member ids, only when both are in the same room), `gift:received` (`{ fromName, amount }`, to whoever got coins), `watch:admitted` (`{ code, token, name }`: the host let you in, rejoin with it), `watch:denied` (`{ code, reason? }`), `room:kicked`, `session:replaced`. `RoomView.crazy7` carries the Crazy 7 table (top card, deck and pile counts, waiting pick, my playable cards and choices, who said last card, the last move). The host's `RoomView.watchRequests` lists pending requests (empty for everyone else). `RoomView.leftPlayers` lists who used Leave game in the current game (for names, the pot and the results), cleared back in the lobby.
