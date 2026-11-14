@@ -43,6 +43,10 @@ export interface UserDoc {
   tutorials?: GameKind[];
   /** chosen avatar, "face.bg" */
   avatar?: string;
+  /** chosen card back, a CARD_BACKS id */
+  cardBack?: string;
+  /** chosen table theme, a TABLE_THEMES id */
+  tableTheme?: string;
 }
 
 export interface SessionDoc {

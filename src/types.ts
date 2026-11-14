@@ -197,6 +197,41 @@ export interface GiftReceived {
   amount: number;
 }
 
+/** table themes: the felt a player plays on, and the seat box everyone else sees around their name; some unlock with level */
+export const TABLE_THEMES = [
+  { id: 'classic', name: 'Classic green', emoji: '🟢', level: 1 },
+  { id: 'royal', name: 'Royal blue', emoji: '🔵', level: 3 },
+  { id: 'wood', name: 'Wooden', emoji: '🪵', level: 6 },
+  { id: 'midnight', name: 'Midnight', emoji: '🌙', level: 10 },
+  { id: 'maroon', name: 'Maroon velvet', emoji: '🍷', level: 15 },
+  { id: 'emerald', name: 'Emerald gold', emoji: '✨', level: 20 },
+  { id: 'galaxy', name: 'Galaxy', emoji: '🌌', level: 30 },
+] as const;
+
+/** the table of guests, bots and players who haven't picked one */
+export const DEFAULT_TABLE_THEME = 'classic';
+
+/** the catalog entry for a table id, or null */
+export const tableThemeOf = (id: string | null | undefined) => TABLE_THEMES.find((t) => t.id === id) ?? null;
+
+/** card backs: everyone at the table sees a player's face-down cards in that player's back; some unlock with level */
+export const CARD_BACKS = [
+  { id: 'classic', name: 'Classic red', emoji: '🟥', level: 1 },
+  { id: 'ocean', name: 'Ocean blue', emoji: '🌊', level: 2 },
+  { id: 'paisley', name: 'Paisley', emoji: '🌼', level: 5 },
+  { id: 'neon', name: 'Neon', emoji: '💡', level: 8 },
+  { id: 'gold', name: 'Royal gold', emoji: '👑', level: 12 },
+  { id: 'mandala', name: 'Mandala', emoji: '🪷', level: 18 },
+  { id: 'diamond', name: 'Diamond', emoji: '💎', level: 25 },
+  { id: 'legend', name: 'Legend', emoji: '🏆', level: 40 },
+] as const;
+
+/** the back of guests, bots and players who haven't picked one */
+export const DEFAULT_CARD_BACK = 'classic';
+
+/** the catalog entry for a back id, or null */
+export const cardBackOf = (id: string | null | undefined) => CARD_BACKS.find((b) => b.id === id) ?? null;
+
 /** avatar faces a player can pick, shown big on a coloured background; some unlock with level. New ones go at the end */
 export const AVATAR_FACES = [
   { id: 'fox', emoji: '🦊', level: 1 },
@@ -321,6 +356,10 @@ export interface PublicPlayer {
   name: string;
   /** chosen avatar ("face.bg"); null shows the first letter (guests, bots, not picked yet) */
   avatar: string | null;
+  /** their card back (CARD_BACKS id): everyone sees their face-down cards in it */
+  back: string;
+  /** their table theme (TABLE_THEMES id): everyone sees their seat box in it */
+  table: string;
   cardCount: number;
   connected: boolean;
   place: number | null;
@@ -389,6 +428,8 @@ export interface RoomView {
   turnId: string | null;
   roundRank: Rank | null;
   pileCount: number;
+  /** Bluff: who played each of the top cards of the pile (up to 7, bottom to top), so they show in that player's back */
+  pileTopBy: string[];
   lastPlay: LastPlayView | null;
   passedIds: string[];
   reveal: RevealView | null;
@@ -479,6 +520,10 @@ export interface PublicUser {
   displayName: string;
   /** chosen avatar ("face.bg"); null shows the first letter */
   avatar: string | null;
+  /** chosen card back (CARD_BACKS id); null until picked (shown as the classic back) */
+  cardBack: string | null;
+  /** chosen table theme (TABLE_THEMES id); null until picked (shown as classic green) */
+  tableTheme: string | null;
   role: Role;
   coins: number;
   stats: LifetimeStats;

@@ -11,6 +11,8 @@ export class Game {
   readonly hands = new Map<string, Card[]>();
   readonly stats = new Map<string, PlayerStats>();
   pile: Card[] = [];
+  /** who played each card of the pile, in the same order */
+  pileBy: string[] = [];
   roundRank: Rank | null = null;
   lastPlay: PlayRecord | null = null;
   passed = new Set<string>();
@@ -86,6 +88,7 @@ export class Game {
       if (id !== playerId && this.hand(id).length > 0 && this.partnerOf(id) !== playerId) this.stat(id).chances++;
     }
     this.pile.push(...cards);
+    this.pileBy.push(...cards.map(() => playerId));
     this.roundRank = claim;
     this.lastPlay = { id: randomUUID(), playerId, cards, rank: claim };
     this.callStreak.delete(playerId);
@@ -165,6 +168,7 @@ export class Game {
     if (bet > 0) this.bets.push({ from: loserId, to: winnerId, amount: bet });
     this.hands.set(loserId, sortHand([...this.hand(loserId), ...this.pile]));
     this.pile = [];
+    this.pileBy = [];
     this.reveal = {
       playId,
       callerId,
@@ -326,6 +330,7 @@ export class Game {
     const discarded = this.pile.length;
     const events = this.settleLastPlay();
     this.pile = [];
+    this.pileBy = [];
     this.lastPlay = null;
     this.roundRank = null;
     this.passed.clear();

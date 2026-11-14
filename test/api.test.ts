@@ -311,6 +311,46 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     guest.socket.disconnect();
   });
 
+  it('lets a player pick a card back and a table (locked ones need the level) that everyone at the table sees', async () => {
+    const kia = await register('back_kia');
+    const kiaAuth = bearer(kia.body.token);
+    expect(kia.body.user.cardBack).toBe(null);
+    expect(kia.body.user.tableTheme).toBe(null);
+    expect((await api().post('/api/me/table').set(kiaAuth).send({ table: 'felt' })).body.error).toBe('Pick one of the tables');
+    expect((await api().post('/api/me/table').set(kiaAuth).send({ table: 'royal' })).body.error).toBe('Reach level 3 for that table');
+    expect((await api().post('/api/me/back').set(kiaAuth).send({ back: 'nope' })).body.error).toBe('Pick one of the card backs');
+    expect((await api().post('/api/me/back').set(kiaAuth).send({ back: 42 })).body.error).toBe('Pick one of the card backs');
+    expect((await api().post('/api/me/back').set(kiaAuth).send({ back: 'ocean' })).body.error).toBe('Reach level 2 for that card back');
+    expect((await api().post('/api/me/back').set(kiaAuth).send({ back: 'classic' })).body.user.cardBack).toBe('classic');
+
+    // a guest at her table sees her back on her seat, and the change arrives at once
+    const host = await socketClient(kia.body.token);
+    const { code } = await send(host, 'room:create', {});
+    const guest = await socketClient();
+    await send(guest, 'room:join', { code, name: 'Guest' });
+    await until(() => guest.state?.players.length === 2);
+    expect(guest.state!.players.map((p) => p.back)).toEqual(['classic', 'classic']);
+    expect(guest.state!.players.map((p) => p.table)).toEqual(['classic', 'classic']);
+    const client = new MongoClient(MONGO!);
+    await client.connect();
+    await client.db(DB).collection('users').updateOne({ username: 'back_kia' }, { $set: { 'stats.gamesPlayed': 2000 } });
+    await client.close();
+    expect((await api().post('/api/me/back').set(kiaAuth).send({ back: 'gold' })).body.user.cardBack).toBe('gold');
+    await until(() => guest.state?.players.find((p) => p.name === kia.body.user.displayName)?.back === 'gold');
+    expect(guest.state!.players.find((p) => p.name === 'Guest')!.back).toBe('classic');
+    expect((await api().get('/api/me').set(kiaAuth)).body.user.cardBack).toBe('gold');
+    // her table shows on her seat box for everyone
+    expect((await api().post('/api/me/table').set(kiaAuth).send({ table: 'emerald' })).body.user.tableTheme).toBe('emerald');
+    await until(() => guest.state?.players.find((p) => p.name === kia.body.user.displayName)?.table === 'emerald');
+    expect(guest.state!.players.find((p) => p.name === 'Guest')!.table).toBe('classic');
+    expect((await api().post('/api/me/table').set(kiaAuth).send({ table: null })).body.user.tableTheme).toBe(null);
+    // null goes back to the classic one
+    expect((await api().post('/api/me/back').set(kiaAuth).send({ back: null })).body.user.cardBack).toBe(null);
+    await until(() => guest.state?.players.find((p) => p.name === kia.body.user.displayName)?.back === 'classic');
+    host.socket.disconnect();
+    guest.socket.disconnect();
+  });
+
   it('remembers which practice tutorials an account has done, on every phone', async () => {
     const reg = await register('tutor_ial');
     const auth = bearer(reg.body.token);

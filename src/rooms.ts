@@ -4,7 +4,7 @@ import { cardName, describeClaim, ordinal, secureRandom } from './cards.js';
 import { Crazy7Game } from './crazy7/game.js';
 import { Game, GameError } from './game.js';
 import type { GameEvent, GameRecord, Member, MemberAccount, TableGame, WatchRequest } from './models.js';
-import { BOT_MAX_STAKE, type AnnounceKind, type Announcement, type ChatEvent, type ChatKind, type CoinResult, type Crazy7View, type GameConfig, type Phase, type RoomView, type ThrowEvent } from './types.js';
+import { BOT_MAX_STAKE, DEFAULT_CARD_BACK, DEFAULT_TABLE_THEME, type AnnounceKind, type Announcement, type ChatEvent, type ChatKind, type CoinResult, type Crazy7View, type GameConfig, type Phase, type RoomView, type ThrowEvent } from './types.js';
 
 export const MAX_PLAYERS = 5;
 /** seated players plus watchers */
@@ -109,6 +109,8 @@ export class Room {
       stats: account?.stats ?? null,
       bot: false,
       avatar: account?.avatar ?? null,
+      back: account?.back ?? DEFAULT_CARD_BACK,
+      table: account?.table ?? DEFAULT_TABLE_THEME,
     };
     this.members.push(member);
     if (!this.hostId) this.hostId = member.id;
@@ -523,6 +525,8 @@ export class Room {
         id: m.id,
         name: m.name,
         avatar: m.bot ? null : m.avatar,
+        back: m.back,
+        table: m.table,
         connected: m.bot || m.socketId !== null,
         cardCount: g?.hands.get(m.id)?.length ?? 0,
         place: g ? g.places.indexOf(m.id) + 1 || null : null,
@@ -546,6 +550,7 @@ export class Room {
       turnId: g?.turnId ?? null,
       roundRank: b?.roundRank ?? null,
       pileCount: g?.pile.length ?? 0,
+      pileTopBy: b ? b.pileBy.slice(-7) : [],
       lastPlay: lp ? { id: lp.id, playerId: lp.playerId, count: lp.cards.length, rank: lp.rank } : null,
       passedIds: b ? [...b.passed] : [],
       reveal: b?.reveal ?? null,

@@ -6,7 +6,10 @@ import type { Actor, AuditDoc, Collections, UserDoc } from '../db/documents.js';
 import { ApiError } from '../http/errors.js';
 import type { AccountInfo } from '../models.js';
 import {
+  cardBackOf,
   DAILY_GIFT_LIMIT,
+  DEFAULT_CARD_BACK,
+  DEFAULT_TABLE_THEME,
   HISTORY_PAGE_SIZE,
   levelOf,
   LOGIN_BONUS,
@@ -19,6 +22,7 @@ import {
   type ProfileOverview,
   type PublicUser,
   type Role,
+  tableThemeOf,
 } from '../types.js';
 
 export interface UserServiceOptions {
@@ -46,6 +50,12 @@ export const statsOf = (u: Pick<UserDoc, 'stats'>): LifetimeStats => ({ ...EMPTY
 /** the saved avatar if it's still in the catalog, else null (the first letter) */
 export const avatarOf = (u: Pick<UserDoc, 'avatar'>): string | null => (parseAvatar(u.avatar) ? u.avatar! : null);
 
+/** the saved card back if it's still in the catalog, else null (the classic back) */
+export const cardBackChoice = (u: Pick<UserDoc, 'cardBack'>): string | null => cardBackOf(u.cardBack)?.id ?? null;
+
+/** the saved table theme if it's still in the catalog, else null (classic green) */
+export const tableThemeChoice = (u: Pick<UserDoc, 'tableTheme'>): string | null => tableThemeOf(u.tableTheme)?.id ?? null;
+
 /** coins an account can still give friends today */
 export const giftLeftOf = (u: Pick<UserDoc, 'giftDay' | 'giftGiven'>, today = istDay()): number =>
   u.giftDay === today ? Math.max(0, DAILY_GIFT_LIMIT - (u.giftGiven ?? 0)) : DAILY_GIFT_LIMIT;
@@ -62,6 +72,8 @@ export function toPublicUser(u: WithId<UserDoc>): PublicUser {
     giftLeft: giftLeftOf(u),
     tutorials: u.tutorials ?? [],
     avatar: avatarOf(u),
+    cardBack: cardBackChoice(u),
+    tableTheme: tableThemeChoice(u),
   };
 }
 
@@ -147,8 +159,16 @@ export class UserService {
 
   async getAccounts(userIds: string[]): Promise<Map<string, AccountInfo>> {
     const ids = userIds.filter((id) => /^[a-f0-9]{24}$/i.test(id)).map((id) => new ObjectId(id));
-    const users = await this.cols.users.find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1, avatar: 1 } }).toArray();
-    return new Map(users.map((u) => [u._id.toHexString(), { coins: u.coins, level: levelOf(statsOf(u)), stats: statsOf(u), avatar: avatarOf(u) }]));
+    const users = await this.cols.users.find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1, avatar: 1, cardBack: 1, tableTheme: 1 } }).toArray();
+    return new Map(
+      users.map((u) => [
+        u._id.toHexString(),
+        { coins: u.coins, level: levelOf(statsOf(u)), stats: statsOf(u), avatar: avatarOf(u),
+          back: cardBackChoice(u) ?? DEFAULT_CARD_BACK,
+          table: tableThemeChoice(u) ?? DEFAULT_TABLE_THEME,
+        },
+      ]),
+    );
   }
 
   async logout(token: string): Promise<void> {
@@ -345,6 +365,36 @@ export class UserService {
     const need = Math.max(parts.face.level, parts.bg.level);
     if (levelOf(statsOf(user)) < need) throw new ApiError(400, `Reach level ${need} for that avatar`);
     const updated = await this.cols.users.findOneAndUpdate({ _id: userId }, { $set: { avatar } }, { returnDocument: 'after' });
+    return toPublicUser(updated!);
+  }
+
+  /** picks the card back everyone sees on this player's cards (null for the classic one); backs above the account's level are refused */
+  setCardBack(userId: ObjectId, back: string | null): Promise<PublicUser> {
+    return this.setLookItem(userId, 'cardBack', back === null ? null : (cardBackOf(back) ?? undefined), 'card back');
+  }
+
+  /** picks the table theme: their felt, and the seat box everyone sees (null for classic green); tables above the account's level are refused */
+  setTableTheme(userId: ObjectId, table: string | null): Promise<PublicUser> {
+    return this.setLookItem(userId, 'tableTheme', table === null ? null : (tableThemeOf(table) ?? undefined), 'table');
+  }
+
+  /** saves one look choice after the level check; pick is null to clear it, undefined for an unknown id */
+  private async setLookItem(
+    userId: ObjectId,
+    field: 'cardBack' | 'tableTheme',
+    pick: { id: string; level: number } | null | undefined,
+    what: string,
+  ): Promise<PublicUser> {
+    if (pick === null) {
+      const cleared = await this.cols.users.findOneAndUpdate({ _id: userId }, { $unset: { [field]: '' } }, { returnDocument: 'after' });
+      if (!cleared) throw new ApiError(404, 'User not found');
+      return toPublicUser(cleared);
+    }
+    if (!pick) throw new ApiError(400, `Pick one of the ${what}s`);
+    const user = await this.cols.users.findOne({ _id: userId });
+    if (!user) throw new ApiError(404, 'User not found');
+    if (levelOf(statsOf(user)) < pick.level) throw new ApiError(400, `Reach level ${pick.level} for that ${what}`);
+    const updated = await this.cols.users.findOneAndUpdate({ _id: userId }, { $set: { [field]: pick.id } }, { returnDocument: 'after' });
     return toPublicUser(updated!);
   }
 

@@ -7,6 +7,7 @@ import { ApiError } from './http/errors.js';
 import { Presence } from './presence.js';
 import { DEFAULT_ROOM_LIMITS, RoomManager, type RoomLimits } from './rooms.js';
 import type { Store } from './services/store.js';
+import type { PlayerLook } from './models.js';
 import type { AppSettings } from './types.js';
 import { giftLeftOf } from './services/users.js';
 import { MAX_CONNECTIONS_PER_IP, registerHandlers } from './socket.js';
@@ -28,7 +29,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
   // set once Socket.IO exists; the API is created first because the http server needs it
   let notifyFriends = (_userId: string) => {};
   let settingsChanged = (_settings: AppSettings) => {};
-  let avatarChanged = (_userId: string, _avatar: string | null) => {};
+  let lookChanged = (_userId: string, _look: PlayerLook) => {};
   const app = createApi(store, {
     adminApiKey: deps.adminApiKey ?? '',
     authAttempts: deps.authAttempts,
@@ -39,7 +40,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
       return room ? { code: room.code, phase: room.phase } : null;
     },
     onSettingsChanged: (settings) => settingsChanged(settings),
-    onAvatarChanged: (userId, avatar) => avatarChanged(userId, avatar),
+    onLookChanged: (userId, look) => lookChanged(userId, look),
   });
   const httpServer = createServer(app);
 
@@ -90,7 +91,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
     deps.botSpeed,
   );
 
-  avatarChanged = handlers.avatarChanged;
+  lookChanged = handlers.lookChanged;
 
   return {
     httpServer,

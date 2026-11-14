@@ -1,13 +1,17 @@
 import { Router } from 'express';
+import type { PlayerLook } from '../../models.js';
 import type { Store } from '../../services/store.js';
 import { toPublicUser } from '../../services/users.js';
-import type { ProfileOverview } from '../../types.js';
+import { DEFAULT_CARD_BACK, DEFAULT_TABLE_THEME, type ProfileOverview, type PublicUser } from '../../types.js';
 import { asPayload, parseQueryInt } from '../../validate.js';
 import { ApiError } from '../errors.js';
 import { ah, currentUser, requireUser } from '../middleware.js';
 
-export function meRoutes(store: Store, onAvatarChanged: (userId: string, avatar: string | null) => void): Router {
+export function meRoutes(store: Store, onLookChanged: (userId: string, look: PlayerLook) => void): Router {
   const r = Router();
+  // rooms the player is in show the new look at once
+  const lookChanged = (user: PublicUser) =>
+    onLookChanged(user.id, { avatar: user.avatar, back: user.cardBack ?? DEFAULT_CARD_BACK, table: user.tableTheme ?? DEFAULT_TABLE_THEME });
   r.use(requireUser(store));
 
   // opening the app counts as the day's login, so the daily bonus is paid here too
@@ -37,7 +41,31 @@ export function meRoutes(store: Store, onAvatarChanged: (userId: string, avatar:
       const avatar = asPayload(req.body).avatar;
       if (avatar !== null && (typeof avatar !== 'string' || avatar.length > 40)) throw new ApiError(400, 'Pick one of the avatars');
       const user = await store.users.setAvatar(currentUser(res)._id, avatar);
-      onAvatarChanged(user.id, user.avatar);
+      lookChanged(user);
+      res.json({ user });
+    }),
+  );
+
+  // the card back everyone sees on this player's cards, or null for the classic one; locked ones need the level first
+  r.post(
+    '/back',
+    ah(async (req, res) => {
+      const back = asPayload(req.body).back;
+      if (back !== null && (typeof back !== 'string' || back.length > 20)) throw new ApiError(400, 'Pick one of the card backs');
+      const user = await store.users.setCardBack(currentUser(res)._id, back);
+      lookChanged(user);
+      res.json({ user });
+    }),
+  );
+
+  // the table theme: their felt, and the seat box everyone sees round their name; null for classic green
+  r.post(
+    '/table',
+    ah(async (req, res) => {
+      const table = asPayload(req.body).table;
+      if (table !== null && (typeof table !== 'string' || table.length > 20)) throw new ApiError(400, 'Pick one of the tables');
+      const user = await store.users.setTableTheme(currentUser(res)._id, table);
+      lookChanged(user);
       res.json({ user });
     }),
   );

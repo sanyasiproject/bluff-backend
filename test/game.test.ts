@@ -83,8 +83,19 @@ describe('turns', () => {
       { kind: 'roundEnd', starterId: 'a', discarded: 1 },
     ]);
     expect(g.pile).toEqual([]);
+    expect(g.pileBy).toEqual([]);
     expect(g.roundRank).toBeNull();
     expect(g.turnId).toBe('a');
+  });
+
+  it('remembers who played each pile card, so it shows in their card back', () => {
+    const [a1, a2, b1] = [card('3'), card('3'), card('4')];
+    const g = setup(['a', 'b', 'c'], { a: [a1, a2, card('9')], b: [b1, card('5')], c: [card('6')] });
+    g.play('a', ids(a1, a2), '3');
+    g.play('b', ids(b1));
+    expect(g.pileBy).toEqual(['a', 'a', 'b']);
+    g.callBluff('c', g.lastPlay!.id);
+    expect(g.pileBy).toEqual([]);
   });
 
   it('a new play resets the passes', () => {

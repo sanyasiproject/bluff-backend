@@ -28,6 +28,17 @@ export interface Member {
   bot: boolean;
   /** chosen avatar ("face.bg"); null for guests, bots and accounts that haven't picked one */
   avatar: string | null;
+  /** card back everyone sees on this member's cards; the classic one for guests and bots */
+  back: string;
+  /** table theme everyone sees on this member's seat; classic green for guests and bots */
+  table: string;
+}
+
+/** how a player looks to others at the table */
+export interface PlayerLook {
+  avatar: string | null;
+  back: string;
+  table: string;
 }
 
 /** the account behind a logged-in member */
@@ -38,6 +49,8 @@ export interface MemberAccount {
   level: number | null;
   stats: LifetimeStats | null;
   avatar: string | null;
+  back: string;
+  table: string;
 }
 
 /** someone asking to watch a game in progress; the host lets them in or not */
@@ -115,6 +128,8 @@ export interface AccountInfo {
   level: number;
   stats: LifetimeStats;
   avatar: string | null;
+  back: string;
+  table: string;
 }
 
 /** balances after a gift between friends */

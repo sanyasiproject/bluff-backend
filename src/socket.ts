@@ -3,10 +3,10 @@ import { BotDriver } from './bots/driver.js';
 import { Crazy7Auto } from './crazy7/auto.js';
 import { Crazy7Bots } from './crazy7/driver.js';
 import { GameError } from './game.js';
-import type { AccountInfo, GameEvent, GameRecord, Member, MemberAccount, SocketHooks, SocketUser, WatchRequest } from './models.js';
+import type { AccountInfo, GameEvent, GameRecord, Member, MemberAccount, PlayerLook, SocketHooks, SocketUser, WatchRequest } from './models.js';
 import { Presence } from './presence.js';
 import type { Room, RoomManager } from './rooms.js';
-import { BOT_MAX_STAKE, type Announcement, type GiftEvent, type GiftReceived, type InviteEvent, type ServerInfo } from './types.js';
+import { BOT_MAX_STAKE, DEFAULT_CARD_BACK, DEFAULT_TABLE_THEME, type Announcement, type GiftEvent, type GiftReceived, type InviteEvent, type ServerInfo } from './types.js';
 import {
   asPayload,
   parseBet,
@@ -61,7 +61,7 @@ export function registerHandlers(
   maxConnectionsPerIp = MAX_CONNECTIONS_PER_IP,
   /** bots' thinking pace: 1 = human-like; tests use a small number */
   botSpeed = 1,
-): { stop: () => void; avatarChanged: (userId: string, avatar: string | null) => void } {
+): { stop: () => void; lookChanged: (userId: string, look: PlayerLook) => void } {
   // every player gets their own view so hands stay private; bots then plan their next move
   const broadcast = (room: Room) => {
     for (const m of room.members) if (m.socketId) io.to(m.socketId).emit('state', room.view(m.id));
@@ -209,7 +209,7 @@ export function registerHandlers(
     } catch {
       // shown as unknown until the next game ends
     }
-    return { userId: u.id, username: u.username, coins: fresh?.coins ?? null, level: fresh?.level ?? null, stats: fresh?.stats ?? null, avatar: fresh?.avatar ?? null };
+    return { userId: u.id, username: u.username, coins: fresh?.coins ?? null, level: fresh?.level ?? null, stats: fresh?.stats ?? null, avatar: fresh?.avatar ?? null, back: fresh?.back ?? DEFAULT_CARD_BACK, table: fresh?.table ?? DEFAULT_TABLE_THEME };
   };
 
   /** accounts on or off, and whether guests may play right now */
@@ -684,12 +684,14 @@ export function registerHandlers(
       c7bots.stop();
       c7auto.stop();
     },
-    /** a player changed their avatar: their seat in any room shows it at once */
-    avatarChanged: (userId: string, avatar: string | null) => {
+    /** a player changed their avatar, card back or table: their seat in any room shows it at once */
+    lookChanged: (userId: string, look: PlayerLook) => {
       const room = rooms.roomOfUser(userId);
       const member = room?.members.find((m) => m.userId === userId);
       if (!room || !member) return;
-      member.avatar = avatar;
+      member.avatar = look.avatar;
+      member.back = look.back;
+      member.table = look.table;
       broadcast(room);
     },
   };
