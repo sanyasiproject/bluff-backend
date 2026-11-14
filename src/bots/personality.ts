@@ -1,7 +1,7 @@
 import type { BotStyle, Personality, Rand } from './models.js';
 
 /** bot names; a room never has two of the same */
-export const BOT_NAMES = ['Raju', 'Pinky', 'Bunty', 'Chintu', 'Golu', 'Munni', 'Tinku', 'Sweety', 'Pappu', 'Dolly', 'Bablu', 'Guddu'] as const;
+export const BOT_NAMES = ['Raju', 'Pinky', 'Bunty', 'Chintu', 'Golu', 'Munni', 'Tinku', 'Pappu', 'Dolly', 'Bablu', 'Guddu', 'Isha', 'Vihu', 'Ningu'] as const;
 
 type Range = [number, number];
 type Recipe = Record<Exclude<keyof Personality, 'style'>, Range>;

@@ -162,5 +162,7 @@ describe('bot engine', () => {
     expect(new Set(names.map((n) => n.toLowerCase())).size).toBe(6);
     expect(names.slice(1)).not.toContain('Raju');
     expect(pickName([...BOT_NAMES], rand)).toBeNull();
+    expect(BOT_NAMES).toEqual(expect.arrayContaining(['Isha', 'Vihu', 'Ningu']));
+    expect(BOT_NAMES).not.toContain('Sweety');
   });
 });
