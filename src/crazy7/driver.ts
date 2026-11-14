@@ -94,7 +94,8 @@ export class Crazy7Bots {
         const late = seat.forgot ? 1500 + this.rand() * 3000 : 300 + this.rand() * 400;
         seat.callTimer = setTimeout(() => this.sayLastCard(room, seat, g), late * this.speed);
       }
-      if (g.turnId !== seat.id) {
+      // not its turn, or the room is about to pick or pass for it (Crazy7Auto)
+      if (g.turnId !== seat.id || g.autoDue) {
         this.clearTurn(seat);
         continue;
       }
@@ -251,8 +252,9 @@ export class Crazy7Bots {
 
   /** drawn before it knows what it'll do, so a pause never gives anything away; a follow-up after a pick is quicker */
   private thinkMs(seat: Seat, g: Crazy7Game, room: Room): number {
-    const base = g.picks > 0 ? 500 + this.rand() * 700 : 900 + this.rand() * 1700;
-    const ms = base * seat.me.tempo * this.speed;
+    // a follow-up after a pick is quicker; never faster than a person could follow
+    const base = g.picks > 0 ? 900 + this.rand() * 800 : 1300 + this.rand() * 1700;
+    const ms = Math.max(g.picks > 0 ? 800 : 1100, base * seat.me.tempo) * this.speed;
     // never catch a person out before they've had a fair moment to tap the button
     const person = g.atRisk !== null && !room.isBot(g.atRisk);
     return person ? Math.max(ms, LAST_CALL_GRACE_MS * this.speed) : ms;

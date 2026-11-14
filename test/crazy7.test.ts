@@ -301,6 +301,37 @@ describe('crazy 7: ending', () => {
   });
 });
 
+describe('crazy 7 live games: one automatic step at a time', () => {
+  it('stops after each automatic step so the room can show it at a human pace', () => {
+    const g = table({ a: [c('9', 'H'), c('J', 'S'), c('Q', 'H')], b: [c('5', 'C'), c('Q', 'C')], c: [c('2', 'C'), c('3', 'C')] }, [c('8', 'H')], 'a', {
+      deck: [c('4', 'D'), c('6', 'D')],
+    });
+    const live = Crazy7Game.fromState(g.state());
+    Object.defineProperty(live, 'stepwise', { value: true });
+    // a's play hands the turn to b, who has nothing for the 9♥: nothing happens yet
+    expect(kinds(live.play('a', '9H1'))).toEqual(['c7play']);
+    expect(live.turnId).toBe('b');
+    expect(live.autoDue).toBe(true);
+    expect(live.playable('b')).toEqual([]);
+    expect(live.canPick('b')).toBe(false);
+    expect(() => live.pick('b')).toThrow('One moment, picking for you');
+    // step 1: the automatic pick (6♦, no help)
+    expect(kinds(live.stepAuto())).toEqual(['c7pick']);
+    expect(live.turnId).toBe('b');
+    expect(live.autoDue).toBe(true);
+    // step 2: the turn passes by itself, to c, who also has nothing
+    expect(kinds(live.stepAuto())).toEqual(['c7pass']);
+    expect(live.turnId).toBe('c');
+    expect(live.autoDue).toBe(true);
+    // c's picked 4♦ doesn't fit either; then a's turn waits for a real choice
+    expect(kinds(live.stepAuto())).toEqual(['c7pick']);
+    expect(kinds(live.stepAuto())).toEqual(['c7pass']);
+    expect(live.turnId).toBe('a');
+    expect(live.autoDue).toBe(false);
+    expect(live.stepAuto()).toEqual([]);
+  });
+});
+
 describe('crazy 7 in a room', () => {
   it('only the player on turn gets choices, nobody seated sees another hand, and watchers see every hand', () => {
     const room = new Room('ABCD');

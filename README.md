@@ -77,7 +77,10 @@ XP, the daily ladder, kicks, leaving and Stop game work the same for both.
   nobody can play and nothing is left to pick, the fewest cards win.
 - Bluff's extras (bluff rule, peeks, bets, teams) stay in the settings but are ignored in Crazy 7; End game doesn't apply.
 - Lifetime stats count Crazy 7 games in `crazy7Games` (Bluff bots read only Bluff games); Crazy 7 picks don't count as cards picked up.
-- Code: `src/crazy7/game.ts` (rules), `src/crazy7/driver.ts` + `brain.ts` + `memory.ts` (bots that search ahead from what they've seen).
+- Live games are stepwise: anything automatic (a pick when nothing matches, a turn that passes by itself, a 7's pick with stacking off,
+  the missed-last-card penalty) happens one step at a time, about 1–1.5 s apart (`src/crazy7/auto.ts`, `RoomView.crazy7.auto` while one is
+  due), so the table can follow it. Bots think at least 1.1 s (0.8 s after a pick). Simulations and rule tests keep the instant mode.
+- Code: `src/crazy7/game.ts` (rules), `src/crazy7/auto.ts` (paced automatic steps), `src/crazy7/driver.ts` + `brain.ts` + `memory.ts` (bots that search ahead from what they've seen).
 
 ## Rules worth knowing
 

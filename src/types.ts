@@ -117,6 +117,8 @@ export interface Crazy7View {
   last: Crazy7Move | null;
   /** goes up by one each time a turn starts, even when the same player gets it again */
   turn: number;
+  /** something automatic is about to happen to the player on turn (a pick when nothing matches, a pass, a penalty) */
+  auto: boolean;
   /** who put the top card down; null for the starting card */
   topBy: string | null;
 }

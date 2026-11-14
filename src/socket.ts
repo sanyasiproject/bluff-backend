@@ -1,5 +1,6 @@
 import type { Server, Socket } from 'socket.io';
 import { BotDriver } from './bots/driver.js';
+import { Crazy7Auto } from './crazy7/auto.js';
 import { Crazy7Bots } from './crazy7/driver.js';
 import { GameError } from './game.js';
 import type { AccountInfo, GameEvent, GameRecord, Member, MemberAccount, SocketHooks, SocketUser, WatchRequest } from './models.js';
@@ -66,6 +67,7 @@ export function registerHandlers(
     for (const m of room.members) if (m.socketId) io.to(m.socketId).emit('state', room.view(m.id));
     bots.wake(room);
     c7bots.wake(room);
+    c7auto.wake(room);
   };
 
   const publish = (room: Room, notes: Announcement[]) => {
@@ -109,6 +111,7 @@ export function registerHandlers(
     room.clearBots();
     bots.forget(room);
     c7bots.forget(room);
+    c7auto.forget(room);
     rooms.dropIfEmpty(room);
   };
 
@@ -121,6 +124,9 @@ export function registerHandlers(
     (room) => rooms.isOpen(room),
     botSpeed,
   );
+
+  // Crazy 7's automatic picks and passes, one at a time at a pace people can follow
+  const c7auto = new Crazy7Auto((room, events) => afterMove(room, events), (room) => rooms.isOpen(room), botSpeed);
 
   // Crazy 7 bots: same table, their own brain
   const c7bots = new Crazy7Bots(
@@ -668,11 +674,13 @@ export function registerHandlers(
     rooms.sweep().forEach(broadcast);
     bots.prune();
     c7bots.prune();
+    c7auto.prune();
   }, SWEEP_EVERY_MS);
   timer.unref();
   return () => {
     clearInterval(timer);
     bots.stop();
     c7bots.stop();
+    c7auto.stop();
   };
 }

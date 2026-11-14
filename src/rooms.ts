@@ -1,6 +1,6 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { computeAwards } from './awards.js';
-import { cardName, describeClaim, ordinal } from './cards.js';
+import { cardName, describeClaim, ordinal, secureRandom } from './cards.js';
 import { Crazy7Game } from './crazy7/game.js';
 import { Game, GameError } from './game.js';
 import type { GameEvent, GameRecord, Member, MemberAccount, TableGame, WatchRequest } from './models.js';
@@ -405,7 +405,8 @@ export class Room {
     this.departed.clear();
     if (this.config.game === 'crazy7') {
       this.game = null;
-      this.c7 = new Crazy7Game(this.players().map((m) => m.id), this.config);
+      // stepwise: the automatic picks and passes come one at a time (Crazy7Auto), so people can follow them
+      this.c7 = new Crazy7Game(this.players().map((m) => m.id), this.config, secureRandom, true, true);
       return;
     }
     this.c7 = null;
@@ -606,6 +607,7 @@ export class Room {
       last: c.last ? { ...c.last } : null,
       turn: c.turnSeq,
       topBy: c.topBy,
+      auto: c.autoDue,
     };
   }
 

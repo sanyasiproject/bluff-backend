@@ -80,6 +80,10 @@ export class Crazy7Game implements TableGame {
   topBy: string | null = null;
   /** ended because nobody could play and nothing was left to pick */
   stalled = false;
+  /** turns in a row that passed by themselves without picking anything (a stuck table) */
+  private idle = 0;
+  /** cards the player on turn has picked this turn */
+  private turnDrew = 0;
   /** automatic steps of the first turn (a pick when nothing matched) */
   readonly opening: GameEvent[] = [];
 
@@ -88,6 +92,8 @@ export class Crazy7Game implements TableGame {
     readonly config: GameConfig,
     private readonly rand: RandomInt = secureRandom,
     deal = true,
+    /** live games stop after every automatic step, so the room can play them at a pace people can follow */
+    readonly stepwise = false,
   ) {
     if (order.length < 2 || order.length > 5) throw new GameError('Need 2 to 5 players');
     for (const id of order) {
@@ -164,8 +170,60 @@ export class Crazy7Game implements TableGame {
   }
 
   playable(id: string): Card[] {
-    if (this.over || this.turnId !== id) return [];
+    if (this.over || this.turnId !== id || this.autoDue) return [];
+    return this.fitting(id);
+  }
+
+  private fitting(id: string): Card[] {
     return this.hand(id).filter((c) => this.fits(c));
+  }
+
+  /** live games: an automatic step is waiting for the player on turn (the room runs it after a short pause) */
+  get autoDue(): boolean {
+    if (!this.stepwise || this.over || !this.turnId) return false;
+    const id = this.turnId;
+    if (this.missed.has(id)) return true;
+    if (this.penalty > 0) return !this.config.stack7;
+    const fits = this.fitting(id).length > 0;
+    if (this.picks === 0) return !fits;
+    return !fits && (this.picks >= this.maxPicks() || !this.canDraw());
+  }
+
+  /** live games: the next automatic step (a missed-call or 7 pick, a pick when nothing matches, a turn that passes by itself) */
+  stepAuto(): GameEvent[] {
+    if (!this.autoDue) return [];
+    const id = this.turnId!;
+    const events: GameEvent[] = [];
+    if (this.missed.has(id)) {
+      this.missed.delete(id);
+      const count = 1 + this.penalty;
+      this.penalty = 0;
+      const got = this.draw(id, count, events);
+      events.push({ kind: 'c7penalty', playerId: id, count: got, missed: true, forced: true });
+      this.move('penalty', id, null, got);
+      return [...events, ...this.advance(id)];
+    }
+    if (this.penalty > 0) return [...this.takePenalty(id, true), ...this.advance(id)];
+    if (this.picks === 0) {
+      const got = this.canDraw() ? this.draw(id, 1, events) : 0;
+      this.picks = 1;
+      events.push({ kind: 'c7pick', playerId: id, count: got, forced: true, top: this.top() });
+      this.move('pick', id, null, got);
+      return events;
+    }
+    events.push({ kind: 'c7pass', playerId: id, auto: true });
+    this.move('pass', id, null, 0);
+    // nobody can play and nothing is left to pick: fewest cards wins
+    this.idle = this.turnDrew === 0 ? this.idle + 1 : 0;
+    const active = this.order.filter((p) => this.hand(p).length > 0);
+    if (this.idle >= active.length) {
+      const best = active.reduce((a, b) => (this.hand(b).length < this.hand(a).length ? b : a));
+      this.stalled = true;
+      this.places.push(best);
+      this.finishGame();
+      return [...events, { kind: 'finish', playerId: best, place: 1 }, { kind: 'gameOver', loserId: null }];
+    }
+    return [...events, ...this.advance(id)];
   }
 
   maxPicks(): number {
@@ -178,13 +236,13 @@ export class Crazy7Game implements TableGame {
   }
 
   canPick(id: string): boolean {
-    if (this.over || this.turnId !== id) return false;
+    if (this.over || this.turnId !== id || this.autoDue) return false;
     return this.penalty > 0 || (this.picks < this.maxPicks() && this.canDraw());
   }
 
   /** Pass only stops picking early: after at least one pick, while more picks are still allowed. At the limit a card that fits must be played */
   canPass(id: string): boolean {
-    return !this.over && this.turnId === id && this.penalty === 0 && this.picks > 0 && this.picks < this.maxPicks() && this.canDraw();
+    return !this.over && this.turnId === id && !this.autoDue && this.penalty === 0 && this.picks > 0 && this.picks < this.maxPicks() && this.canDraw();
   }
 
   /** with one card left, or on your turn with two (said before playing the second-last, a stacked 7 too) */
@@ -204,6 +262,7 @@ export class Crazy7Game implements TableGame {
     this.hands.set(id, hand.filter((c) => c !== card));
     this.pile.push(card);
     this.topBy = id;
+    this.idle = 0;
     if (card.rank === '7') {
       this.penalty += SEVEN_PENALTY;
       const s = this.stat(id);
@@ -237,7 +296,8 @@ export class Crazy7Game implements TableGame {
     this.picks++;
     events.push({ kind: 'c7pick', playerId: id, count: got, forced: false, top: this.top() });
     this.move('pick', id, null, got);
-    if ((this.picks >= this.maxPicks() || !this.canDraw()) && this.playable(id).length === 0) return [...events, ...this.autoPass(id)];
+    // live games pass a moment later instead (stepAuto)
+    if (!this.stepwise && (this.picks >= this.maxPicks() || !this.canDraw()) && this.playable(id).length === 0) return [...events, ...this.autoPass(id)];
     return events;
   }
 
@@ -332,6 +392,17 @@ export class Crazy7Game implements TableGame {
 
   /** runs everything automatic at the start of a turn, until someone has a choice to make */
   private startTurn(first: string | null): GameEvent[] {
+    // live games: just hand over the turn; anything automatic comes one step at a time from stepAuto
+    if (this.stepwise) {
+      if (first && !this.over) {
+        this.turnId = first;
+        this.turnSeq++;
+        this.picks = 0;
+        this.picked = [];
+        this.turnDrew = 0;
+      }
+      return [];
+    }
     const events: GameEvent[] = [];
     let id = first;
     let idle = 0;
@@ -424,7 +495,10 @@ export class Crazy7Game implements TableGame {
       if (!card) break;
       hand.push(card);
       got++;
-      if (this.turnId === id) this.picked.push(card.id);
+      if (this.turnId === id) {
+        this.picked.push(card.id);
+        this.turnDrew++;
+      }
     }
     bySuit(hand);
     const s = this.stat(id);
@@ -484,5 +558,6 @@ export class Crazy7Game implements TableGame {
   private assertTurn(id: string): void {
     if (this.over) throw new GameError('Game is over');
     if (this.turnId !== id) throw new GameError('Not your turn');
+    if (this.autoDue) throw new GameError('One moment, picking for you');
   }
 }

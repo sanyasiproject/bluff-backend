@@ -63,8 +63,19 @@ async function step(people: Client[]) {
   const turnId = people[0].state!.turnId;
   const p = people.find((x) => x.state!.meId === turnId)!;
   const v = p.state!.crazy7!;
-  if (v.canCall) expect(await send(p, 'c7:call')).toEqual({ ok: true });
-  const before = p.state!.crazy7!.last?.id ?? 0;
+  let before = v.last?.id ?? 0;
+  // the room is about to pick or pass for them: nothing to do but wait (and a move now is refused)
+  if (v.auto) {
+    expect(await send(p, 'c7:pick')).toEqual({ ok: false, error: 'One moment, picking for you' });
+    await until(() => people.every((x) => (x.state!.crazy7?.last?.id ?? 0) > before || x.state!.phase === 'over'));
+    return;
+  }
+  if (v.canCall) {
+    expect(await send(p, 'c7:call')).toEqual({ ok: true });
+    // wait for the call itself, so the play below is judged against the state after it
+    await until(() => people.every((x) => (x.state!.crazy7?.last?.id ?? 0) > before));
+    before = p.state!.crazy7!.last?.id ?? before;
+  }
   const res = v.playable.length > 0 ? await send(p, 'c7:play', { cardId: v.playable[0] }) : v.canPass ? await send(p, 'c7:pass') : await send(p, 'c7:pick');
   expect(res).toEqual({ ok: true });
   await until(() => people.every((x) => (x.state!.crazy7?.last?.id ?? 0) > before || x.state!.phase === 'over'));
