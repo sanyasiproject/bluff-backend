@@ -26,6 +26,8 @@ export interface Member {
   stats: LifetimeStats | null;
   /** played by the server */
   bot: boolean;
+  /** chosen avatar ("face.bg"); null for guests, bots and accounts that haven't picked one */
+  avatar: string | null;
 }
 
 /** the account behind a logged-in member */
@@ -35,6 +37,7 @@ export interface MemberAccount {
   coins: number | null;
   level: number | null;
   stats: LifetimeStats | null;
+  avatar: string | null;
 }
 
 /** someone asking to watch a game in progress; the host lets them in or not */
@@ -111,6 +114,7 @@ export interface AccountInfo {
   coins: number;
   level: number;
   stats: LifetimeStats;
+  avatar: string | null;
 }
 
 /** balances after a gift between friends */

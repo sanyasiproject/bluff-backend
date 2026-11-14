@@ -41,6 +41,8 @@ export interface UserDoc {
   giftGiven?: number;
   /** games whose practice tutorial they finished or skipped */
   tutorials?: GameKind[];
+  /** chosen avatar, "face.bg" */
+  avatar?: string;
 }
 
 export interface SessionDoc {

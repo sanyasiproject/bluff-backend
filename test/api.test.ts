@@ -278,6 +278,39 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
 
   const coinsOf = async (token: string) => (await api().get('/api/me').set(bearer(token))).body.user.coins as number;
 
+  it('lets a player pick an avatar (locked ones need the level) and shows it in rooms, friends and profiles', async () => {
+    const pia = await register('ava_pia');
+    const sam = await register('ava_sam');
+    const piaAuth = bearer(pia.body.token);
+    expect(pia.body.user.avatar).toBe(null);
+    expect((await api().post('/api/me/avatar').set(piaAuth).send({ avatar: 'nope.sunset' })).body.error).toBe('Pick one of the avatars');
+    expect((await api().post('/api/me/avatar').set(piaAuth).send({ avatar: 'dragon.sunset' })).body.error).toBe('Reach level 12 for that avatar');
+    expect((await api().post('/api/me/avatar').set(piaAuth).send({ avatar: 'fox.galaxy' })).body.error).toBe('Reach level 20 for that avatar');
+    // characters (girls and boys) work the same way
+    expect((await api().post('/api/me/avatar').set(piaAuth).send({ avatar: 'veer.sunset' })).body.error).toBe('Reach level 12 for that avatar');
+    expect((await api().post('/api/me/avatar').set(piaAuth).send({ avatar: 'priya.ocean' })).body.user.avatar).toBe('priya.ocean');
+
+    // in a room, the seat changes as soon as she picks
+    const host = await socketClient(pia.body.token);
+    const { code } = await send(host, 'room:create', {});
+    const guest = await socketClient();
+    await send(guest, 'room:join', { code, name: 'Watcher' });
+    expect((await api().post('/api/me/avatar').set(piaAuth).send({ avatar: 'fox.sunset' })).body.user.avatar).toBe('fox.sunset');
+    await until(() => guest.state?.players.find((p) => p.name === pia.body.user.displayName)?.avatar === 'fox.sunset');
+    expect(guest.state!.players.find((p) => p.name === 'Watcher')!.avatar).toBe(null);
+
+    // friends, search and profiles show it
+    await api().post('/api/friends/request').set(bearer(sam.body.token)).send({ username: 'ava_pia' });
+    expect((await api().get('/api/friends').set(bearer(sam.body.token))).body.outgoing[0].avatar).toBe('fox.sunset');
+    expect((await api().get('/api/friends/search?q=ava_p').set(bearer(sam.body.token))).body.players[0].avatar).toBe('fox.sunset');
+    expect((await api().get('/api/players/ava_pia').set(bearer(sam.body.token))).body.profile.avatar).toBe('fox.sunset');
+    // and the letter comes back with null
+    expect((await api().post('/api/me/avatar').set(piaAuth).send({ avatar: null })).body.user.avatar).toBe(null);
+    await until(() => guest.state?.players.find((p) => p.name === pia.body.user.displayName)?.avatar === null);
+    host.socket.disconnect();
+    guest.socket.disconnect();
+  });
+
   it('remembers which practice tutorials an account has done, on every phone', async () => {
     const reg = await register('tutor_ial');
     const auth = bearer(reg.body.token);
@@ -550,7 +583,7 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect(raju).toMatchObject({ username: 'raj_pub', displayName: 'Raj', level: 1, online: null, status: 'none' });
     expect(raju.stats).toMatchObject({ gamesPlayed: 0, wins: 0 });
     // no coins, role, login times or password hash
-    expect(Object.keys(raju).sort()).toEqual(['displayName', 'id', 'joinedAt', 'level', 'online', 'stats', 'status', 'username']);
+    expect(Object.keys(raju).sort()).toEqual(['avatar', 'displayName', 'id', 'joinedAt', 'level', 'online', 'stats', 'status', 'username']);
     expect((await card('pia_pub')).status).toBe('me');
 
     await api().post('/api/friends/request').set(piaAuth).send({ username: 'raj_pub' });

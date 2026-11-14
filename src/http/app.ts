@@ -25,6 +25,8 @@ export interface ApiOptions {
   roomOfUser?: RoomOfUser;
   /** an admin changed an app-wide setting */
   onSettingsChanged?: (settings: AppSettings) => void;
+  /** a player picked a new avatar: rooms they're in show it at once */
+  onAvatarChanged?: (userId: string, avatar: string | null) => void;
 }
 
 /** HTTP side of the server: health check and the /api routes */
@@ -49,7 +51,7 @@ export function createApi(store: Store | null, opts: ApiOptions): express.Expres
   if (store) {
     const limited = rateLimit(opts.authAttempts ?? 20, 15 * 60_000);
     app.use('/api/auth', authRoutes(store, limited));
-    app.use('/api/me', meRoutes(store));
+    app.use('/api/me', meRoutes(store, opts.onAvatarChanged ?? (() => {})));
     // search, profiles and friend requests: 20 a minute per user, shared
     const social = userRateLimit(20, 60_000);
     app.use('/api/friends', friendRoutes(store, opts.presence, opts.notifyFriends ?? (() => {}), opts.roomOfUser ?? (() => null), social));

@@ -28,6 +28,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
   // set once Socket.IO exists; the API is created first because the http server needs it
   let notifyFriends = (_userId: string) => {};
   let settingsChanged = (_settings: AppSettings) => {};
+  let avatarChanged = (_userId: string, _avatar: string | null) => {};
   const app = createApi(store, {
     adminApiKey: deps.adminApiKey ?? '',
     authAttempts: deps.authAttempts,
@@ -38,6 +39,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
       return room ? { code: room.code, phase: room.phase } : null;
     },
     onSettingsChanged: (settings) => settingsChanged(settings),
+    onAvatarChanged: (userId, avatar) => avatarChanged(userId, avatar),
   });
   const httpServer = createServer(app);
 
@@ -57,7 +59,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
   };
 
   const rooms = new RoomManager({ ...DEFAULT_ROOM_LIMITS, ...deps.limits });
-  const stopSweep = registerHandlers(
+  const handlers = registerHandlers(
     io,
     rooms,
     store
@@ -88,13 +90,15 @@ export function createBluffServer(deps: ServerDeps = {}) {
     deps.botSpeed,
   );
 
+  avatarChanged = handlers.avatarChanged;
+
   return {
     httpServer,
     io,
     rooms,
     app,
     close: () => {
-      stopSweep();
+      handlers.stop();
       io.close();
     },
   };

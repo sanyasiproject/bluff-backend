@@ -106,6 +106,7 @@ All bodies are JSON. Protected routes need `Authorization: Bearer <token>` (the 
 | `GET /api/me` | logged in | – | `{ user, bonus, friendRequests }` (bonus = daily +200 if just paid) |
 | `GET /api/me/games` | logged in | `?limit=20` | `{ games }` most recent first, with per-game stats and coins |
 | `GET /api/me/overview` | logged in | – | `{ coinRank, players, friends, loginBonusToday, gameBonusToday }` for the profile page |
+| `POST /api/me/avatar` | logged in | `{ avatar: "face.bg" \| null }` (ids in `AVATAR_FACES` / `AVATAR_BACKGROUNDS`) | `{ user }`; 400 "Reach level N for that avatar" when locked; null goes back to the first letter. Rooms they're in update at once; `avatar` shows on players, watchers, friends, search and profiles |
 | `POST /api/me/tutorial` | logged in | `{ game: 'bluff' \| 'crazy7' }` | `{ user }`; that game's practice tutorial is done (finished or skipped), so it isn't offered again (`user.tutorials`) |
 | `GET /api/friends` | logged in | – | `{ friends, incoming, outgoing }` with `online`, `inRoom` and `roomPhase` (the stage of a friend's other room) |
 | `GET /api/players/:username` | logged in | – | `{ profile }`: name, level, joined date, online (friends and yourself only, else `null`), game stats and friend status; never coins, role or login times |

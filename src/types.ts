@@ -197,9 +197,103 @@ export interface GiftReceived {
   amount: number;
 }
 
+/** avatar faces a player can pick, shown big on a coloured background; some unlock with level. New ones go at the end */
+export const AVATAR_FACES = [
+  { id: 'fox', emoji: '🦊', level: 1 },
+  { id: 'tiger', emoji: '🐯', level: 1 },
+  { id: 'panda', emoji: '🐼', level: 1 },
+  { id: 'cat', emoji: '🐱', level: 1 },
+  { id: 'dog', emoji: '🐶', level: 1 },
+  { id: 'monkey', emoji: '🐵', level: 1 },
+  { id: 'frog', emoji: '🐸', level: 1 },
+  { id: 'penguin', emoji: '🐧', level: 1 },
+  { id: 'cool', emoji: '😎', level: 1 },
+  { id: 'cowboy', emoji: '🤠', level: 1 },
+  { id: 'robot', emoji: '🤖', level: 1 },
+  { id: 'ghost', emoji: '👻', level: 1 },
+  { id: 'lion', emoji: '🦁', level: 3 },
+  { id: 'unicorn', emoji: '🦄', level: 3 },
+  { id: 'koala', emoji: '🐨', level: 3 },
+  { id: 'ninja', emoji: '🥷', level: 5 },
+  { id: 'wizard', emoji: '🧙', level: 5 },
+  { id: 'vampire', emoji: '🧛', level: 5 },
+  { id: 'alien', emoji: '👽', level: 8 },
+  { id: 'hero', emoji: '🦸', level: 8 },
+  { id: 'wolf', emoji: '🐺', level: 8 },
+  { id: 'dragon', emoji: '🐲', level: 12 },
+  { id: 'eagle', emoji: '🦅', level: 12 },
+  { id: 'joker', emoji: '🃏', level: 18 },
+  { id: 'king', emoji: '🤴', level: 18 },
+  { id: 'queen', emoji: '👸', level: 18 },
+  { id: 'fire', emoji: '🔥', level: 25 },
+  { id: 'diamond', emoji: '💎', level: 25 },
+  { id: 'crown', emoji: '👑', level: 40 },
+] as const;
+
+/** character avatars: girls and boys, drawn in the app (lib/characters.ts); some are doing something (waving, on the phone). New ones go at the end */
+export const AVATAR_CHARACTERS = [
+  { id: 'aarav', kind: 'boy', level: 1 },
+  { id: 'diya', kind: 'girl', level: 1 },
+  { id: 'kabir', kind: 'boy', level: 1 },
+  { id: 'zoya', kind: 'girl', level: 1 },
+  { id: 'rohan', kind: 'boy', level: 1 },
+  { id: 'meera', kind: 'girl', level: 1 },
+  { id: 'ayaan', kind: 'boy', level: 1 },
+  { id: 'sara', kind: 'girl', level: 1 },
+  { id: 'priya', kind: 'girl', level: 1 },
+  { id: 'karan', kind: 'boy', level: 1 },
+  { id: 'neha', kind: 'girl', level: 1 },
+  { id: 'sam', kind: 'boy', level: 1 },
+  { id: 'fatima', kind: 'girl', level: 1 },
+  { id: 'vikram', kind: 'boy', level: 3 },
+  { id: 'anaya', kind: 'girl', level: 3 },
+  { id: 'riya', kind: 'girl', level: 3 },
+  { id: 'aman', kind: 'boy', level: 3 },
+  { id: 'arjun', kind: 'boy', level: 5 },
+  { id: 'tara', kind: 'girl', level: 5 },
+  { id: 'pooja', kind: 'girl', level: 5 },
+  { id: 'rahul', kind: 'boy', level: 5 },
+  { id: 'nia', kind: 'girl', level: 8 },
+  { id: 'yash', kind: 'boy', level: 8 },
+  { id: 'nikhil', kind: 'boy', level: 8 },
+  { id: 'anjali', kind: 'girl', level: 8 },
+  { id: 'raj', kind: 'boy', level: 12 },
+  { id: 'ishita', kind: 'girl', level: 12 },
+  { id: 'veer', kind: 'boy', level: 12 },
+] as const;
+
+/** avatar backgrounds; the colours live in the app (lib/avatars.ts) */
+export const AVATAR_BACKGROUNDS = [
+  { id: 'sunset', level: 1 },
+  { id: 'ocean', level: 1 },
+  { id: 'forest', level: 1 },
+  { id: 'grape', level: 1 },
+  { id: 'candy', level: 1 },
+  { id: 'fire', level: 4 },
+  { id: 'ice', level: 4 },
+  { id: 'night', level: 6 },
+  { id: 'gold', level: 10 },
+  { id: 'galaxy', level: 20 },
+  { id: 'rainbow', level: 30 },
+] as const;
+
+/** an emoji face or a character */
+export type AvatarFace = (typeof AVATAR_FACES)[number] | (typeof AVATAR_CHARACTERS)[number];
+
+/** "<face or character>.<background>", e.g. "fox.sunset" or "priya.ocean"; parts that don't exist (an older or newer app) count as no avatar */
+export function parseAvatar(value: string | null | undefined): { face: AvatarFace; bg: (typeof AVATAR_BACKGROUNDS)[number] } | null {
+  if (typeof value !== 'string') return null;
+  const [faceId, bgId] = value.split('.');
+  const face: AvatarFace | undefined = AVATAR_FACES.find((f) => f.id === faceId) ?? AVATAR_CHARACTERS.find((c) => c.id === faceId);
+  const bg = AVATAR_BACKGROUNDS.find((b) => b.id === bgId);
+  return face && bg ? { face, bg } : null;
+}
+
 export interface WatcherView {
   id: string;
   name: string;
+  /** chosen avatar ("face.bg"); null shows the first letter */
+  avatar: string | null;
   connected: boolean;
   /** for friend requests; null for guests */
   username: string | null;
@@ -225,6 +319,8 @@ export interface Award {
 export interface PublicPlayer {
   id: string;
   name: string;
+  /** chosen avatar ("face.bg"); null shows the first letter (guests, bots, not picked yet) */
+  avatar: string | null;
   cardCount: number;
   connected: boolean;
   place: number | null;
@@ -381,6 +477,8 @@ export interface PublicUser {
   id: string;
   username: string;
   displayName: string;
+  /** chosen avatar ("face.bg"); null shows the first letter */
+  avatar: string | null;
   role: Role;
   coins: number;
   stats: LifetimeStats;
@@ -503,6 +601,7 @@ export interface FriendView {
   id: string;
   username: string;
   displayName: string;
+  avatar: string | null;
   online: boolean;
   level: number;
   /** already in a room: 'here' is the room I'm in; such friends can't be invited */
@@ -516,6 +615,7 @@ export interface PlayerSearchResult {
   id: string;
   username: string;
   displayName: string;
+  avatar: string | null;
   level: number;
   /** null unless they're already a friend */
   online: boolean | null;
@@ -528,6 +628,7 @@ export interface PublicProfile {
   id: string;
   username: string;
   displayName: string;
+  avatar: string | null;
   level: number;
   joinedAt: string;
   /** null unless they're a friend (or me) */

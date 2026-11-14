@@ -10,6 +10,7 @@ import {
   HISTORY_PAGE_SIZE,
   levelOf,
   LOGIN_BONUS,
+  parseAvatar,
   type AdminUser,
   type AuditEntry,
   type AuthResponse,
@@ -42,6 +43,9 @@ const EMPTY_STATS: LifetimeStats = {
 /** lifetime stats, with zeros for any an older account is missing */
 export const statsOf = (u: Pick<UserDoc, 'stats'>): LifetimeStats => ({ ...EMPTY_STATS, ...u.stats });
 
+/** the saved avatar if it's still in the catalog, else null (the first letter) */
+export const avatarOf = (u: Pick<UserDoc, 'avatar'>): string | null => (parseAvatar(u.avatar) ? u.avatar! : null);
+
 /** coins an account can still give friends today */
 export const giftLeftOf = (u: Pick<UserDoc, 'giftDay' | 'giftGiven'>, today = istDay()): number =>
   u.giftDay === today ? Math.max(0, DAILY_GIFT_LIMIT - (u.giftGiven ?? 0)) : DAILY_GIFT_LIMIT;
@@ -57,6 +61,7 @@ export function toPublicUser(u: WithId<UserDoc>): PublicUser {
     createdAt: u.createdAt.toISOString(),
     giftLeft: giftLeftOf(u),
     tutorials: u.tutorials ?? [],
+    avatar: avatarOf(u),
   };
 }
 
@@ -142,8 +147,8 @@ export class UserService {
 
   async getAccounts(userIds: string[]): Promise<Map<string, AccountInfo>> {
     const ids = userIds.filter((id) => /^[a-f0-9]{24}$/i.test(id)).map((id) => new ObjectId(id));
-    const users = await this.cols.users.find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1 } }).toArray();
-    return new Map(users.map((u) => [u._id.toHexString(), { coins: u.coins, level: levelOf(statsOf(u)), stats: statsOf(u) }]));
+    const users = await this.cols.users.find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1, avatar: 1 } }).toArray();
+    return new Map(users.map((u) => [u._id.toHexString(), { coins: u.coins, level: levelOf(statsOf(u)), stats: statsOf(u), avatar: avatarOf(u) }]));
   }
 
   async logout(token: string): Promise<void> {
@@ -324,6 +329,23 @@ export class UserService {
       { _id: new ObjectId(), action: 'gift', targetUserId: toOid, byUserId: fromOid, via: 'player', amount, balanceAfter: to.coins, detail: `Gift from ${from.displayName}`, createdAt: at },
     ]);
     return { from, to };
+  }
+
+  /** picks an avatar (or null for the first letter); faces and backgrounds above the account's level are refused */
+  async setAvatar(userId: ObjectId, avatar: string | null): Promise<PublicUser> {
+    if (avatar === null) {
+      const cleared = await this.cols.users.findOneAndUpdate({ _id: userId }, { $unset: { avatar: '' } }, { returnDocument: 'after' });
+      if (!cleared) throw new ApiError(404, 'User not found');
+      return toPublicUser(cleared);
+    }
+    const parts = parseAvatar(avatar);
+    if (!parts) throw new ApiError(400, 'Pick one of the avatars');
+    const user = await this.cols.users.findOne({ _id: userId });
+    if (!user) throw new ApiError(404, 'User not found');
+    const need = Math.max(parts.face.level, parts.bg.level);
+    if (levelOf(statsOf(user)) < need) throw new ApiError(400, `Reach level ${need} for that avatar`);
+    const updated = await this.cols.users.findOneAndUpdate({ _id: userId }, { $set: { avatar } }, { returnDocument: 'after' });
+    return toPublicUser(updated!);
   }
 
   /** the practice tutorial for a game is done (finished or skipped); shown once per account */

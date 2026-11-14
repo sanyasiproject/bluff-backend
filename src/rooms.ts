@@ -108,6 +108,7 @@ export class Room {
       level: account?.level ?? null,
       stats: account?.stats ?? null,
       bot: false,
+      avatar: account?.avatar ?? null,
     };
     this.members.push(member);
     if (!this.hostId) this.hostId = member.id;
@@ -521,6 +522,7 @@ export class Room {
       players: seated.map((m) => ({
         id: m.id,
         name: m.name,
+        avatar: m.bot ? null : m.avatar,
         connected: m.bot || m.socketId !== null,
         cardCount: g?.hands.get(m.id)?.length ?? 0,
         place: g ? g.places.indexOf(m.id) + 1 || null : null,
@@ -535,6 +537,7 @@ export class Room {
         .map((m) => ({
           id: m.id,
           name: m.name,
+          avatar: m.avatar,
           connected: m.socketId !== null,
           username: m.username,
           level: m.level,

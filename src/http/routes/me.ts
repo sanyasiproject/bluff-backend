@@ -6,7 +6,7 @@ import { asPayload, parseQueryInt } from '../../validate.js';
 import { ApiError } from '../errors.js';
 import { ah, currentUser, requireUser } from '../middleware.js';
 
-export function meRoutes(store: Store): Router {
+export function meRoutes(store: Store, onAvatarChanged: (userId: string, avatar: string | null) => void): Router {
   const r = Router();
   r.use(requireUser(store));
 
@@ -27,6 +27,18 @@ export function meRoutes(store: Store): Router {
       const [overview, friends] = await Promise.all([store.users.overview(me), store.friends.countFor(me._id)]);
       const body: ProfileOverview = { ...overview, friends };
       res.json(body);
+    }),
+  );
+
+  // a face on a background ("fox.sunset"), or null for the first letter; locked ones need the level first
+  r.post(
+    '/avatar',
+    ah(async (req, res) => {
+      const avatar = asPayload(req.body).avatar;
+      if (avatar !== null && (typeof avatar !== 'string' || avatar.length > 40)) throw new ApiError(400, 'Pick one of the avatars');
+      const user = await store.users.setAvatar(currentUser(res)._id, avatar);
+      onAvatarChanged(user.id, user.avatar);
+      res.json({ user });
     }),
   );
 

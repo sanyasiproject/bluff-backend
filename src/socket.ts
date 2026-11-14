@@ -52,7 +52,7 @@ type Seat = { room: Room; member: Member };
 const formatCoins = (n: number) => n.toLocaleString('en-IN');
 const listNames = (members: Member[]) => members.map((m) => m.name).join(', ');
 
-/** Wires socket events to rooms; returns a stop function for the sweep timer */
+/** Wires socket events to rooms; returns stop (the sweep timer) and live account updates */
 export function registerHandlers(
   io: Server,
   rooms: RoomManager,
@@ -61,7 +61,7 @@ export function registerHandlers(
   maxConnectionsPerIp = MAX_CONNECTIONS_PER_IP,
   /** bots' thinking pace: 1 = human-like; tests use a small number */
   botSpeed = 1,
-): () => void {
+): { stop: () => void; avatarChanged: (userId: string, avatar: string | null) => void } {
   // every player gets their own view so hands stay private; bots then plan their next move
   const broadcast = (room: Room) => {
     for (const m of room.members) if (m.socketId) io.to(m.socketId).emit('state', room.view(m.id));
@@ -209,7 +209,7 @@ export function registerHandlers(
     } catch {
       // shown as unknown until the next game ends
     }
-    return { userId: u.id, username: u.username, coins: fresh?.coins ?? null, level: fresh?.level ?? null, stats: fresh?.stats ?? null };
+    return { userId: u.id, username: u.username, coins: fresh?.coins ?? null, level: fresh?.level ?? null, stats: fresh?.stats ?? null, avatar: fresh?.avatar ?? null };
   };
 
   /** accounts on or off, and whether guests may play right now */
@@ -677,10 +677,20 @@ export function registerHandlers(
     c7auto.prune();
   }, SWEEP_EVERY_MS);
   timer.unref();
-  return () => {
-    clearInterval(timer);
-    bots.stop();
-    c7bots.stop();
-    c7auto.stop();
+  return {
+    stop: () => {
+      clearInterval(timer);
+      bots.stop();
+      c7bots.stop();
+      c7auto.stop();
+    },
+    /** a player changed their avatar: their seat in any room shows it at once */
+    avatarChanged: (userId: string, avatar: string | null) => {
+      const room = rooms.roomOfUser(userId);
+      const member = room?.members.find((m) => m.userId === userId);
+      if (!room || !member) return;
+      member.avatar = avatar;
+      broadcast(room);
+    },
   };
 }
