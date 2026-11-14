@@ -22,8 +22,8 @@ afterAll(() => {
   server.close();
 });
 
-async function client(): Promise<Client> {
-  const c: Client = { socket: connect(url, { transports: ['websocket'], forceNew: true }), state: null, notes: [] };
+async function client(at = url): Promise<Client> {
+  const c: Client = { socket: connect(at, { transports: ['websocket'], forceNew: true }), state: null, notes: [] };
   c.socket.on('state', (s: RoomView) => (c.state = s));
   c.socket.on('announce', (n: Announcement) => c.notes.push(n));
   await new Promise<void>((resolve) => c.socket.once('connect', () => resolve()));
@@ -44,8 +44,8 @@ async function until(check: () => boolean, ms = 3000) {
 const C7 = { game: 'crazy7', decks: 1, bluffRule: 'one', stake: 0, handSize: 5, maxPicks: 2, stack7: true };
 
 /** a room of people playing Crazy 7 */
-async function crazyRoom(names: string[]) {
-  const people = await Promise.all(names.map(() => client()));
+async function crazyRoom(names: string[], at = url) {
+  const people = await Promise.all(names.map(() => client(at)));
   const created = await send(people[0], 'room:create', { name: names[0] });
   for (const [i, p] of people.slice(1).entries()) expect(await send(p, 'room:join', { code: created.code, name: names[i + 1] })).toMatchObject({ ok: true });
   expect(await send(people[0], 'room:config', { ...C7, teams: true, peeks: 2 })).toEqual({ ok: true });
@@ -58,15 +58,23 @@ async function crazyRoom(names: string[]) {
   return people;
 }
 
+/** every view shows the same moment of the game (each player hears about a change a moment apart) */
+const sameMoment = (people: Client[]) => {
+  const a = people[0].state!;
+  const at = (v: RoomView) => v.crazy7?.last?.id ?? 0;
+  return people.every((x) => x.state!.phase === a.phase && x.state!.turnId === a.turnId && at(x.state!) === at(a));
+};
+
 /** the player on turn makes one simple, legal move */
 async function step(people: Client[]) {
-  const turnId = people[0].state!.turnId;
-  const p = people.find((x) => x.state!.meId === turnId)!;
+  // judged on a view that may lag, a move could meet a turn the room is about to play for them
+  await until(() => sameMoment(people));
+  if (people[0].state!.phase !== 'playing') return;
+  const p = people.find((x) => x.state!.meId === people[0].state!.turnId)!;
   const v = p.state!.crazy7!;
   let before = v.last?.id ?? 0;
-  // the room is about to pick or pass for them: nothing to do but wait (and a move now is refused)
+  // the room is about to pick or pass for them: wait for it (the refusal of a move meanwhile is checked at human pace below)
   if (v.auto) {
-    expect(await send(p, 'c7:pick')).toEqual({ ok: false, error: 'One moment, picking for you' });
     await until(() => people.every((x) => (x.state!.crazy7?.last?.id ?? 0) > before || x.state!.phase === 'over'));
     return;
   }
@@ -130,5 +138,43 @@ describe('crazy 7 over sockets', () => {
     await until(() => a.state!.phase === 'over');
     expect(a.state!.winnerIds).toEqual([a.state!.meId]);
     expect(a.state!.leftPlayers.map((p) => p.name)).toEqual(['Dev']);
+  });
+});
+
+describe('crazy 7 at human pace', () => {
+  let slow: ReturnType<typeof createBluffServer>;
+  let slowUrl = '';
+
+  beforeAll(async () => {
+    // automatic steps wait over a second here, so a move sent meanwhile always arrives first
+    slow = createBluffServer({ limits: { createsPerIp: 10_000, liveRoomsPerIp: 10_000 }, botSpeed: 1 });
+    await new Promise<void>((resolve) => slow.httpServer.listen(0, resolve));
+    slowUrl = `http://localhost:${(slow.httpServer.address() as AddressInfo).port}`;
+  });
+
+  afterAll(() => slow.close());
+
+  it('refuses a move while the room is about to pick or pass for that player', async () => {
+    const people = await crazyRoom(['Isha', 'Om'], slowUrl);
+    try {
+      for (let i = 0; i < 300; i++) {
+        await until(() => sameMoment(people));
+        // a game can end before anything automatic comes up: deal again
+        if (people[0].state!.phase === 'over') {
+          expect(await send(people[0], 'room:rematch')).toEqual({ ok: true });
+          await until(() => people.every((x) => x.state!.phase === 'playing') && sameMoment(people));
+          continue;
+        }
+        const p = people.find((x) => x.state!.meId === people[0].state!.turnId)!;
+        if (p.state!.crazy7!.auto) {
+          expect(await send(p, 'c7:pick')).toEqual({ ok: false, error: 'One moment, picking for you' });
+          return;
+        }
+        await step(people);
+      }
+      throw new Error('no automatic step came up');
+    } finally {
+      people.forEach((c) => c.socket.disconnect());
+    }
   });
 });
