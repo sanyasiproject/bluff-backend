@@ -161,6 +161,8 @@ export interface ChatEvent {
   from: string;
   kind: ChatKind;
   index: number;
+  /** 'pile': a reaction dropped on the last play (long-press the pile); otherwise it floats up the screen */
+  on?: 'pile';
 }
 
 /** emoji a player throws at someone in the room; everyone sees it fly across. New ones go at the end: the index is what's sent */
@@ -383,6 +385,8 @@ export interface PublicUser {
   createdAt: string;
   /** coins this player can still give friends today */
   giftLeft: number;
+  /** games whose practice tutorial this account has finished or skipped */
+  tutorials: GameKind[];
 }
 
 export interface AuthResponse {

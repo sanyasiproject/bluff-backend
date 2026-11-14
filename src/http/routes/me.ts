@@ -2,7 +2,8 @@ import { Router } from 'express';
 import type { Store } from '../../services/store.js';
 import { toPublicUser } from '../../services/users.js';
 import type { ProfileOverview } from '../../types.js';
-import { parseQueryInt } from '../../validate.js';
+import { asPayload, parseQueryInt } from '../../validate.js';
+import { ApiError } from '../errors.js';
 import { ah, currentUser, requireUser } from '../middleware.js';
 
 export function meRoutes(store: Store): Router {
@@ -26,6 +27,16 @@ export function meRoutes(store: Store): Router {
       const [overview, friends] = await Promise.all([store.users.overview(me), store.friends.countFor(me._id)]);
       const body: ProfileOverview = { ...overview, friends };
       res.json(body);
+    }),
+  );
+
+  // the practice tutorial for a game was finished or skipped: it isn't offered again on any phone
+  r.post(
+    '/tutorial',
+    ah(async (req, res) => {
+      const game = asPayload(req.body).game;
+      if (game !== 'bluff' && game !== 'crazy7') throw new ApiError(400, 'Unknown game');
+      res.json({ user: await store.users.markTutorial(currentUser(res)._id, game) });
     }),
   );
 

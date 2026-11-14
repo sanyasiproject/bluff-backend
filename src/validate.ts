@@ -133,15 +133,17 @@ export function parsePlayId(value: unknown): string {
   return value;
 }
 
-/** only picks from the fixed lists, never free text */
-export function parseChat(p: Payload): { kind: ChatKind; index: number } {
+/** only picks from the fixed lists, never free text; on 'pile' (reactions only) drops it on the last play */
+export function parseChat(p: Payload): { kind: ChatKind; index: number; on?: 'pile' } {
   const kind = p.kind === 'reaction' || p.kind === 'message' ? p.kind : null;
   const size = kind === 'reaction' ? REACTIONS.length : QUICK_MESSAGES.length;
   const index = p.index;
   if (!kind || typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= size) {
     throw new GameError('Invalid message');
   }
-  return { kind, index };
+  if (p.on === undefined || p.on === null) return { kind, index };
+  if (p.on !== 'pile' || kind !== 'reaction') throw new GameError('Invalid message');
+  return { kind, index, on: 'pile' };
 }
 
 export function parseThrow(p: Payload): { to: string; index: number } {

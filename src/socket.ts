@@ -610,8 +610,8 @@ export function registerHandlers(
 
     on('chat:send', (p) => {
       const { room, member } = current();
-      const { kind, index } = parseChat(p);
-      io.to(room.code).emit('chat', room.chat(member.id, kind, index));
+      const { kind, index, on } = parseChat(p);
+      io.to(room.code).emit('chat', room.chat(member.id, kind, index, on));
     });
 
     // an emoji flies from one person to another; everyone in the room sees it

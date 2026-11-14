@@ -278,6 +278,18 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
 
   const coinsOf = async (token: string) => (await api().get('/api/me').set(bearer(token))).body.user.coins as number;
 
+  it('remembers which practice tutorials an account has done, on every phone', async () => {
+    const reg = await register('tutor_ial');
+    const auth = bearer(reg.body.token);
+    expect(reg.body.user.tutorials).toEqual([]);
+    expect((await api().post('/api/me/tutorial').send({ game: 'bluff' })).status).toBe(401);
+    expect((await api().post('/api/me/tutorial').set(auth).send({ game: 'poker' })).status).toBe(400);
+    expect((await api().post('/api/me/tutorial').set(auth).send({ game: 'crazy7' })).body.user.tutorials).toEqual(['crazy7']);
+    await api().post('/api/me/tutorial').set(auth).send({ game: 'crazy7' });
+    await api().post('/api/me/tutorial').set(auth).send({ game: 'bluff' });
+    expect((await api().get('/api/me').set(auth)).body.user.tutorials).toEqual(['crazy7', 'bluff']);
+  });
+
   it('pays the daily login bonus once per day', async () => {
     const reg = await register('daily_d');
     expect(reg.body.user.coins).toBe(1200);

@@ -479,12 +479,14 @@ export class Room {
     return this.c7;
   }
 
-  chat(by: string, kind: ChatKind, index: number): ChatEvent {
+  /** on 'pile': an emoji dropped on the last play, only while a game is on */
+  chat(by: string, kind: ChatKind, index: number, on?: 'pile'): ChatEvent {
     this.member(by);
+    if (on && (!this.table || this.table.over)) throw new GameError('Nothing to react to right now');
     const now = Date.now();
     if (now - (this.lastChat.get(by) ?? 0) < CHAT_GAP_MS) throw new GameError('Slow down');
     this.lastChat.set(by, now);
-    return { from: by, kind, index };
+    return on ? { from: by, kind, index, on } : { from: by, kind, index };
   }
 
   /** an emoji thrown at someone else in the room; shares the chat speed limit */

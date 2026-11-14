@@ -1,6 +1,6 @@
 import type { Collection, ObjectId } from 'mongodb';
 import type { PlayerStats } from '../models.js';
-import type { AuditAction, GameConfig, LifetimeStats, Role } from '../types.js';
+import type { AuditAction, GameConfig, GameKind, LifetimeStats, Role } from '../types.js';
 
 /** database and collection names, all overridable from env */
 export interface DbNames {
@@ -39,6 +39,8 @@ export interface UserDoc {
   giftDay?: string;
   /** coins given to friends on giftDay */
   giftGiven?: number;
+  /** games whose practice tutorial they finished or skipped */
+  tutorials?: GameKind[];
 }
 
 export interface SessionDoc {

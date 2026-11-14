@@ -99,6 +99,20 @@ describe('crazy 7 over sockets', () => {
     await until(() => people.every((p) => p.state!.phase === 'playing' && p.state!.hand.length >= 5));
   });
 
+  it('drops a reaction on the pile for everyone, only while a game is on', async () => {
+    const [a, b] = await crazyRoom(['Neha', 'Arjun']);
+    const got: unknown[] = [];
+    b.socket.on('chat', (c: unknown) => got.push(c));
+    expect(await send(a, 'chat:send', { kind: 'message', index: 0, on: 'pile' })).toEqual({ ok: false, error: 'Invalid message' });
+    expect(await send(a, 'chat:send', { kind: 'reaction', index: 3, on: 'pile' })).toEqual({ ok: true });
+    await until(() => got.length === 1);
+    expect(got[0]).toEqual({ from: a.state!.meId, kind: 'reaction', index: 3, on: 'pile' });
+    expect(await send(a, 'room:lobby')).toEqual({ ok: true });
+    await until(() => a.state!.phase === 'lobby');
+    await new Promise((r) => setTimeout(r, 750));
+    expect(await send(a, 'chat:send', { kind: 'reaction', index: 3, on: 'pile' })).toEqual({ ok: false, error: 'Nothing to react to right now' });
+  });
+
   it('lets a player leave mid-game as a forfeit; the last one left wins', async () => {
     const [a, b] = await crazyRoom(['Kiran', 'Dev']);
     expect(await send(b, 'room:leave')).toEqual({ ok: true });

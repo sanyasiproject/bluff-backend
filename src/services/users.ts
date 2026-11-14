@@ -13,6 +13,7 @@ import {
   type AdminUser,
   type AuditEntry,
   type AuthResponse,
+  type GameKind,
   type LifetimeStats,
   type ProfileOverview,
   type PublicUser,
@@ -55,6 +56,7 @@ export function toPublicUser(u: WithId<UserDoc>): PublicUser {
     stats: statsOf(u),
     createdAt: u.createdAt.toISOString(),
     giftLeft: giftLeftOf(u),
+    tutorials: u.tutorials ?? [],
   };
 }
 
@@ -322,6 +324,13 @@ export class UserService {
       { _id: new ObjectId(), action: 'gift', targetUserId: toOid, byUserId: fromOid, via: 'player', amount, balanceAfter: to.coins, detail: `Gift from ${from.displayName}`, createdAt: at },
     ]);
     return { from, to };
+  }
+
+  /** the practice tutorial for a game is done (finished or skipped); shown once per account */
+  async markTutorial(userId: ObjectId, game: GameKind): Promise<PublicUser> {
+    const user = await this.cols.users.findOneAndUpdate({ _id: userId }, { $addToSet: { tutorials: game } }, { returnDocument: 'after' });
+    if (!user) throw new ApiError(404, 'User not found');
+    return toPublicUser(user);
   }
 
   /** an app-wide setting change goes in the admin's own history */

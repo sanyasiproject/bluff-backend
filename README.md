@@ -103,6 +103,7 @@ All bodies are JSON. Protected routes need `Authorization: Bearer <token>` (the 
 | `GET /api/me` | logged in | – | `{ user, bonus, friendRequests }` (bonus = daily +200 if just paid) |
 | `GET /api/me/games` | logged in | `?limit=20` | `{ games }` most recent first, with per-game stats and coins |
 | `GET /api/me/overview` | logged in | – | `{ coinRank, players, friends, loginBonusToday, gameBonusToday }` for the profile page |
+| `POST /api/me/tutorial` | logged in | `{ game: 'bluff' \| 'crazy7' }` | `{ user }`; that game's practice tutorial is done (finished or skipped), so it isn't offered again (`user.tutorials`) |
 | `GET /api/friends` | logged in | – | `{ friends, incoming, outgoing }` with `online`, `inRoom` and `roomPhase` (the stage of a friend's other room) |
 | `GET /api/players/:username` | logged in | – | `{ profile }`: name, level, joined date, online (friends and yourself only, else `null`), game stats and friend status; never coins, role or login times |
 | `GET /api/friends/search` | logged in | `?q=` (2+ letters; username start or display name) | `{ players }` with `level`, `online` (friends only, else `null`), `status` |
@@ -192,7 +193,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `c7:pick` | – (Crazy 7, your turn: pick one card, up to `maxPicks` a turn; while a 7's pick waits, take it) |
 | `c7:pass` | – (Crazy 7, your turn: stop picking early; only after a pick and while more picks are allowed) |
 | `c7:call` | – (Crazy 7: "last card", with one card left, or on your turn with two) |
-| `chat:send` | `{ kind: 'reaction' \| 'message', index }` |
+| `chat:send` | `{ kind: 'reaction' \| 'message', index, on? }` (`on: 'pile'`, reactions only, while a game is on: the emoji lands on the last play instead of floating up) |
 | `chat:throw` | `{ to: memberId, index }` (index into `THROWS`; shares the chat speed limit) |
 | `friend:gift` | `{ memberId \| userId, amount }` (logged in, friends only; amount from `GIFT_STEPS`; at most `DAILY_GIFT_LIMIT` = 100 coins given per IST day in total) → `{ coins, giftLeft }` |
 | `room:kick` | `{ memberId }` (host only; mid-game the player's cards leave the game) |
