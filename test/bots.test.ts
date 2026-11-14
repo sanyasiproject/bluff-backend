@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { chooseTurn, decideCall, suspicion, type Situation } from '../src/bots/brain.js';
+import { chooseTurn, decideCall, fakeSpots, pushRate, suspicion, type Situation } from '../src/bots/brain.js';
 import { BotMemory } from '../src/bots/memory.js';
-import type { BotStyle, Personality, Rand } from '../src/bots/models.js';
+import type { BotStyle, Personality, Rand, Read } from '../src/bots/models.js';
 import { BOT_NAMES, BOT_STYLES, makePersonality, pickName, pickStyle } from '../src/bots/personality.js';
 import type { PlayerStats } from '../src/models.js';
 import { Room } from '../src/rooms.js';
@@ -164,5 +164,102 @@ describe('bot engine', () => {
     expect(pickName([...BOT_NAMES], rand)).toBeNull();
     expect(BOT_NAMES).toEqual(expect.arrayContaining(['Isha', 'Vihu', 'Ningu']));
     expect(BOT_NAMES).not.toContain('Sweety');
+  });
+});
+
+/** what a bot has seen of one player, with blanks filled in */
+const readOf = (r: Partial<Read>): Read => ({
+  caught: 0,
+  honest: 0,
+  goodCalls: 0,
+  wrongCalls: 0,
+  chances: 0,
+  lack: 0,
+  passes: 0,
+  firstTried: 0,
+  firstFound: 0,
+  lastTried: 0,
+  lastFound: 0,
+  midTried: 0,
+  midFound: 0,
+  openCaught: 0,
+  openHonest: 0,
+  followCaught: 0,
+  followHonest: 0,
+  ...r,
+});
+
+/** one person against bots for a few games in a row (bots keep what they learned), the person slipping a fake into every play */
+function pusherSession(bots: number, games: number, seed: number) {
+  const rand = seeded(seed);
+  const styles = [...BOT_STYLES].sort(() => rand() - 0.5).slice(0, bots);
+  const mes = styles.map((st) => makePersonality(st, rand));
+  // what each bot learned about the person, kept from game to game
+  const learned: Read[] = styles.map(() => readOf({}));
+  let wins = 0;
+  for (let game = 0; game < games; game++) {
+    const room = new Room('TEST');
+    const host = room.addMember('Asha');
+    styles.forEach((_, i) => room.addBot(host.id, `Bot${i}`));
+    room.setConfig(host.id, { ...CONFIG });
+    room.start(host.id);
+    const g = room.game!;
+    const [person, ...botIds] = room.players().map((m) => m.id);
+    const seats = botIds.map((id, i) => ({ id, me: mes[i], mem: new BotMemory(id, new Map([[person, learned[i]]]), new Map()) }));
+    const sit = (st: (typeof seats)[number]): Situation => ({ view: room.view(st.id), mem: st.mem, me: st.me, rand });
+    const feed = (events: ReturnType<typeof g.pass>) => seats.forEach((st) => st.mem.observe(events, room.view(st.id), st.me.tilt));
+    const noPeek = () => null;
+    for (let moves = 0; !g.over && moves < 3000; moves++) {
+      if (g.lastPlay) {
+        const caller = seats.find((st) => st.id !== g.turnId && g.hand(st.id).length > 0 && g.lastPlay && decideCall(sit(st), false, noPeek));
+        if (caller) {
+          feed(g.callBluff(caller.id, g.lastPlay!.id, decideCall(sit(caller), false, noPeek)?.cardIndex ?? 0, 0));
+          continue;
+        }
+      }
+      if (g.turnId === person) {
+        const hand = g.hand(person);
+        const rank = g.roundRank ?? hand[0].rank;
+        const real = hand.filter((c) => c.rank === rank);
+        const fake = hand.filter((c) => c.rank !== rank).slice(0, 1);
+        feed(g.play(person, [...real, ...fake].map((c) => c.id), g.roundRank ? undefined : rank));
+      } else {
+        const st = seats.find((x) => x.id === g.turnId)!;
+        const move = chooseTurn(sit(st), noPeek);
+        if (move.kind === 'play') st.mem.pendingMine = move.cardIds.map((id) => g.hand(st.id).find((c) => c.id === id)!);
+        feed(move.kind === 'call' ? g.callBluff(st.id, g.lastPlay!.id, move.cardIndex, 0) : move.kind === 'pass' ? g.pass(st.id) : g.play(st.id, move.cardIds, move.rank));
+      }
+    }
+    if (g.places[0] === person) wins++;
+  }
+  return wins / games;
+}
+
+describe('bots against a player who lies all the time', () => {
+  it('reads a player who never passes as pushing fakes, and one who passes as honest', () => {
+    const s = (r: Read) => ({ mem: { reads: new Map([['p', r]]) } }) as unknown as Situation;
+    // eight turns where they likely had none of the rank half the time
+    expect(pushRate(s(readOf({ lack: 4, passes: 0 })), 'p')).toBeGreaterThan(0.6);
+    expect(pushRate(s(readOf({ lack: 4, passes: 4 })), 'p')).toBeLessThan(0.15);
+  });
+
+  it('learns where a person hides fakes; bots shuffle, so their cards stay even', () => {
+    const s = (bot: boolean, r: Read) =>
+      ({ view: { players: [{ id: 'p', bot }] }, mem: { reads: new Map([['p', r]]) } }) as unknown as Situation;
+    // the first guess leans to the last card, the one people tend to tap last
+    const fresh = fakeSpots(s(false, readOf({})), 'p', 3);
+    expect(fresh[2]).toBeGreaterThan(fresh[0]);
+    // after a few calls that found their fakes first, it looks there
+    const first = fakeSpots(s(false, readOf({ firstTried: 3, firstFound: 3, lastTried: 3, lastFound: 0 })), 'p', 3);
+    expect(first[0]).toBeGreaterThan(first[1]);
+    expect(first[0]).toBeGreaterThan(first[2]);
+    expect(fakeSpots(s(true, readOf({ lastTried: 5, lastFound: 5 })), 'p', 3)).toEqual([1 / 3, 1 / 3, 1 / 3]);
+  });
+
+  it('beats a player who slips a fake into every play', () => {
+    let rate = 0;
+    for (let seed = 1; seed <= 8; seed++) rate += pusherSession(1, 5, seed * 31) / 8;
+    // one bot against one person: an even game is 50%
+    expect(rate).toBeLessThan(0.2);
   });
 });

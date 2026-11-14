@@ -45,6 +45,22 @@ export interface Read {
   wrongCalls: number;
   /** plays by others they could have called */
   chances: number;
+  /** their turns in a running round: how many, by the odds, came with none of the rank (summed chances) */
+  lack: number;
+  /** of those turns, how many they passed; a player who never passes when they likely lack the rank is padding with fakes */
+  passes: number;
+  /** checks of the first, last and middle cards of their called plays (cards go down in tap order), and how many were fake */
+  firstTried: number;
+  firstFound: number;
+  lastTried: number;
+  lastFound: number;
+  midTried: number;
+  midFound: number;
+  /** their called plays of 2+ cards, openings and follow-ups apart: caught with a fake, or held up (one card of n checked counts 1/n) */
+  openCaught: number;
+  openHonest: number;
+  followCaught: number;
+  followHonest: number;
 }
 
 /** one play sitting in the current pile */
