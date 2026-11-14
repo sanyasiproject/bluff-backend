@@ -21,7 +21,14 @@ export function friendRoutes(store: Store, presence: Presence, notify: NotifyFri
     list.map((f) => {
       const theirs = roomOf(f.id);
       const here = theirs?.code === myRoom;
-      return { ...f, online: presence.isOnline(f.id), inRoom: !theirs ? null : here ? 'here' : 'other', roomPhase: theirs && !here ? theirs.phase : null };
+      const online = presence.isOnline(f.id);
+      return {
+        ...f,
+        online,
+        lastSeen: online ? null : f.lastSeen,
+        inRoom: !theirs ? null : here ? 'here' : 'other',
+        roomPhase: theirs && !here ? theirs.phase : null,
+      };
     });
 
   r.get(
@@ -45,8 +52,13 @@ export function friendRoutes(store: Store, presence: Presence, notify: NotifyFri
     limited,
     ah(async (req, res) => {
       const players = await store.friends.search(currentUser(res)._id, parseSearch(req.query.q));
-      // online status only for people who are already friends
-      res.json({ players: players.map((p) => ({ ...p, online: p.status === 'friend' ? presence.isOnline(p.id) : null })) });
+      // online status and last online time only for people who are already friends
+      res.json({
+        players: players.map((p) => {
+          const online = p.status === 'friend' ? presence.isOnline(p.id) : null;
+          return { ...p, online, lastSeen: online === false ? p.lastSeen : null };
+        }),
+      });
     }),
   );
 

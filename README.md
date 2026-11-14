@@ -55,6 +55,7 @@ Everything else has a built-in default: database `bluff`; collections `users`, `
 - Coins move only when a game **finishes**: every logged-in player pays the stake and the winner (1st place) gets the whole pot. A game stopped by the host, or by kicks leaving one player before anyone finished, moves nothing. A kicked player pays nothing and wins nothing. A player who uses **Leave game** mid-game forfeits: they lose and still pay the stake (in 2v2 their team loses; if one player is left, they win).
 - Every finished game stores the stake, pot and each player's coin change in `games`.
 - **Bots** have no coins. With a bot seated the stake is at most 100 (`BOT_MAX_STAKE`; adding a bot lowers a higher stake). People pay in as usual; bots put in nothing, but their seats count: a person who wins takes the stake for every seat. If a bot wins, the people's stakes are simply gone. Bets work the same way (lost to a bot: gone; won from a bot: paid in full). Bot games count for XP, stats and the daily ladder like any other.
+- **Last online:** `users.lastSeenAt` is saved when an account's first connection opens and when its last one closes (so a restart can't leave it far behind). Friends see it while that friend is offline (`lastSeen`); older accounts fall back to their last login.
 - **Gifts:** friends can give each other 10 / 25 / 50 / 100 coins, at most 100 a day in total per giver (one atomic update checks balance and limit). Both sides get an audit entry (`gift`), shown in the admin history. `PublicUser.giftLeft` says what's left today.
 
 ## Crazy 7 (second game)
@@ -111,9 +112,9 @@ All bodies are JSON. Protected routes need `Authorization: Bearer <token>` (the 
 | `POST /api/me/back` | logged in | `{ back: id \| null }` (ids in `CARD_BACKS`) | `{ user }`; 400 "Reach level N for that card back" when locked; null goes back to the classic one. Rooms they're in update at once; every seat carries its player's `back`, and `pileTopBy` says who played each of the top Bluff pile cards, so everyone sees each player's cards in that player's back |
 | `POST /api/me/table` | logged in | `{ table: id \| null }` (ids in `TABLE_THEMES`) | `{ user }`; 400 "Reach level N for that table" when locked; null goes back to classic green. Rooms they're in update at once; every seat carries its player's `table`, so everyone sees that player's seat box in their table style |
 | `POST /api/me/tutorial` | logged in | `{ game: 'bluff' \| 'crazy7' }` | `{ user }`; that game's practice tutorial is done (finished or skipped), so it isn't offered again (`user.tutorials`) |
-| `GET /api/friends` | logged in | – | `{ friends, incoming, outgoing }` with `online`, `inRoom` and `roomPhase` (the stage of a friend's other room) |
-| `GET /api/players/:username` | logged in | – | `{ profile }`: name, level, joined date, online (friends and yourself only, else `null`), game stats and friend status; never coins, role or login times |
-| `GET /api/friends/search` | logged in | `?q=` (2+ letters; username start or display name) | `{ players }` with `level`, `online` (friends only, else `null`), `status` |
+| `GET /api/friends` | logged in | – | `{ friends, incoming, outgoing }` with `online`, `lastSeen` (when an offline friend last had the app open; `null` while online and for requests), `inRoom` and `roomPhase` (the stage of a friend's other room) |
+| `GET /api/players/:username` | logged in | – | `{ profile }`: name, level, joined date, online (friends and yourself only, else `null`), `lastSeen` (an offline friend's last online time, else `null`), game stats and friend status; never coins, role or login times |
+| `GET /api/friends/search` | logged in | `?q=` (2+ letters; username start or display name) | `{ players }` with `level`, `online` and `lastSeen` (friends only, else `null`), `status` |
 | `POST /api/friends/request` | logged in | `{ username }` | `{ result: 'sent' \| 'accepted' }` |
 | `POST /api/friends/:id/accept` | logged in | – | 204 |
 | `POST /api/friends/:id/remove` | logged in | – | 204 (decline, cancel or unfriend) |

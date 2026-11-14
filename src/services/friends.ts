@@ -2,7 +2,7 @@ import { MongoServerError, ObjectId, type WithId } from 'mongodb';
 import type { Collections, FriendDoc, UserDoc } from '../db/documents.js';
 import { ApiError } from '../http/errors.js';
 import { levelOf, type FriendView, type PlayerSearchResult, type PublicProfile } from '../types.js';
-import { avatarOf, escapeRegex, statsOf } from './users.js';
+import { avatarOf, escapeRegex, lastSeenOf, statsOf } from './users.js';
 
 const pairOf = (a: ObjectId, b: ObjectId) => [a.toHexString(), b.toHexString()].sort().join('_');
 
@@ -15,13 +15,26 @@ export class FriendService {
     const links = await this.cols.friends.find({ $or: [{ requester: me }, { recipient: me }] }).toArray();
     const otherOf = (f: FriendDoc) => (f.requester.equals(me) ? f.recipient : f.requester);
     const users = await this.cols.users
-      .find({ _id: { $in: links.map(otherOf) } }, { projection: { username: 1, displayName: 1, stats: 1, avatar: 1 } })
+      .find({ _id: { $in: links.map(otherOf) } }, { projection: { username: 1, displayName: 1, stats: 1, avatar: 1, lastSeenAt: 1, lastLoginAt: 1 } })
       .toArray();
     const byId = new Map(users.map((u) => [u._id.toHexString(), u]));
     const view = (f: FriendDoc): FriendView[] => {
       const u = byId.get(otherOf(f).toHexString());
       return u
-        ? [{ id: u._id.toHexString(), username: u.username, displayName: u.displayName, avatar: avatarOf(u), online: false, level: levelOf(statsOf(u)), inRoom: null, roomPhase: null }]
+        ? [
+            {
+              id: u._id.toHexString(),
+              username: u.username,
+              displayName: u.displayName,
+              avatar: avatarOf(u),
+              online: false,
+              // only friends get it; the caller clears it while they're online
+              lastSeen: f.status === 'accepted' ? lastSeenOf(u) : null,
+              level: levelOf(statsOf(u)),
+              inRoom: null,
+              roomPhase: null,
+            },
+          ]
         : [];
     };
     const byName = (a: FriendView, b: FriendView) => a.displayName.localeCompare(b.displayName);
@@ -90,7 +103,7 @@ export class FriendService {
           blocked: { $ne: true },
           $or: [{ username: { $regex: `^${q}` } }, { displayName: { $regex: q, $options: 'i' } }],
         },
-        { projection: { username: 1, displayName: 1, stats: 1, avatar: 1 } },
+        { projection: { username: 1, displayName: 1, stats: 1, avatar: 1, lastSeenAt: 1, lastLoginAt: 1 } },
       )
       .sort({ username: 1 })
       .limit(8)
@@ -106,7 +119,16 @@ export class FriendService {
           : link.requester.equals(me)
             ? 'sent'
             : 'incoming';
-      return { id: u._id.toHexString(), username: u.username, displayName: u.displayName, avatar: avatarOf(u), level: levelOf(statsOf(u)), online: false, status };
+      return {
+        id: u._id.toHexString(),
+        username: u.username,
+        displayName: u.displayName,
+        avatar: avatarOf(u),
+        level: levelOf(statsOf(u)),
+        online: false,
+        lastSeen: status === 'friend' ? lastSeenOf(u) : null,
+        status,
+      };
     });
   }
 
@@ -114,7 +136,7 @@ export class FriendService {
   async profileOf(me: ObjectId, username: string): Promise<PublicProfile> {
     const u = await this.cols.users.findOne(
       { username, blocked: { $ne: true } },
-      { projection: { username: 1, displayName: 1, stats: 1, createdAt: 1, avatar: 1 } },
+      { projection: { username: 1, displayName: 1, stats: 1, createdAt: 1, avatar: 1, lastSeenAt: 1, lastLoginAt: 1 } },
     );
     if (!u) throw new ApiError(404, 'No player with that username');
     let status: PublicProfile['status'] = 'me';
@@ -131,6 +153,7 @@ export class FriendService {
       level: levelOf(stats),
       joinedAt: u.createdAt.toISOString(),
       online: false,
+      lastSeen: status === 'friend' ? lastSeenOf(u) : null,
       stats,
       status,
     };

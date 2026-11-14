@@ -50,6 +50,9 @@ export const statsOf = (u: Pick<UserDoc, 'stats'>): LifetimeStats => ({ ...EMPTY
 /** the saved avatar if it's still in the catalog, else null (the first letter) */
 export const avatarOf = (u: Pick<UserDoc, 'avatar'>): string | null => (parseAvatar(u.avatar) ? u.avatar! : null);
 
+/** when an account was last online; accounts from before this was kept fall back to their last login */
+export const lastSeenOf = (u: Pick<UserDoc, 'lastSeenAt' | 'lastLoginAt'>): string | null => (u.lastSeenAt ?? u.lastLoginAt)?.toISOString() ?? null;
+
 /** the saved card back if it's still in the catalog, else null (the classic back) */
 export const cardBackChoice = (u: Pick<UserDoc, 'cardBack'>): string | null => cardBackOf(u.cardBack)?.id ?? null;
 
@@ -396,6 +399,12 @@ export class UserService {
     if (levelOf(statsOf(user)) < pick.level) throw new ApiError(400, `Reach level ${pick.level} for that ${what}`);
     const updated = await this.cols.users.findOneAndUpdate({ _id: userId }, { $set: { [field]: pick.id } }, { returnDocument: 'after' });
     return toPublicUser(updated!);
+  }
+
+  /** the app opened or closed on this account: kept as their last online time */
+  async markSeen(userId: string): Promise<void> {
+    if (!/^[a-f0-9]{24}$/i.test(userId)) return;
+    await this.cols.users.updateOne({ _id: new ObjectId(userId) }, { $set: { lastSeenAt: new Date() } });
   }
 
   /** the practice tutorial for a game is done (finished or skipped); shown once per account */

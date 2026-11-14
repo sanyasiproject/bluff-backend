@@ -623,7 +623,8 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect(raju).toMatchObject({ username: 'raj_pub', displayName: 'Raj', level: 1, online: null, status: 'none' });
     expect(raju.stats).toMatchObject({ gamesPlayed: 0, wins: 0 });
     // no coins, role, login times or password hash
-    expect(Object.keys(raju).sort()).toEqual(['avatar', 'displayName', 'id', 'joinedAt', 'level', 'online', 'stats', 'status', 'username']);
+    expect(Object.keys(raju).sort()).toEqual(['avatar', 'displayName', 'id', 'joinedAt', 'lastSeen', 'level', 'online', 'stats', 'status', 'username']);
+    expect(raju.lastSeen).toBeNull();
     expect((await card('pia_pub')).status).toBe('me');
 
     await api().post('/api/friends/request').set(piaAuth).send({ username: 'raj_pub' });
@@ -871,6 +872,40 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     // the friends list itself keeps working
     expect((await api().get('/api/friends').set(auth)).status).toBe(200);
     targetApp.socket.disconnect();
+  });
+
+  it('shows friends when they were last online, and nobody else', async () => {
+    const me = await register('seen_me');
+    const pal = await register('seen_pal');
+    const stranger = await register('seen_stranger');
+    const auth = bearer(me.body.token);
+    await api().post('/api/friends/request').set(auth).send({ username: 'seen_pal' });
+    await api().post(`/api/friends/${me.body.user.id}/accept`).set(bearer(pal.body.token));
+    const friend = async () => ((await api().get('/api/friends').set(auth)).body as FriendsResponse).friends[0];
+
+    // online: no time shown
+    const palApp = await socketClient(pal.body.token);
+    expect(await friend()).toMatchObject({ username: 'seen_pal', online: true, lastSeen: null });
+    expect((await api().get('/api/players/seen_pal').set(auth)).body.profile).toMatchObject({ online: true, lastSeen: null });
+
+    // the app closes: friends see when
+    const left = Date.now();
+    palApp.socket.disconnect();
+    let seen: string | null = null;
+    for (let i = 0; i < 100 && !seen; i++) {
+      const f = await friend();
+      if (!f.online && f.lastSeen && Date.parse(f.lastSeen) >= left - 1000) seen = f.lastSeen;
+      else await wait(20);
+    }
+    expect(seen).not.toBeNull();
+    expect(Date.parse(seen!)).toBeLessThanOrEqual(Date.now());
+    expect((await api().get('/api/players/seen_pal').set(auth)).body.profile).toMatchObject({ online: false, lastSeen: seen });
+    expect((await api().get('/api/friends/search?q=seen_p').set(auth)).body.players[0]).toMatchObject({ online: false, lastSeen: seen });
+
+    // someone who isn't a friend never sees it
+    const strangerAuth = bearer(stranger.body.token);
+    expect((await api().get('/api/players/seen_pal').set(strangerAuth)).body.profile).toMatchObject({ online: null, lastSeen: null });
+    expect((await api().get('/api/friends/search?q=seen_p').set(strangerAuth)).body.players[0]).toMatchObject({ online: null, lastSeen: null });
   });
 
   it('settles stakes and bets against bots: a winner takes every seat\'s stake, coins lost to a bot are gone', async () => {

@@ -27,6 +27,8 @@ export interface UserDoc {
   stats: LifetimeStats;
   createdAt: Date;
   lastLoginAt: Date | null;
+  /** when the app was last open (a connection came or the last one went); friends see it while they're offline */
+  lastSeenAt?: Date;
   /** IST day (YYYY-MM-DD) the daily login bonus was last given */
   lastLoginBonusDay?: string;
   /** IST day that gamesToday counts */

@@ -17,7 +17,7 @@ export function playerRoutes(store: Store, presence: Presence, limited: RequestH
       const profile = await store.friends.profileOf(currentUser(res)._id, parseUsername(req.params.username));
       // only friends (and you) see whether someone is online
       const online = profile.status === 'friend' || profile.status === 'me' ? presence.isOnline(profile.id) : null;
-      res.json({ profile: { ...profile, online } });
+      res.json({ profile: { ...profile, online, lastSeen: profile.status === 'friend' && online === false ? profile.lastSeen : null } });
     }),
   );
 

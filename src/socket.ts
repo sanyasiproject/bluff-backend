@@ -248,7 +248,12 @@ export function registerHandlers(
     const user = socket.data.user as SocketUser | undefined;
     const ip = socket.data.ip as string;
     connections.set(ip, (connections.get(ip) ?? 0) + 1);
-    if (user) presence.add(user.id, socket.id);
+    if (user) {
+      const wasOnline = presence.isOnline(user.id);
+      presence.add(user.id, socket.id);
+      // in the background: a DB hiccup never blocks a connection
+      if (!wasOnline) hooks.markSeen?.(user.id).catch(() => {});
+    }
     // the app shows Log in and the guest lock from this even when its /health check is blocked
     socket.emit('server:info', serverInfo());
     /** a room this connection asked to watch, waiting for the host */
@@ -660,7 +665,10 @@ export function registerHandlers(
     });
 
     socket.on('disconnect', () => {
-      if (user) presence.remove(user.id, socket.id);
+      if (user) {
+        presence.remove(user.id, socket.id);
+        if (!presence.isOnline(user.id)) hooks.markSeen?.(user.id).catch(() => {});
+      }
       const left = (connections.get(ip) ?? 1) - 1;
       if (left > 0) connections.set(ip, left);
       else connections.delete(ip);

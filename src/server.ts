@@ -73,6 +73,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
           // the socket layer runs this in the background; a DB hiccup must never break the game
           onGameEnd: (record) => store.games.save(record),
           areFriends: (a, b) => store.friends.areFriends(a, b),
+          markSeen: (userId) => store.users.markSeen(userId),
           guestsAllowed: () => store.settings.guestsAllowed,
           pushInvitesOn: () => store.push.ready && store.settings.pushInvites,
           pushInvite: (toUserId, invite) => (store.push.ready && store.settings.pushInvites ? store.push.sendInvite(toUserId, invite) : Promise.resolve(0)),

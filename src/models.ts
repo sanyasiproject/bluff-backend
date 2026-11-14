@@ -118,6 +118,8 @@ export interface SocketHooks {
   pushInvite?: (toUserId: string, invite: InviteEvent) => Promise<number>;
   /** invite notifications are set up and an admin has them on */
   pushInvitesOn?: () => boolean;
+  /** the app opened or closed on an account (its first connection came or its last went): saved as their last online time */
+  markSeen?: (userId: string) => Promise<void>;
   /** moves coins to a friend within the daily gift limit; throws GameError with a reason players can read */
   giftCoins?: (fromUserId: string, toUserId: string, amount: number) => Promise<GiftResult>;
 }

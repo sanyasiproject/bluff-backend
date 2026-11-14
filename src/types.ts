@@ -648,6 +648,8 @@ export interface FriendView {
   displayName: string;
   avatar: string | null;
   online: boolean;
+  /** when they were last online (ISO); null while online, for requests, or if never seen */
+  lastSeen: string | null;
   level: number;
   /** already in a room: 'here' is the room I'm in; such friends can't be invited */
   inRoom: 'here' | 'other' | null;
@@ -664,6 +666,8 @@ export interface PlayerSearchResult {
   level: number;
   /** null unless they're already a friend */
   online: boolean | null;
+  /** when a friend was last online (ISO); null while online, if never seen, or for anyone who isn't a friend */
+  lastSeen: string | null;
   /** how they relate to me */
   status: 'friend' | 'sent' | 'incoming' | 'none';
 }
@@ -678,6 +682,8 @@ export interface PublicProfile {
   joinedAt: string;
   /** null unless they're a friend (or me) */
   online: boolean | null;
+  /** when a friend was last online (ISO); null while online, if never seen, or for anyone who isn't a friend */
+  lastSeen: string | null;
   stats: LifetimeStats;
   /** how they relate to me */
   status: 'me' | 'friend' | 'sent' | 'incoming' | 'none';
