@@ -1,4 +1,4 @@
-import type { GameEvent } from '../models.js';
+import type { GameEvent, Habits } from '../models.js';
 import type { Card, LifetimeStats, Rank, RoomView } from '../types.js';
 import type { PileEntry, Read } from './models.js';
 import { holdChance, unseenOf } from './odds.js';
@@ -17,6 +17,10 @@ export class BotMemory {
   private readonly known = new Map<string, RankCounts>();
   /** copies that left the game in discarded piles (my own, the only ones I know) */
   readonly gone: RankCounts = new Map();
+  /** other people's cards that left the game in discarded piles (their ranks unknown, but they're in nobody's hand) */
+  othersGone = 0;
+  /** of those, copies of each rank they probably were: the real cards of plays that stood */
+  readonly likelyGone: RankCounts = new Map();
   /** plays in the current pile */
   pile: PileEntry[] = [];
   /** cards of my next play, matched with its 'play' event */
@@ -30,7 +34,14 @@ export class BotMemory {
     readonly reads: Map<string, Read>,
     /** lifetime stats of the people, read when they joined; null for guests and bots */
     readonly lifetime: Map<string, LifetimeStats | null>,
+    /** how each person really played their past games, saved on their account; null for guests and bots */
+    readonly habits: Map<string, Habits | null> = new Map(),
   ) {}
+
+  /** the pile entry of a play still in the pile */
+  entryOf(playId: string): PileEntry | undefined {
+    return this.pile.find((e) => e.id === playId);
+  }
 
   read(id: string): Read {
     let r = this.reads.get(id);
@@ -53,6 +64,10 @@ export class BotMemory {
         openHonest: 0,
         followCaught: 0,
         followHonest: 0,
+        endCaught: 0,
+        endHonest: 0,
+        expected: 0,
+        found: 0,
       };
       this.reads.set(id, r);
     }
@@ -72,10 +87,13 @@ export class BotMemory {
           // following a round: how likely they were to have none of the rank
           if (this.pile.length > 0 && e.playerId !== this.meId) this.followed(view, e.playerId, e.rank, e.count, false);
           const mine = e.playerId === this.meId ? this.pendingMine : null;
+          const knownBefore = mine ? 0 : (this.counts(e.playerId).get(e.rank) ?? 0);
           if (mine) this.pendingMine = null;
           // cards I knew they held of that rank most likely went out first
-          else this.counts(e.playerId).set(e.rank, Math.max(0, (this.counts(e.playerId).get(e.rank) ?? 0) - e.count));
-          this.pile.push({ playerId: e.playerId, count: e.count, rank: e.rank, mine });
+          else this.counts(e.playerId).set(e.rank, Math.max(0, knownBefore - e.count));
+          const id = view.lastPlay?.playerId === e.playerId ? view.lastPlay.id : null;
+          const left = view.players.find((p) => p.id === e.playerId)?.cardCount ?? 0;
+          this.pile.push({ id, playerId: e.playerId, count: e.count, rank: e.rank, mine, opening: this.pile.length === 0, left, knownBefore, realEst: null, seen: [], read: null });
           const partner = partnerIn(view, e.playerId);
           for (const p of view.players) if (p.id !== e.playerId && p.id !== partner && p.cardCount > 0) this.read(p.id).chances++;
           break;
@@ -84,11 +102,23 @@ export class BotMemory {
           // the pile goes to the loser: my own cards in it, plus whatever was turned face up
           const shown = view.reveal?.callerId === e.callerId ? view.reveal.cards.filter((c): c is Card => c !== null) : [];
           const picked = new Map<string, Card>();
-          for (const entry of this.pile) for (const c of entry.mine ?? []) picked.set(c.id, c);
+          for (const entry of this.pile) for (const c of [...(entry.mine ?? []), ...entry.seen]) picked.set(c.id, c);
           for (const c of shown) picked.set(c.id, c);
           if (e.loserId !== this.meId) for (const c of picked.values()) bump(this.counts(e.loserId), c.rank, 1);
           // the called play opened the round if it's the only one in the pile
           this.learnPositions(view, e.callerId, e.playerId, this.pile.length <= 1);
+          // a play that would have finished them: do they fake their way out?
+          const called = this.pile[this.pile.length - 1];
+          if (called?.playerId === e.playerId && called.left === 0) {
+            const r = this.read(e.playerId);
+            if (e.bluff) r.endCaught = (r.endCaught ?? 0) + 1;
+            else r.endHonest = (r.endHonest ?? 0) + (view.config.bluffRule === 'all' ? 1 : 1 / Math.max(1, called.count));
+          }
+          // how good my read of that play was: called plays are the suspicious ones, so this is what keeps my reads honest
+          if (called?.playerId === e.playerId && called.read && view.reveal?.callerId === e.callerId) {
+            const at = view.reveal.pickedIndex;
+            this.checkRead(e.playerId, at === null ? called.read.lie : (called.read.spots[at] ?? called.read.lie), e.bluff);
+          }
           if (e.bluff) {
             this.read(e.playerId).caught++;
             this.read(e.callerId).goodCalls++;
@@ -107,7 +137,16 @@ export class BotMemory {
           if (this.pile.length > 0 && e.playerId !== this.meId) this.followed(view, e.playerId, this.pile[0].rank, 0, true);
           break;
         case 'roundEnd':
-          for (const entry of this.pile) for (const c of entry.mine ?? []) bump(this.gone, c.rank, 1);
+          // my own cards and any I peeked at leave the game with the pile
+          for (const entry of this.pile) for (const c of [...(entry.mine ?? []), ...entry.seen]) bump(this.gone, c.rank, 1);
+          // everyone else's go too: unknown cards, but most likely the real ones I reckoned each play held
+          for (const entry of this.pile) {
+            if (entry.mine) continue;
+            const seenReal = entry.seen.filter((c) => c.rank === entry.rank).length;
+            this.othersGone += entry.count - entry.seen.length;
+            const likely = Math.max(0, (entry.realEst ?? entry.count * 0.55) - seenReal);
+            this.likelyGone.set(entry.rank, (this.likelyGone.get(entry.rank) ?? 0) + likely);
+          }
           this.pile = [];
           break;
         case 'finish':
@@ -154,6 +193,14 @@ export class BotMemory {
         r.midFound += fake;
       }
     });
+  }
+
+  /** a card of their play turned over: what my read expected against what it was */
+  checkRead(playerId: string, expected: number, fake: boolean): void {
+    const r = this.read(playerId);
+    // reads kept from before these counts existed start them at 0
+    r.expected = (r.expected ?? 0) + Math.min(1, Math.max(0, expected));
+    r.found = (r.found ?? 0) + (fake ? 1 : 0);
   }
 
   /** what this bot can't see of a rank: everything but its hand, its partner's, its pile cards and known discards */

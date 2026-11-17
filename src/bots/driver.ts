@@ -1,8 +1,10 @@
 import { GameError, type Game } from '../game.js';
 import type { GameEvent, Member } from '../models.js';
 import type { Room } from '../rooms.js';
+import type { Habits } from '../models.js';
 import { QUICK_MESSAGES, REACTIONS, type Card, type ChatEvent, type LifetimeStats } from '../types.js';
 import { chooseTurn, decideCall, type Peek, type Situation } from './brain.js';
+import { skillOf } from './levels.js';
 import { BotMemory } from './memory.js';
 import type { BotMove, Personality, Rand, Read } from './models.js';
 import { drift, makePersonality, pickName, pickStyle } from './personality.js';
@@ -45,6 +47,9 @@ const LINES = {
 } as const;
 const lineIndex = (text: string) => (QUICK_MESSAGES as readonly string[]).indexOf(text);
 
+/** time people get to call a play before a bot's own move can close it (ms at speed 1): longer for big plays and a player going out */
+const CALL_WINDOW = { base: 2000, perCard: 220, finishing: 1200, spread: 800 };
+
 /** state that changes with every move; a planned turn is dropped if it changed */
 const tableKey = (g: Game) =>
   [g.lastPlay?.id ?? '-', g.turnId, g.roundRank ?? '-', g.passed.size, g.pile.length, g.places.length, [...g.hands.values()].reduce((n, h) => n + h.length, 0)].join('|');
@@ -53,6 +58,8 @@ const tableKey = (g: Game) =>
 export class BotDriver {
   private tables = new Map<Room, Map<string, Seat>>();
   private chatTimers = new Map<Room, Set<Timer>>();
+  /** when each room's last play came down, and how long people get to call it */
+  private playedAt = new Map<Room, { id: string; at: number; window: number }>();
 
   constructor(
     private readonly hooks: BotHooks,
@@ -92,6 +99,12 @@ export class BotDriver {
   observe(room: Room, events: GameEvent[]): void {
     const seats = this.tables.get(room);
     if (!seats || !room.game || events.length === 0) return;
+    const lp = room.game.lastPlay;
+    if (lp && events.some((e) => e.kind === 'play')) {
+      const out = room.game.hand(lp.playerId).length === 0;
+      const window = CALL_WINDOW.base + CALL_WINDOW.perCard * Math.max(0, lp.cards.length - 1) + (out ? CALL_WINDOW.finishing : 0) + this.rand() * CALL_WINDOW.spread;
+      this.playedAt.set(room, { id: lp.id, at: Date.now(), window: window * this.speed });
+    }
     for (const seat of seats.values()) {
       if (!room.game.order.includes(seat.id)) continue;
       this.memoryOf(room, seat).observe(events, room.view(seat.id), seat.today.tilt);
@@ -126,7 +139,9 @@ export class BotDriver {
         if (seat.turnKey !== key) {
           this.clear(seat, 'turn');
           seat.turnKey = key;
-          seat.turnTimer = setTimeout(() => this.turn(room, seat, g, key), this.thinkMs(seat, g));
+          // never before people had their moment to call the last play
+          const wait = Math.max(this.thinkMs(seat, g), this.callWindowLeft(room, g));
+          seat.turnTimer = setTimeout(() => this.turn(room, seat, g, key), wait);
         }
         continue;
       }
@@ -136,7 +151,7 @@ export class BotDriver {
       if (play && play.playerId !== seat.id && seat.considered !== play.id && g.bluffCallsLeft(seat.id) > 0 && g.partnerOf(seat.id) !== play.playerId) {
         seat.considered = play.id;
         this.clear(seat, 'call');
-        seat.callTimer = setTimeout(() => this.maybeCall(room, seat, g, play.id), this.reactMs(seat));
+        seat.callTimer = setTimeout(() => this.maybeCall(room, seat, g, play.id), this.reactMs(seat, g.hand(play.playerId).length === 0));
       }
     }
   }
@@ -146,6 +161,7 @@ export class BotDriver {
     for (const t of this.chatTimers.get(room) ?? []) clearTimeout(t);
     this.tables.delete(room);
     this.chatTimers.delete(room);
+    this.playedAt.delete(room);
   }
 
   /** lets go of rooms that closed without a word (idle or emptied by the sweep) */
@@ -272,14 +288,16 @@ export class BotDriver {
       seat.game = room.game;
       seat.today = drift(seat.me, this.rand);
       const lifetime = new Map<string, LifetimeStats | null>(room.members.map((m) => [m.id, m.stats]));
-      seat.mem = new BotMemory(seat.id, seat.reads, lifetime);
+      // how each person played their past games (saved on their account, read before this game), never this one
+      const habits = new Map<string, Habits | null>(room.members.map((m) => [m.id, m.habits]));
+      seat.mem = new BotMemory(seat.id, seat.reads, lifetime, habits);
       seat.considered = null;
     }
     return seat.mem;
   }
 
   private situation(room: Room, seat: Seat): Situation {
-    return { view: room.view(seat.id), mem: this.memoryOf(room, seat), me: seat.today, rand: this.rand };
+    return { view: room.view(seat.id), mem: this.memoryOf(room, seat), me: seat.today, rand: this.rand, skill: skillOf(room.game?.config.botLevel) };
   }
 
   /** how long it thinks: drawn before it knows what it'll do, so the pause never gives a lie away */
@@ -288,10 +306,23 @@ export class BotDriver {
     return (900 + this.rand() * 1700) * opening * seat.today.tempo * this.speed;
   }
 
-  /** a reaction to someone else's play; sometimes a snap call, sometimes a slow one */
-  private reactMs(seat: Seat): number {
+  /** what's left of people's time to call the last play; nothing when no person could call it */
+  private callWindowLeft(room: Room, g: Game): number {
+    const lp = g.lastPlay;
+    const w = this.playedAt.get(room);
+    if (!lp || !w || w.id !== lp.id) return 0;
+    const partner = g.partnerOf(lp.playerId);
+    const callers = room.members.some(
+      (m) => !m.bot && m.socketId !== null && m.id !== lp.playerId && m.id !== partner && g.order.includes(m.id) && g.hand(m.id).length > 0,
+    );
+    return callers ? Math.max(0, w.at + w.window - Date.now()) : 0;
+  }
+
+  /** a reaction to someone else's play; sometimes a snap call, sometimes a slow one; quicker when they're going out */
+  private reactMs(seat: Seat, finishing: boolean): number {
+    if (finishing) return (600 + this.rand() * 700) * seat.today.tempo * this.speed;
     const snap = this.rand() < 0.15;
-    return (snap ? 400 + this.rand() * 500 : 800 + this.rand() * 2400) * seat.today.tempo * this.speed;
+    return (snap ? 600 + this.rand() * 500 : 900 + this.rand() * 2300) * seat.today.tempo * this.speed;
   }
 
   private live(room: Room, g: Game): boolean {

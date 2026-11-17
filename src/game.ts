@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { buildDeck, secureRandom, shuffle, sortHand, type RandomInt } from './cards.js';
-import type { BetResult, GameEvent, PlayerStats, PlayRecord } from './models.js';
+import { emptyHabits, notePass, notePlay } from './habits.js';
+import type { BetResult, GameEvent, Habits, PlayerStats, PlayRecord } from './models.js';
 import { MAX_BLUFF_CALLS_IN_A_ROW, RANKS, type Card, type GameConfig, type Rank, type RevealView } from './types.js';
 
 /** Errors safe to show to the player */
@@ -51,7 +52,7 @@ export class Game {
     this.teams = config.teams ? [[order[0], order[2]], [order[1], order[3]]] : null;
     for (const id of order) {
       this.hands.set(id, []);
-      this.stats.set(id, { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0, plays: 0, chances: 0 });
+      this.stats.set(id, { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0, plays: 0, chances: 0, habits: emptyHabits() });
     }
     shuffle(buildDeck(config.decks), rand).forEach((card, i) => this.hand(order[i % order.length]).push(card));
     for (const id of order) sortHand(this.hand(id));
@@ -82,6 +83,8 @@ export class Game {
 
     if (cards.some((c) => c.rank !== claim)) this.stat(playerId).bluffs++;
     this.stat(playerId).plays++;
+    // saved with the game for the bots' read on this player; nobody sees it while the game runs
+    notePlay(this.habits(playerId), hand, cards, claim, this.roundRank === null);
     this.hands.set(playerId, hand.filter((c) => !picked.has(c.id)));
     // everyone still in who may challenge this play had a chance to call it
     for (const id of this.order) {
@@ -103,6 +106,7 @@ export class Game {
     this.assertTurn(playerId);
     const play = this.lastPlay;
     if (!play) throw new GameError(this.roundRank ? 'Put down cards to keep the round going' : 'You start this round, play some cards');
+    notePass(this.habits(playerId), this.hand(playerId), play.rank);
     this.passed.add(playerId);
     this.callStreak.delete(playerId);
     const events: GameEvent[] = [{ kind: 'pass', playerId }];
@@ -371,6 +375,12 @@ export class Game {
     const s = this.stats.get(id);
     if (!s) throw new GameError('You are not in this game');
     return s;
+  }
+
+  private habits(id: string): Habits {
+    const s = this.stat(id);
+    s.habits ??= emptyHabits();
+    return s.habits;
   }
 
   private assertTurn(playerId: string): void {

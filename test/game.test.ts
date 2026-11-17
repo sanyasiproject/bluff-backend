@@ -332,9 +332,9 @@ describe('end-of-game awards', () => {
     g.play('b', ids(k1, k2), 'K');
     g.callBluff('c', g.lastPlay!.id);
     // plays made, and plays by others each could have called
-    expect(g.stats.get('a')).toEqual({ bluffs: 1, caught: 1, goodCalls: 0, wrongCalls: 0, pickedUp: 1, plays: 1, chances: 1 });
-    expect(g.stats.get('b')).toEqual({ bluffs: 0, caught: 0, goodCalls: 1, wrongCalls: 0, pickedUp: 0, plays: 1, chances: 1 });
-    expect(g.stats.get('c')).toEqual({ bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 1, pickedUp: 2, plays: 0, chances: 2 });
+    expect(g.stats.get('a')).toMatchObject({ bluffs: 1, caught: 1, goodCalls: 0, wrongCalls: 0, pickedUp: 1, plays: 1, chances: 1 });
+    expect(g.stats.get('b')).toMatchObject({ bluffs: 0, caught: 0, goodCalls: 1, wrongCalls: 0, pickedUp: 0, plays: 1, chances: 1 });
+    expect(g.stats.get('c')).toMatchObject({ bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 1, pickedUp: 2, plays: 0, chances: 2 });
     expect(computeAwards(g.stats)).toEqual([
       { emoji: '🤥', title: 'Biggest liar', playerIds: ['a'], detail: '1 bluff' },
       { emoji: '🕵️', title: 'Best detective', playerIds: ['b'], detail: 'caught 1 bluff' },
@@ -476,5 +476,26 @@ describe('finishing', () => {
     expect(events.map((e) => e.kind)).toEqual(['pass', 'finish', 'gameOver']);
     expect(g.places).toEqual(['a', 'b']);
     expect(g.loserId).toBe('c');
+  });
+});
+
+describe('habits for the bots', () => {
+  it('records how each player really plays: lies, fakes and where they sit, passes and finishing lies', () => {
+    const [q1, q2, five, nine] = [card('Q'), card('Q', 'H'), card('5'), card('9')];
+    const [k1, eight] = [card('K'), card('8')];
+    const g = setup(['a', 'b', 'c'], { a: [q1, q2, five, nine], b: [k1, eight], c: [card('3')] });
+    // a opens Queens: two real, the fake tapped last
+    g.play('a', ids(q1, q2, five), 'Q');
+    // b holds no Queen and pushes a fake; c holds none and passes
+    g.play('b', ids(eight));
+    g.pass('c');
+    // a goes out with a card that isn't a Queen
+    g.play('a', ids(nine));
+    expect(g.stats.get('a')!.habits).toMatchObject({
+      openPlays: 1, openLies: 1, openNone: 0, pushes: 1, lies: 2, lieCards: 2, finishPlays: 1, finishLies: 1, endTurns: 1, endFakes: 1,
+      slotFirst: 1, fakeFirst: 0, slotMid: 1, fakeMid: 0, slotLast: 1, fakeLast: 1,
+    });
+    expect(g.stats.get('b')!.habits).toMatchObject({ pushes: 1, lies: 1, lieCards: 1, endTurns: 1, endFakes: 0, followPlays: 0 });
+    expect(g.stats.get('c')!.habits).toMatchObject({ passNone: 1, passHeld: 0, endTurns: 1 });
   });
 });

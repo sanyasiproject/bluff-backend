@@ -4,10 +4,12 @@ import { io as connect, type Socket } from 'socket.io-client';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBluffServer } from '../src/server.js';
+import { emptyHabits } from '../src/habits.js';
 import type { GameRecord } from '../src/models.js';
 import { createStore, type Store } from '../src/services/store.js';
 import type {
   AuditEntry,
+  FriendOnlineEvent,
   FriendsResponse,
   GameSummary,
   GiftEvent,
@@ -979,5 +981,111 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect(ok.headers['access-control-allow-headers']).toContain('Authorization');
     const evil = await api().options('/api/me').set('Origin', 'https://evil.example');
     expect(evil.headers['access-control-allow-origin']).toBeUndefined();
+  });
+  it("keeps each account's real play habits for the bots, and never shows them to anyone", async () => {
+    const reg = await register('habit_hal');
+    const userId = reg.body.user.id as string;
+    const zero = { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0, plays: 0, chances: 0 };
+    const habits = { ...emptyHabits(), followPlays: 5, followLies: 3, lies: 4, lieCards: 6, slotLast: 2, fakeLast: 2 };
+    const record = (status: GameRecord['status'], game: 'bluff' | 'crazy7' = 'bluff'): GameRecord => ({
+      roomCode: 'HABT',
+      config: { game, decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert' },
+      status,
+      startedAt: new Date(Date.now() - 90_000),
+      endedAt: new Date(),
+      players: [{ memberId: 'me', userId, name: 'habit_hal', place: null, loser: false, kicked: false, won: false, bot: false, stats: { ...zero, habits } }],
+      awards: [],
+      bets: [],
+    });
+    // a stopped game's plays count too; Crazy 7 says nothing about Bluff habits
+    await store.games.save(record('ended_early'));
+    await store.games.save(record('finished'));
+    await store.games.save(record('finished', 'crazy7'));
+    expect((await store.users.getAccounts([userId])).get(userId)!.habits).toMatchObject({ followPlays: 10, followLies: 6, lies: 8, lieCards: 12, slotLast: 4, fakeLast: 4 });
+    // players, friends and admins never see it
+    const auth = bearer(reg.body.token);
+    for (const res of [await api().get('/api/me').set(auth), await api().get('/api/players/habit_hal').set(auth), await api().get('/api/me/games').set(auth)]) {
+      expect(res.status).toBe(200);
+      expect(JSON.stringify(res.body)).not.toMatch(/habits|followLies|lieCards/);
+    }
+    // an account with no Bluff games yet has none
+    const fresh = await register('habit_new');
+    expect((await store.users.getAccounts([fresh.body.user.id])).get(fresh.body.user.id)!.habits).toBeNull();
+  });
+
+  it('tells online friends when someone comes back after a while, several at once too, and stays quiet on quick reconnects', async () => {
+    const start = async (onlineAlerts: { awayMs: number; quietMs: number }) => {
+      const srv = createBluffServer({ store, authAttempts: 1000, onlineAlerts });
+      await new Promise<void>((resolve) => srv.httpServer.listen(0, resolve));
+      const at = `http://localhost:${(srv.httpServer.address() as AddressInfo).port}`;
+      const open = async (token: string) => {
+        const s = connect(at, { transports: ['websocket'], forceNew: true, auth: { token } });
+        await new Promise<void>((resolve) => s.once('connect', () => resolve()));
+        return s;
+      };
+      return { srv, open };
+    };
+    const [me, p1, p2, stranger] = [await register('on_me'), await register('on_p1', 'secret-pass-1', 'Pinky'), await register('on_p2', 'secret-pass-1', 'Bunty'), await register('on_x')];
+    for (const pal of [p1, p2]) {
+      await api().post('/api/friends/request').set(bearer(me.body.token)).send({ username: pal.body.user.username });
+      await api().post(`/api/friends/${me.body.user.id}/accept`).set(bearer(pal.body.token));
+    }
+
+    // away long enough (here: any time at all), and not just after a restart
+    const live = await start({ awayMs: 0, quietMs: 0 });
+    const mine = await live.open(me.body.token);
+    const heard: FriendOnlineEvent[] = [];
+    mine.on('friend:online', (e: FriendOnlineEvent) => heard.push(e));
+    const [a, b, x] = [await live.open(p1.body.token), await live.open(p2.body.token), await live.open(stranger.body.token)];
+    await until(() => heard.length >= 2);
+    expect(heard.map((e) => e.username).sort()).toEqual(['on_p1', 'on_p2']);
+    expect(heard.find((e) => e.username === 'on_p1')).toEqual({ id: p1.body.user.id, name: 'Pinky', username: 'on_p1', avatar: null });
+    // a second tab of someone already online, and strangers, say nothing
+    const a2 = await live.open(p1.body.token);
+    await wait(200);
+    expect(heard).toHaveLength(2);
+    for (const s of [a, a2, b, x, mine]) s.disconnect();
+    live.srv.close();
+
+    // a quick reconnect is not news
+    const strict = await start({ awayMs: 60_000, quietMs: 0 });
+    const mine2 = await strict.open(me.body.token);
+    const heard2: FriendOnlineEvent[] = [];
+    mine2.on('friend:online', (e: FriendOnlineEvent) => heard2.push(e));
+    const back = await strict.open(p1.body.token);
+    back.disconnect();
+    const again = await strict.open(p1.body.token);
+    await wait(250);
+    expect(heard2).toHaveLength(0);
+    for (const s of [again, mine2]) s.disconnect();
+    strict.srv.close();
+
+    // right after a restart everyone comes back at once: quiet
+    const restarted = await start({ awayMs: 0, quietMs: 60_000 });
+    const mine3 = await restarted.open(me.body.token);
+    const heard3: FriendOnlineEvent[] = [];
+    mine3.on('friend:online', (e: FriendOnlineEvent) => heard3.push(e));
+    const late = await restarted.open(p2.body.token);
+    await wait(250);
+    expect(heard3).toHaveLength(0);
+    for (const s of [late, mine3]) s.disconnect();
+    restarted.srv.close();
+  });
+
+  it("tells both people's open apps when a request is sent, accepted or removed, so no screen needs to keep asking", async () => {
+    const a = await register('push_pal_a');
+    const b = await register('push_pal_b');
+    const [appA, appB] = [await socketClient(a.body.token), await socketClient(b.body.token)];
+    const heard = { a: 0, b: 0 };
+    appA.socket.on('friends:changed', () => heard.a++);
+    appB.socket.on('friends:changed', () => heard.b++);
+    await api().post('/api/friends/request').set(bearer(a.body.token)).send({ username: 'push_pal_b' });
+    await until(() => heard.a === 1 && heard.b === 1);
+    await api().post(`/api/friends/${a.body.user.id}/accept`).set(bearer(b.body.token));
+    await until(() => heard.a === 2 && heard.b === 2);
+    await api().post(`/api/friends/${a.body.user.id}/remove`).set(bearer(b.body.token));
+    await until(() => heard.a === 3 && heard.b === 3);
+    appA.socket.disconnect();
+    appB.socket.disconnect();
   });
 });

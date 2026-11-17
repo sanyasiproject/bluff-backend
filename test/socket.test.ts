@@ -13,7 +13,7 @@ const opened: Client[] = [];
 
 beforeAll(async () => {
   // every test client shares one address, so the per-network limits get their own test
-  server = createBluffServer({ limits: { createsPerIp: 10_000, liveRoomsPerIp: 10_000 } });
+  server = createBluffServer({ limits: { createsPerIp: 10_000, liveRoomsPerIp: 10_000, connectionsPerIp: 1_000 } });
   await new Promise<void>((resolve) => server.httpServer.listen(0, resolve));
   url = `http://localhost:${(server.httpServer.address() as AddressInfo).port}`;
 });
@@ -23,8 +23,9 @@ afterAll(() => {
   server.close();
 });
 
-async function client(): Promise<Client> {
-  const c: Client = { socket: connect(url, { transports: ['websocket'], forceNew: true }), state: null, notes: [] };
+/** auth: what the app sends on connecting (e.g. { ready: true } for apps with the lobby's Ready button) */
+async function client(auth?: Record<string, unknown>): Promise<Client> {
+  const c: Client = { socket: connect(url, { transports: ['websocket'], forceNew: true, auth }), state: null, notes: [] };
   c.socket.on('state', (s: RoomView) => (c.state = s));
   c.socket.on('announce', (n: Announcement) => c.notes.push(n));
   await new Promise<void>((resolve) => c.socket.once('connect', () => resolve()));
@@ -51,7 +52,7 @@ describe('socket server', () => {
     const code = created.code!;
     // new rooms start on the "pick one card" bluff rule
     await until(() => a.state !== null);
-    expect(a.state!.config).toEqual({ game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true });
+    expect(a.state!.config).toEqual({ game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert' });
     expect(await send(b, 'room:join', { code: code.toLowerCase(), name: 'Ravi' })).toMatchObject({ ok: true });
     expect(await send(c, 'room:join', { code, name: 'ravi' })).toEqual({ ok: false, error: 'That name is taken in this room' });
     expect(await send(c, 'room:join', { code, name: 'Meena' })).toMatchObject({ ok: true });
@@ -542,5 +543,36 @@ describe('socket server', () => {
     const local = connect(url, { transports: ['websocket'], forceNew: true, extraHeaders: { origin: 'http://localhost:5173' } });
     await new Promise<void>((resolve) => local.once('connect', () => resolve()));
     local.close();
+  });
+
+  it('lets the host start only once every other person is ready; older apps never hold it up', async () => {
+    const host = await client({ ready: true });
+    const ravi = await client({ ready: true });
+    const older = await client();
+    const { code } = await send(host, 'room:create', { name: 'Hosty' });
+    await send(ravi, 'room:join', { code, name: 'Ravi' });
+    await send(older, 'room:join', { code, name: 'Olden' });
+    await until(() => host.state?.players.length === 3);
+    const seat = (name: string) => host.state!.players.find((p) => p.name === name)!;
+    // a newcomer isn't ready yet; the host and an app from before the Ready button count as ready
+    expect([seat('Hosty').ready, seat('Ravi').ready, seat('Olden').ready]).toEqual([true, false, true]);
+    expect(await send(host, 'room:start')).toEqual({ ok: false, error: 'Waiting for Ravi to be ready' });
+    expect(await send(host, 'room:ready', { ready: true })).toEqual({ ok: false, error: 'The host starts the game once everyone is ready' });
+    expect(await send(ravi, 'room:ready', { ready: true })).toEqual({ ok: true });
+    await until(() => seat('Ravi').ready && host.notes.some((n) => n.text === 'Everyone is ready ✅'));
+    // a different game (or stake): everyone agrees again
+    expect(await send(host, 'room:config', { decks: 1, bluffRule: 'one', stake: 0, game: 'crazy7' })).toEqual({ ok: true });
+    await until(() => !seat('Ravi').ready);
+    expect(host.notes.some((n) => n.text === 'Settings changed: tap Ready again')).toBe(true);
+    // ready, then "I need a minute", then ready again
+    await send(ravi, 'room:ready', { ready: true });
+    await send(ravi, 'room:ready', { ready: false });
+    await until(() => !seat('Ravi').ready);
+    expect((await send(host, 'room:start')).ok).toBe(false);
+    await send(ravi, 'room:ready', { ready: true });
+    await until(() => seat('Ravi').ready);
+    expect(await send(host, 'room:start')).toEqual({ ok: true });
+    await until(() => host.state!.phase === 'playing');
+    expect(await send(ravi, 'room:ready', { ready: false })).toEqual({ ok: false, error: 'Getting ready is for the lobby' });
   });
 });

@@ -94,18 +94,44 @@ describe('bots at the table', () => {
     expect(a.notes.some((n) => n.kind === 'play' && bots.some((x) => n.text.startsWith(x.name)))).toBe(true);
   }, 30_000);
 
-  it('caps the stake at 100 with bots at the table', async () => {
+  it('caps the stake by bot level: Expert up to 1K, Hard up to 100, Normal free only', async () => {
     const a = await client();
     await send(a, 'room:create', { name: 'Host' });
-    expect(await send(a, 'room:config', { decks: 1, bluffRule: 'one', stake: 500 })).toEqual({ ok: true });
+    const config = (stake: number, botLevel = 'expert') => ({ decks: 1, bluffRule: 'one', stake, botLevel });
+    expect(await send(a, 'room:config', config(5_000))).toEqual({ ok: true });
+    // expert bots by default: a bot brings 5K down to 1K
     await send(a, 'room:addBot');
-    await until(() => a.state!.config.stake === 100);
-    expect(a.notes.some((n) => n.text === 'With bots at the table the stake is now 100')).toBe(true);
-    expect(await send(a, 'room:config', { decks: 1, bluffRule: 'one', stake: 250 })).toEqual({
-      ok: false,
-      error: 'With bots at the table the stake can be up to 100',
-    });
-    expect(await send(a, 'room:config', { decks: 1, bluffRule: 'one', stake: 50 })).toEqual({ ok: true });
+    await until(() => a.state!.config.stake === 1_000);
+    expect(a.notes.some((n) => n.text === 'Stake lowered to 1,000 for Expert bots')).toBe(true);
+    expect(await send(a, 'room:config', config(5_000))).toEqual({ ok: false, error: 'With Expert bots the stake can be up to 1,000' });
+    // a lower level brings the stake down with it
+    expect(await send(a, 'room:config', config(1_000, 'hard'))).toEqual({ ok: true });
+    await until(() => a.state!.config.stake === 100 && a.state!.config.botLevel === 'hard');
+    expect(a.notes.some((n) => n.text === 'Stake lowered to 100 for Hard bots')).toBe(true);
+    expect(await send(a, 'room:config', config(250, 'hard'))).toEqual({ ok: false, error: 'With Hard bots the stake can be up to 100' });
+    expect(await send(a, 'room:config', config(50, 'hard'))).toEqual({ ok: true });
+    // normal bots play only free games
+    expect(await send(a, 'room:config', config(50, 'normal'))).toEqual({ ok: true });
+    await until(() => a.state!.config.stake === 0 && a.state!.config.botLevel === 'normal');
+    expect(a.notes.some((n) => n.text === 'Normal bots play only free games, so this game is now free')).toBe(true);
+    expect(await send(a, 'room:config', config(50, 'normal'))).toEqual({ ok: false, error: 'Normal bots play only free games' });
+    // Crazy 7 bots always play their best: up to 1K
+    expect(await send(a, 'room:config', { ...config(1_000, 'normal'), game: 'crazy7' })).toEqual({ ok: true });
+    await until(() => a.state!.config.game === 'crazy7' && a.state!.config.stake === 1_000);
+  });
+
+  it('lets the host pick how well the bots play; older apps get the strongest', async () => {
+    const a = await client();
+    await send(a, 'room:create', { name: 'Lvl' });
+    await send(a, 'room:addBot');
+    await until(() => a.state !== null && a.state.players.length === 2);
+    expect(a.state!.config.botLevel).toBe('expert');
+    expect(await send(a, 'room:config', { decks: 1, bluffRule: 'one', botLevel: 'normal' })).toEqual({ ok: true });
+    await until(() => a.state!.config.botLevel === 'normal');
+    expect(await send(a, 'room:config', { decks: 1, bluffRule: 'one', botLevel: 'genius' })).toEqual({ ok: false, error: 'Invalid settings' });
+    // an app that doesn't know the setting gets expert bots
+    expect(await send(a, 'room:config', { decks: 1, bluffRule: 'one' })).toEqual({ ok: true });
+    await until(() => a.state!.config.botLevel === 'expert');
   });
 
   it('never leaves a room to bots alone, in the lobby or mid-game', async () => {

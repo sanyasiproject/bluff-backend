@@ -1,6 +1,7 @@
 import { ObjectId, type AnyBulkWriteOperation } from 'mongodb';
 import { istDay } from '../days.js';
 import type { Collections, GameDoc, GamePlayerDoc, UserDoc } from '../db/documents.js';
+import { HABIT_KEYS } from '../habits.js';
 import type { GameRecord } from '../models.js';
 import {
   DAILY_GAME_REWARDS,
@@ -81,6 +82,8 @@ export class GameRecorder {
     });
 
     if (finished) await this.addLifetimeStats(players, record.config.game === 'crazy7');
+    // how each person really plays, for the bots; a stopped game's plays count too
+    if (record.config.game !== 'crazy7') await this.addHabits(players);
 
     const today = istDay();
     const accounts = await this.cols.users
@@ -211,6 +214,17 @@ export class GameRecorder {
           },
         },
       }));
+    if (updates.length > 0) await this.cols.users.bulkWrite(updates);
+  }
+
+  /** adds this game's true plays to each account's habits (server only; the bots read them at the next join or deal) */
+  private async addHabits(players: GamePlayerDoc[]): Promise<void> {
+    const updates: AnyBulkWriteOperation<UserDoc>[] = players.flatMap((p) => {
+      const h = p.stats.habits;
+      if (!p.userId || !h) return [];
+      const inc = Object.fromEntries(HABIT_KEYS.filter((k) => h[k] > 0).map((k) => [`habits.${k}`, h[k]]));
+      return Object.keys(inc).length > 0 ? [{ updateOne: { filter: { _id: p.userId }, update: { $inc: inc } } }] : [];
+    });
     if (updates.length > 0) await this.cols.users.bulkWrite(updates);
   }
 

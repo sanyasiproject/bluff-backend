@@ -1,5 +1,5 @@
 import type { Collection, ObjectId } from 'mongodb';
-import type { PlayerStats } from '../models.js';
+import type { Habits, PlayerStats } from '../models.js';
 import type { AuditAction, GameConfig, GameKind, LifetimeStats, Role } from '../types.js';
 
 /** database and collection names, all overridable from env */
@@ -49,6 +49,8 @@ export interface UserDoc {
   cardBack?: string;
   /** chosen table theme, a TABLE_THEMES id */
   tableTheme?: string;
+  /** how they really play Bluff, summed over their saved games; only the server and its bots read it */
+  habits?: Partial<Habits>;
 }
 
 export interface SessionDoc {

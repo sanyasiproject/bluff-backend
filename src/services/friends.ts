@@ -167,4 +167,14 @@ export class FriendService {
     const pair = [a, b].sort().join('_');
     return (await this.cols.friends.countDocuments({ pair, status: 'accepted' }, { limit: 1 })) === 1;
   }
+
+  /** everyone who is friends with this account (accepted requests only) */
+  async friendIdsOf(userId: string): Promise<string[]> {
+    if (!/^[a-f0-9]{24}$/i.test(userId)) return [];
+    const me = new ObjectId(userId);
+    const links = await this.cols.friends
+      .find({ status: 'accepted', $or: [{ requester: me }, { recipient: me }] }, { projection: { requester: 1, recipient: 1 } })
+      .toArray();
+    return links.map((f) => (f.requester.equals(me) ? f.recipient : f.requester).toHexString());
+  }
 }

@@ -32,6 +32,47 @@ export interface Member {
   back: string;
   /** table theme everyone sees on this member's seat; classic green for guests and bots */
   table: string;
+  /** how they really play Bluff, from their past games; read at join for the bots, never sent to anyone. Null for guests and bots */
+  habits: Habits | null;
+  /** lobby: said they're ready to start (the host starts once every other person is ready) */
+  ready: boolean;
+  /** their app has the Ready button; people on older apps always count as ready */
+  hasReady: boolean;
+}
+
+/**
+ * How a player really plays Bluff, counted from every play the server saw (the true cards, caught or not).
+ * Saved on the account for the bots; never sent to any app. Never includes a game that is still running.
+ */
+export interface Habits {
+  /** plays that opened a round, how many hid a fake, and how many claimed a rank they held none of */
+  openPlays: number;
+  openLies: number;
+  openNone: number;
+  /** plays following a round while holding its rank, and how many hid fakes */
+  followPlays: number;
+  followLies: number;
+  /** turns following a round while holding none of its rank: fakes pushed, or passed */
+  pushes: number;
+  passNone: number;
+  /** passes while holding the round's rank */
+  passHeld: number;
+  /** all lies, and the fake cards in them */
+  lies: number;
+  lieCards: number;
+  /** plays that emptied their hand, and how many of those were lies */
+  finishPlays: number;
+  finishLies: number;
+  /** turns with 3 cards or fewer that couldn't be finished honestly, and how many they faked the rest to finish anyway */
+  endTurns: number;
+  endFakes: number;
+  /** cards of mixed plays (real and fake together) by where they sat in tap order, and how many of them were fake */
+  slotFirst: number;
+  fakeFirst: number;
+  slotMid: number;
+  fakeMid: number;
+  slotLast: number;
+  fakeLast: number;
 }
 
 /** how a player looks to others at the table */
@@ -51,6 +92,7 @@ export interface MemberAccount {
   avatar: string | null;
   back: string;
   table: string;
+  habits: Habits | null;
 }
 
 /** someone asking to watch a game in progress; the host lets them in or not */
@@ -118,8 +160,10 @@ export interface SocketHooks {
   pushInvite?: (toUserId: string, invite: InviteEvent) => Promise<number>;
   /** invite notifications are set up and an admin has them on */
   pushInvitesOn?: () => boolean;
-  /** the app opened or closed on an account (its first connection came or its last went): saved as their last online time */
-  markSeen?: (userId: string) => Promise<void>;
+  /** the app opened or closed on an account (its first connection came or its last went): saved as their last online time; resolves with the one before */
+  markSeen?: (userId: string) => Promise<Date | null>;
+  /** ids of an account's friends (accepted requests only) */
+  friendIdsOf?: (userId: string) => Promise<string[]>;
   /** moves coins to a friend within the daily gift limit; throws GameError with a reason players can read */
   giftCoins?: (fromUserId: string, toUserId: string, amount: number) => Promise<GiftResult>;
 }
@@ -132,6 +176,8 @@ export interface AccountInfo {
   avatar: string | null;
   back: string;
   table: string;
+  /** null until they've played a Bluff game with an account */
+  habits: Habits | null;
 }
 
 /** balances after a gift between friends */
@@ -157,6 +203,8 @@ export interface PlayerStats {
   missedCalls?: number;
   /** Crazy 7: cards picked (kept apart from Bluff's pickedUp, which feeds the Collector achievement) */
   picks?: number;
+  /** Bluff: how they really played this game, added to the account's habits when the game is saved */
+  habits?: Habits;
 }
 
 /** what a room reads from whichever game is on (Bluff's Game or Crazy7Game) */

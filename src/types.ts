@@ -41,11 +41,24 @@ export const MAX_PEEKS = 3;
 /** coins a caller can bet on a bluff call (never more than the room's stake) */
 export const BET_STEPS = [50, 100, 250, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000] as const;
 
-/** with bots at the table the stake can be at most this; bots have no coins of their own */
-export const BOT_MAX_STAKE = 100;
-
 /** which game a room plays */
 export type GameKind = 'bluff' | 'crazy7';
+
+/** how well Bluff bots play; the host picks it in the lobby (Crazy 7 bots always play their best) */
+export const BOT_LEVELS = ['normal', 'hard', 'expert'] as const;
+export type BotLevel = (typeof BOT_LEVELS)[number];
+
+export const BOT_LEVEL_NAMES: Record<BotLevel, string> = { normal: 'Normal', hard: 'Hard', expert: 'Expert' };
+
+/** with bots at the table the stake can be at most this, by bot level (bots have no coins of their own): Normal bots play only free games */
+export const BOT_STAKE_CAPS: Record<BotLevel, number> = { normal: 0, hard: 100, expert: 1_000 };
+
+/** the bot level that sets a table's stake cap: Crazy 7 bots always play their best, so they count as expert */
+export const stakeLevelOf = (config: { game?: GameKind; botLevel?: BotLevel }): BotLevel =>
+  config.game === 'crazy7' ? 'expert' : (config.botLevel ?? 'expert');
+
+/** the most a table with bots may stake */
+export const botStakeCap = (config: { game?: GameKind; botLevel?: BotLevel }): number => BOT_STAKE_CAPS[stakeLevelOf(config)] ?? BOT_STAKE_CAPS.expert;
 
 /** Crazy 7: cards dealt to each player */
 export const CRAZY7_HAND_SIZES = [5, 7] as const;
@@ -72,6 +85,8 @@ export interface GameConfig {
   maxPicks: number;
   /** Crazy 7: a 7 can be answered with another 7, passing a bigger pick on */
   stack7: boolean;
+  /** Bluff: how well the bots play (older apps don't send it: expert) */
+  botLevel: BotLevel;
 }
 
 /** one move at a Crazy 7 table, for seat labels and animations */
@@ -373,6 +388,8 @@ export interface PublicPlayer {
   level: number | null;
   /** a bot the server plays; never has an account */
   bot: boolean;
+  /** lobby: ready to start; the host, bots and people on older apps always count as ready */
+  ready: boolean;
 }
 
 /** how one player's coins changed when a game ended */
@@ -695,6 +712,15 @@ export interface FriendsResponse {
   incoming: FriendView[];
   /** requests I sent */
   outgoing: FriendView[];
+}
+
+/** a friend's app just opened after a while away; sent to their friends who are online */
+export interface FriendOnlineEvent {
+  id: string;
+  name: string;
+  username: string;
+  /** chosen avatar ("face.bg"); null shows the first letter */
+  avatar: string | null;
 }
 
 /** a friend asking you to join their room */

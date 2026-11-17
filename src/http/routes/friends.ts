@@ -1,4 +1,4 @@
-import { Router, type RequestHandler } from 'express';
+import { Router, type RequestHandler, type Response } from 'express';
 import { ObjectId } from 'mongodb';
 import type { Presence } from '../../presence.js';
 import type { Store } from '../../services/store.js';
@@ -13,6 +13,11 @@ export type NotifyFriends = (userId: string) => void;
 export type RoomOfUser = (userId: string) => { code: string; phase: Phase } | null;
 
 export function friendRoutes(store: Store, presence: Presence, notify: NotifyFriends, roomOf: RoomOfUser, limited: RequestHandler): Router {
+  // both people's open apps hear about it (the one who acted may have it open on another screen or phone), so nobody polls
+  const notifyBoth = (res: Response, otherId: string) => {
+    notify(otherId);
+    notify(currentUser(res)._id.toHexString());
+  };
   const r = Router();
   r.use(requireUser(store));
 
@@ -67,7 +72,7 @@ export function friendRoutes(store: Store, presence: Presence, notify: NotifyFri
     limited,
     ah(async (req, res) => {
       const { result, otherId } = await store.friends.request(currentUser(res), parseUsername(asPayload(req.body).username));
-      notify(otherId.toHexString());
+      notifyBoth(res, otherId.toHexString());
       res.json({ result });
     }),
   );
@@ -78,7 +83,7 @@ export function friendRoutes(store: Store, presence: Presence, notify: NotifyFri
     ah(async (req, res) => {
       const otherId = parseUserId(req.params.id);
       await store.friends.accept(currentUser(res)._id, new ObjectId(otherId));
-      notify(otherId);
+      notifyBoth(res, otherId);
       res.status(204).end();
     }),
   );
@@ -89,7 +94,7 @@ export function friendRoutes(store: Store, presence: Presence, notify: NotifyFri
     ah(async (req, res) => {
       const otherId = parseUserId(req.params.id);
       await store.friends.remove(currentUser(res)._id, new ObjectId(otherId));
-      notify(otherId);
+      notifyBoth(res, otherId);
       res.status(204).end();
     }),
   );

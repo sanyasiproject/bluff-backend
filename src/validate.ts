@@ -1,6 +1,7 @@
 import { GameError } from './game.js';
 import {
   BET_STEPS,
+  BOT_LEVELS,
   CRAZY7_HAND_SIZES,
   CRAZY7_MAX_PICKS,
   GIFT_STEPS,
@@ -10,6 +11,7 @@ import {
   REACTIONS,
   STAKES,
   THROWS,
+  type BotLevel,
   type ChatKind,
   type GameConfig,
   type Rank,
@@ -53,10 +55,12 @@ export function parseConfig(p: Payload): GameConfig {
   const maxPicks =
     p.maxPicks === undefined ? 1 : Number.isInteger(p.maxPicks) && (p.maxPicks as number) >= 1 && (p.maxPicks as number) <= CRAZY7_MAX_PICKS ? (p.maxPicks as number) : null;
   const stack7 = p.stack7 === undefined ? true : typeof p.stack7 === 'boolean' ? p.stack7 : null;
+  // the bot level came later too; older apps get the strongest bots
+  const botLevel = p.botLevel === undefined ? 'expert' : (BOT_LEVELS as readonly unknown[]).includes(p.botLevel) ? (p.botLevel as BotLevel) : null;
   if (!decks || !bluffRule || stake === null || peeks === null || bets === null || teams === null) throw new GameError('Invalid settings');
-  if (!game || handSize === null || maxPicks === null || stack7 === null) throw new GameError('Invalid settings');
+  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null) throw new GameError('Invalid settings');
   // Bluff's extras are kept while Crazy 7 is picked (it ignores them), so switching back keeps them; bets need coins at stake
-  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7 };
+  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel };
 }
 
 // only the browsers' own push services: the server never posts to any other address a client sends

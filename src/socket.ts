@@ -5,8 +5,20 @@ import { Crazy7Bots } from './crazy7/driver.js';
 import { GameError } from './game.js';
 import type { AccountInfo, GameEvent, GameRecord, Member, MemberAccount, PlayerLook, SocketHooks, SocketUser, WatchRequest } from './models.js';
 import { Presence } from './presence.js';
-import type { Room, RoomManager } from './rooms.js';
-import { BOT_MAX_STAKE, DEFAULT_CARD_BACK, DEFAULT_TABLE_THEME, type Announcement, type GiftEvent, type GiftReceived, type InviteEvent, type ServerInfo } from './types.js';
+import { botStakeText, type Room, type RoomManager } from './rooms.js';
+import {
+  BOT_LEVEL_NAMES,
+  botStakeCap,
+  DEFAULT_CARD_BACK,
+  DEFAULT_TABLE_THEME,
+  type Announcement,
+  type FriendOnlineEvent,
+  type GiftEvent,
+  type GiftReceived,
+  type InviteEvent,
+  type ServerInfo,
+  stakeLevelOf,
+} from './types.js';
 import {
   asPayload,
   parseBet,
@@ -37,6 +49,18 @@ export const MAX_CONNECTIONS_PER_IP = 50;
 /** the same friend can be invited again after this long */
 const INVITE_GAP_MS = 30_000;
 
+/** when friends hear "came online" */
+export interface OnlineAlertTimes {
+  /** only after being away at least this long, so a quick app switch or reconnect says nothing */
+  awayMs: number;
+  /** a restart brings everyone back at once: no alerts this soon after the server starts */
+  quietMs: number;
+}
+
+const ONLINE_ALERTS: OnlineAlertTimes = { awayMs: 5 * 60_000, quietMs: 2 * 60_000 };
+/** forget when someone went offline after this long (they count as long gone anyway) */
+const OFFLINE_MEMORY_MS = 24 * 60 * 60_000;
+
 /** the caller's network address: Cloudflare's header on Render, else the last proxy hop (earlier ones can be forged) */
 export function clientIp(socket: Socket): string {
   const h = socket.handshake.headers;
@@ -52,6 +76,12 @@ type Seat = { room: Room; member: Member };
 const formatCoins = (n: number) => n.toLocaleString('en-IN');
 const listNames = (members: Member[]) => members.map((m) => m.name).join(', ');
 
+/** said when the bots at the table brought the stake down */
+const stakeLoweredText = (room: Room) => {
+  const level = BOT_LEVEL_NAMES[stakeLevelOf(room.config)];
+  return room.config.stake > 0 ? `Stake lowered to ${formatCoins(room.config.stake)} for ${level} bots` : `${level} bots play only free games, so this game is now free`;
+};
+
 /** Wires socket events to rooms; returns stop (the sweep timer) and live account updates */
 export function registerHandlers(
   io: Server,
@@ -61,7 +91,12 @@ export function registerHandlers(
   maxConnectionsPerIp = MAX_CONNECTIONS_PER_IP,
   /** bots' thinking pace: 1 = human-like; tests use a small number */
   botSpeed = 1,
+  alertTimes: Partial<OnlineAlertTimes> = {},
 ): { stop: () => void; lookChanged: (userId: string, look: PlayerLook) => void } {
+  const alerts = { ...ONLINE_ALERTS, ...alertTimes };
+  const startedAt = Date.now();
+  /** when each account's last connection closed while this server ran */
+  const wentOffline = new Map<string, number>();
   // every player gets their own view so hands stay private; bots then plan their next move
   const broadcast = (room: Room) => {
     for (const m of room.members) if (m.socketId) io.to(m.socketId).emit('state', room.view(m.id));
@@ -144,7 +179,7 @@ export function registerHandlers(
     if (stake > 0) {
       if (room.starting) throw new GameError('Already starting');
       const seated = room.players();
-      if (stake > BOT_MAX_STAKE && seated.some((m) => m.bot)) throw new GameError(`With bots at the table the stake can be up to ${BOT_MAX_STAKE}`);
+      if (stake > botStakeCap(room.config) && seated.some((m) => m.bot)) throw new GameError(botStakeText(room.config));
       // bots have no coins: only the people pay in
       const people = seated.filter((m) => !m.bot);
       const guests = people.filter((m) => !m.userId);
@@ -160,7 +195,10 @@ export function registerHandlers(
         for (const m of people) {
           const a = accounts.get(m.userId!);
           m.coins = a?.coins ?? 0;
-          if (a) m.stats = a.stats;
+          if (a) {
+            m.stats = a.stats;
+            m.habits = a.habits;
+          }
         }
         const short = people.filter((m) => (m.coins ?? 0) < stake);
         if (short.length > 0) {
@@ -169,6 +207,15 @@ export function registerHandlers(
         }
         const now = room.players();
         if (now.length !== seated.length || now.some((m, i) => m !== seated[i])) throw new GameError('Players changed, tap Start again');
+      } finally {
+        room.starting = false;
+      }
+    } else if (room.players().some((m) => m.bot) && room.config.game !== 'crazy7') {
+      // Bluff bots size people up from their latest record; staked games read it above with the balances
+      if (room.starting) throw new GameError('Already starting');
+      room.starting = true;
+      try {
+        await refreshReads(room);
       } finally {
         room.starting = false;
       }
@@ -183,7 +230,24 @@ export function registerHandlers(
     publish(room, [room.note('round', `${label}. ${first} goes first${pot}`), ...room.announce(opening)]);
   };
 
-  /** the account a logged-in socket joins with; balance and level are read fresh */
+  /** before a free deal with bots: each person's latest lifetime numbers and habits, so the bots size them up from their last games too */
+  const refreshReads = async (room: Room) => {
+    const people = room.players().filter((m) => !m.bot && m.userId);
+    if (people.length === 0 || !hooks.getAccounts) return;
+    try {
+      const accounts = await hooks.getAccounts(people.map((m) => m.userId!));
+      for (const m of people) {
+        const a = accounts.get(m.userId!);
+        if (!a) continue;
+        m.stats = a.stats;
+        m.habits = a.habits;
+        m.level = a.level;
+      }
+    } catch {
+      // the bots go with what they read when each person joined
+    }
+  };
+
   /** let a waiting person in (watching mid-game, a seat back in the lobby); their app rejoins with the seat token */
   const admit = (room: Room, req: WatchRequest) => {
     // they closed the app while waiting
@@ -209,7 +273,39 @@ export function registerHandlers(
     } catch {
       // shown as unknown until the next game ends
     }
-    return { userId: u.id, username: u.username, coins: fresh?.coins ?? null, level: fresh?.level ?? null, stats: fresh?.stats ?? null, avatar: fresh?.avatar ?? null, back: fresh?.back ?? DEFAULT_CARD_BACK, table: fresh?.table ?? DEFAULT_TABLE_THEME };
+    return {
+      userId: u.id,
+      username: u.username,
+      coins: fresh?.coins ?? null,
+      level: fresh?.level ?? null,
+      stats: fresh?.stats ?? null,
+      avatar: fresh?.avatar ?? null,
+      back: fresh?.back ?? DEFAULT_CARD_BACK,
+      table: fresh?.table ?? DEFAULT_TABLE_THEME,
+      habits: fresh?.habits ?? null,
+    };
+  };
+
+  /** an account's app opened after a while away: its friends who are online hear about it */
+  const cameOnline = async (u: SocketUser, seenBefore: Date | null) => {
+    const now = Date.now();
+    const left = wentOffline.get(u.id);
+    wentOffline.delete(u.id);
+    // right after a restart everyone comes back at once; that isn't news
+    if (left === undefined && now - startedAt < alerts.quietMs) return;
+    const away = left !== undefined ? now - left : seenBefore ? now - seenBefore.getTime() : Infinity;
+    if (away < alerts.awayMs || !hooks.friendIdsOf) return;
+    const online = (await hooks.friendIdsOf(u.id)).filter((id) => presence.isOnline(id));
+    // they may have closed the app again meanwhile
+    if (online.length === 0 || !presence.isOnline(u.id)) return;
+    let avatar: string | null = null;
+    try {
+      avatar = (await hooks.getAccounts?.([u.id]))?.get(u.id)?.avatar ?? null;
+    } catch {
+      // the first letter shows instead
+    }
+    const event: FriendOnlineEvent = { id: u.id, name: u.displayName, username: u.username, avatar };
+    for (const id of online) for (const sid of presence.socketsOf(id)) io.to(sid).emit('friend:online', event);
   };
 
   /** accounts on or off, and whether guests may play right now */
@@ -228,6 +324,8 @@ export function registerHandlers(
     const ip = clientIp(socket);
     if ((connections.get(ip) ?? 0) >= maxConnectionsPerIp) return next(new Error('Too many connections from your network'));
     socket.data.ip = ip;
+    // apps with the lobby's Ready button say so; older ones never hold up a start
+    socket.data.hasReady = (socket.handshake.auth as { ready?: unknown } | undefined)?.ready === true;
     next();
   });
 
@@ -252,7 +350,11 @@ export function registerHandlers(
       const wasOnline = presence.isOnline(user.id);
       presence.add(user.id, socket.id);
       // in the background: a DB hiccup never blocks a connection
-      if (!wasOnline) hooks.markSeen?.(user.id).catch(() => {});
+      if (!wasOnline) {
+        void (hooks.markSeen?.(user.id) ?? Promise.resolve(null))
+          .then((before) => cameOnline(user, before))
+          .catch((err: Error) => console.error('[friends] online alert failed:', err.message));
+      }
     }
     // the app shows Log in and the guest lock from this even when its /health check is blocked
     socket.emit('server:info', serverInfo());
@@ -286,6 +388,7 @@ export function registerHandlers(
       }
       member.socketId = socket.id;
       member.lastSeen = Date.now();
+      member.hasReady = socket.data.hasReady === true;
       socket.join(room.code);
       seat = next;
     };
@@ -435,8 +538,19 @@ export function registerHandlers(
 
     on('room:config', (p) => {
       const { room, member } = current();
-      room.setConfig(member.id, parseConfig(p));
-      broadcast(room);
+      const { stakeLowered, readyAgain } = room.setConfig(member.id, parseConfig(p));
+      const notes = stakeLowered ? [room.note('room', stakeLoweredText(room))] : [];
+      if (readyAgain) notes.push(room.note('room', 'Settings changed: tap Ready again'));
+      publish(room, notes);
+    });
+
+    // lobby: ready to start, or not yet (wait a minute); the host's Start opens once every other person is ready
+    on('room:ready', (p) => {
+      const { room, member } = current();
+      room.setReady(member.id, parseFlag(p.ready, 'Ready'));
+      const others = room.players().filter((m) => !m.bot && m.id !== room.hostId);
+      const everyone = member.ready && others.length > 0 && room.waitingFor().length === 0;
+      publish(room, everyone ? [room.note('room', 'Everyone is ready ✅')] : []);
     });
 
     on('room:start', async () => {
@@ -486,7 +600,7 @@ export function registerHandlers(
       const { room, member } = current();
       const { bot, stakeLowered } = bots.add(room, member.id);
       const notes = [room.note('room', `${member.name} added ${bot.name} 🤖`)];
-      if (stakeLowered) notes.push(room.note('room', `With bots at the table the stake is now ${BOT_MAX_STAKE}`));
+      if (stakeLowered) notes.push(room.note('room', stakeLoweredText(room)));
       publish(room, notes);
     });
 
@@ -667,7 +781,10 @@ export function registerHandlers(
     socket.on('disconnect', () => {
       if (user) {
         presence.remove(user.id, socket.id);
-        if (!presence.isOnline(user.id)) hooks.markSeen?.(user.id).catch(() => {});
+        if (!presence.isOnline(user.id)) {
+          wentOffline.set(user.id, Date.now());
+          hooks.markSeen?.(user.id).catch(() => {});
+        }
       }
       const left = (connections.get(ip) ?? 1) - 1;
       if (left > 0) connections.set(ip, left);
@@ -680,6 +797,8 @@ export function registerHandlers(
 
   const timer = setInterval(() => {
     rooms.sweep().forEach(broadcast);
+    const now = Date.now();
+    for (const [id, at] of wentOffline) if (now - at > OFFLINE_MEMORY_MS) wentOffline.delete(id);
     bots.prune();
     c7bots.prune();
     c7auto.prune();

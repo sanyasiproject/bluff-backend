@@ -4,7 +4,30 @@ import { cardName, describeClaim, ordinal, secureRandom } from './cards.js';
 import { Crazy7Game } from './crazy7/game.js';
 import { Game, GameError } from './game.js';
 import type { GameEvent, GameRecord, Member, MemberAccount, TableGame, WatchRequest } from './models.js';
-import { BOT_MAX_STAKE, DEFAULT_CARD_BACK, DEFAULT_TABLE_THEME, type AnnounceKind, type Announcement, type ChatEvent, type ChatKind, type CoinResult, type Crazy7View, type GameConfig, type Phase, type RoomView, type ThrowEvent } from './types.js';
+import {
+  BOT_LEVEL_NAMES,
+  botStakeCap,
+  DEFAULT_CARD_BACK,
+  DEFAULT_TABLE_THEME,
+  stakeLevelOf,
+  type AnnounceKind,
+  type Announcement,
+  type ChatEvent,
+  type ChatKind,
+  type CoinResult,
+  type Crazy7View,
+  type GameConfig,
+  type Phase,
+  type RoomView,
+  type ThrowEvent,
+} from './types.js';
+
+/** why a stake is too high for the bots at the table, for players to read */
+export function botStakeText(config: GameConfig): string {
+  const cap = botStakeCap(config);
+  const level = BOT_LEVEL_NAMES[stakeLevelOf(config)];
+  return cap > 0 ? `With ${level} bots the stake can be up to ${cap.toLocaleString('en-IN')}` : `${level} bots play only free games`;
+}
 
 export const MAX_PLAYERS = 5;
 /** seated players plus watchers */
@@ -36,7 +59,7 @@ export const DEFAULT_ROOM_LIMITS: RoomLimits = { createsPerIp: 10, liveRoomsPerI
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true };
+  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert' };
   /** a Bluff game */
   game: Game | null = null;
   /** a Crazy 7 game */
@@ -111,6 +134,9 @@ export class Room {
       avatar: account?.avatar ?? null,
       back: account?.back ?? DEFAULT_CARD_BACK,
       table: account?.table ?? DEFAULT_TABLE_THEME,
+      habits: account?.habits ?? null,
+      ready: false,
+      hasReady: false,
     };
     this.members.push(member);
     if (!this.hostId) this.hostId = member.id;
@@ -138,16 +164,22 @@ export class Room {
     return events;
   }
 
-  /** host seats a bot in the lobby; bots cap the stake. Returns the bot and whether the stake came down */
+  /** host seats a bot in the lobby; bots cap the stake by their level. Returns the bot and whether the stake came down */
   addBot(by: string, name: string): { bot: Member; stakeLowered: boolean } {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Bots can only join in the lobby');
     if (this.players().length >= MAX_PLAYERS) throw new GameError(`All ${MAX_PLAYERS} seats are taken`);
     const bot = this.addMember(name);
     bot.bot = true;
-    const stakeLowered = this.config.stake > BOT_MAX_STAKE;
-    if (stakeLowered) this.config = { ...this.config, stake: BOT_MAX_STAKE };
-    return { bot, stakeLowered };
+    return { bot, stakeLowered: this.capStake() };
+  }
+
+  /** with bots seated, brings a stake above their level's cap down to it (a free game needs no bets); true if it came down */
+  private capStake(): boolean {
+    const cap = botStakeCap(this.config);
+    if (!this.hasBots || this.config.stake <= cap) return false;
+    this.config = { ...this.config, stake: cap, bets: cap > 0 && this.config.bets };
+    return true;
   }
 
   /** at least one person is here; a room is never left to bots alone */
@@ -253,6 +285,8 @@ export class Room {
     const target = this.member(targetId);
     if (target.bot) throw new GameError("A bot can't be the host");
     if (!target.socketId) throw new GameError(`${target.name} is offline`);
+    // the old host was about to start anyway
+    this.member(by).ready = true;
     this.hostId = target.id;
     return target;
   }
@@ -271,17 +305,43 @@ export class Room {
       return m;
     }
     if (m.watching && this.players().length >= MAX_PLAYERS) throw new GameError(`All ${MAX_PLAYERS} seats are taken`);
+    if (m.watching) m.ready = false;
     m.watching = false;
     m.watchByChoice = false;
     return m;
   }
 
-  setConfig(by: string, config: GameConfig): void {
+  /** lobby: a seated person says they're ready to start, or that they need a minute; the host has Start instead */
+  setReady(by: string, ready: boolean): Member {
+    if (this.phase !== 'lobby') throw new GameError('Getting ready is for the lobby');
+    const m = this.member(by);
+    if (m.watching) throw new GameError("You're watching. Switch to Play to take a seat");
+    if (by === this.hostId) throw new GameError('The host starts the game once everyone is ready');
+    m.ready = ready;
+    return m;
+  }
+
+  /** seated people who haven't said they're ready; the host, bots and older apps never hold up the start */
+  waitingFor(): Member[] {
+    return this.players().filter((m) => !m.bot && m.id !== this.hostId && m.hasReady && !m.ready);
+  }
+
+  /** returns whether the stake came down because the bots' level (or the game) changed, and whether people must say they're ready again */
+  setConfig(by: string, config: GameConfig): { stakeLowered: boolean; readyAgain: boolean } {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Settings can only change in the lobby');
-    if (this.hasBots && config.stake > BOT_MAX_STAKE) throw new GameError(`With bots at the table the stake can be up to ${BOT_MAX_STAKE}`);
+    // picking a stake above what the bots allow is refused; picking a lower bot level brings the stake down with it
+    const sameBots = stakeLevelOf(config) === stakeLevelOf(this.config);
+    if (this.hasBots && sameBots && config.stake > botStakeCap(config)) throw new GameError(botStakeText(config));
+    const before = this.config;
     this.config = config;
     if (!config.teams) this.swapAsks.clear();
+    const stakeLowered = this.capStake();
+    // a new stake or a different game: everyone agrees again before the host can start
+    const changed = this.config.stake !== before.stake || this.config.game !== before.game;
+    const readyAgain = changed && this.members.some((m) => m.ready && m.id !== this.hostId);
+    if (changed) for (const m of this.members) m.ready = false;
+    return { stakeLowered, readyAgain };
   }
 
   /** 2v2: move yourself into a free team slot, which also picks your team and partner */
@@ -362,6 +422,8 @@ export class Room {
     if (this.players().length < 2) throw new GameError('Need at least 2 players');
     if (!this.players().some((m) => !m.bot)) throw new GameError('Someone has to play with the bots');
     if (this.bluffTeams && this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
+    const waiting = this.waitingFor();
+    if (waiting.length > 0) throw new GameError(`Waiting for ${waiting.map((m) => m.name).join(', ')} to be ready`);
   }
 
   /** 2v2 is on and the game is Bluff (Crazy 7 keeps the setting but ignores it) */
@@ -535,6 +597,7 @@ export class Room {
         username: m.username,
         level: m.level,
         bot: m.bot,
+        ready: m.bot || m.id === this.hostId || !m.hasReady || m.ready,
       })),
       watchers: this.members
         .filter((m) => !seatedIds.has(m.id))
@@ -705,7 +768,10 @@ export class Room {
   /** watchers waiting for a seat take free ones in the order they joined; those who chose to watch stay put */
   private fillSeats(): void {
     for (const m of this.members) {
-      if (m.watching && !m.watchByChoice && this.players().length < MAX_PLAYERS) m.watching = false;
+      if (m.watching && !m.watchByChoice && this.players().length < MAX_PLAYERS) {
+        m.watching = false;
+        m.ready = false;
+      }
     }
   }
 

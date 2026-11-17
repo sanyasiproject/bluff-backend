@@ -4,6 +4,7 @@ import { BotMemory } from '../src/bots/memory.js';
 import type { BotStyle, Personality, Rand, Read } from '../src/bots/models.js';
 import { BOT_NAMES, BOT_STYLES, makePersonality, pickName, pickStyle } from '../src/bots/personality.js';
 import type { PlayerStats } from '../src/models.js';
+import { Game } from '../src/game.js';
 import { Room } from '../src/rooms.js';
 import type { Card, GameConfig, LifetimeStats, Rank } from '../src/types.js';
 
@@ -28,7 +29,9 @@ function table(styles: BotStyle[], config: Partial<GameConfig>, rand: Rand) {
   styles.slice(1).forEach((_, i) => room.addBot(host.id, `Bot${i}`));
   room.setConfig(host.id, { ...CONFIG, ...config });
   room.start(host.id);
-  const g = room.game!;
+  // dealt again from the seed, so every run plays the same cards
+  room.game = new Game(room.game!.order, room.game!.config, (max) => Math.floor(rand() * max));
+  const g = room.game;
   const seats = room.players().map((m, i) => ({ id: m.id, me: makePersonality(styles[i], rand), mem: new BotMemory(m.id, new Map(), new Map()) }));
   type Seat = (typeof seats)[number];
   const sit = (s: Seat): Situation => ({ view: room.view(s.id), mem: s.mem, me: s.me, rand });
@@ -99,8 +102,9 @@ describe('bot engine', () => {
 
   it('gives each style its own way of playing', () => {
     const total = new Map<BotStyle, PlayerStats>();
+    // styles show most at Normal; higher levels even out their calls
     for (let seed = 100; seed < 160; seed++) {
-      for (const s of playGame(['shark', 'maniac', 'rock', 'detective'], { decks: 1, bluffRule: 'one' }, seed).stats) {
+      for (const s of playGame(['shark', 'maniac', 'rock', 'detective'], { decks: 1, bluffRule: 'one', botLevel: 'normal' }, seed).stats) {
         const t = total.get(s.style) ?? { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0, plays: 0, chances: 0 };
         for (const k of Object.keys(t) as (keyof PlayerStats)[]) t[k] += s[k];
         total.set(s.style, t);
@@ -186,6 +190,10 @@ const readOf = (r: Partial<Read>): Read => ({
   openHonest: 0,
   followCaught: 0,
   followHonest: 0,
+  endCaught: 0,
+  endHonest: 0,
+  expected: 0,
+  found: 0,
   ...r,
 });
 
@@ -203,7 +211,8 @@ function pusherSession(bots: number, games: number, seed: number) {
     styles.forEach((_, i) => room.addBot(host.id, `Bot${i}`));
     room.setConfig(host.id, { ...CONFIG });
     room.start(host.id);
-    const g = room.game!;
+    room.game = new Game(room.game!.order, room.game!.config, (max) => Math.floor(rand() * max));
+    const g = room.game;
     const [person, ...botIds] = room.players().map((m) => m.id);
     const seats = botIds.map((id, i) => ({ id, me: mes[i], mem: new BotMemory(id, new Map([[person, learned[i]]]), new Map()) }));
     const sit = (st: (typeof seats)[number]): Situation => ({ view: room.view(st.id), mem: st.mem, me: st.me, rand });
@@ -211,9 +220,11 @@ function pusherSession(bots: number, games: number, seed: number) {
     const noPeek = () => null;
     for (let moves = 0; !g.over && moves < 3000; moves++) {
       if (g.lastPlay) {
-        const caller = seats.find((st) => st.id !== g.turnId && g.hand(st.id).length > 0 && g.lastPlay && decideCall(sit(st), false, noPeek));
-        if (caller) {
-          feed(g.callBluff(caller.id, g.lastPlay!.id, decideCall(sit(caller), false, noPeek)?.cardIndex ?? 0, 0));
+        // the first bot that wants to call turns over the card it chose
+        let call: { cardIndex?: number } | null = null;
+        const caller = seats.find((st) => st.id !== g.turnId && g.hand(st.id).length > 0 && g.lastPlay && (call = decideCall(sit(st), false, noPeek)));
+        if (caller && call) {
+          feed(g.callBluff(caller.id, g.lastPlay!.id, (call as { cardIndex?: number }).cardIndex ?? 0, 0));
           continue;
         }
       }

@@ -10,7 +10,7 @@ import type { Store } from './services/store.js';
 import type { PlayerLook } from './models.js';
 import type { AppSettings } from './types.js';
 import { giftLeftOf } from './services/users.js';
-import { MAX_CONNECTIONS_PER_IP, registerHandlers } from './socket.js';
+import { MAX_CONNECTIONS_PER_IP, registerHandlers, type OnlineAlertTimes } from './socket.js';
 
 export interface ServerDeps {
   /** MongoDB-backed accounts, coins, friends and game history; omit for guest-only */
@@ -21,6 +21,8 @@ export interface ServerDeps {
   limits?: Partial<RoomLimits & { connectionsPerIp: number }>;
   /** bots' thinking pace: 1 = human-like (tests use a small number) */
   botSpeed?: number;
+  /** when friends hear that someone came online; defaults suit production */
+  onlineAlerts?: Partial<OnlineAlertTimes>;
 }
 
 export function createBluffServer(deps: ServerDeps = {}) {
@@ -74,6 +76,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
           onGameEnd: (record) => store.games.save(record),
           areFriends: (a, b) => store.friends.areFriends(a, b),
           markSeen: (userId) => store.users.markSeen(userId),
+          friendIdsOf: (userId) => store.friends.friendIdsOf(userId),
           guestsAllowed: () => store.settings.guestsAllowed,
           pushInvitesOn: () => store.push.ready && store.settings.pushInvites,
           pushInvite: (toUserId, invite) => (store.push.ready && store.settings.pushInvites ? store.push.sendInvite(toUserId, invite) : Promise.resolve(0)),
@@ -90,6 +93,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
     presence,
     deps.limits?.connectionsPerIp ?? MAX_CONNECTIONS_PER_IP,
     deps.botSpeed,
+    deps.onlineAlerts,
   );
 
   lookChanged = handlers.lookChanged;

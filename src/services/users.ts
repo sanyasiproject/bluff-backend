@@ -3,6 +3,7 @@ import { hashPassword, verifyPassword } from '../auth/passwords.js';
 import { hashToken, newToken } from '../auth/tokens.js';
 import { istDay } from '../days.js';
 import type { Actor, AuditDoc, Collections, UserDoc } from '../db/documents.js';
+import { habitsFrom } from '../habits.js';
 import { ApiError } from '../http/errors.js';
 import type { AccountInfo } from '../models.js';
 import {
@@ -162,13 +163,17 @@ export class UserService {
 
   async getAccounts(userIds: string[]): Promise<Map<string, AccountInfo>> {
     const ids = userIds.filter((id) => /^[a-f0-9]{24}$/i.test(id)).map((id) => new ObjectId(id));
-    const users = await this.cols.users.find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1, avatar: 1, cardBack: 1, tableTheme: 1 } }).toArray();
+    const users = await this.cols.users
+      .find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1, avatar: 1, cardBack: 1, tableTheme: 1, habits: 1 } })
+      .toArray();
     return new Map(
       users.map((u) => [
         u._id.toHexString(),
         { coins: u.coins, level: levelOf(statsOf(u)), stats: statsOf(u), avatar: avatarOf(u),
           back: cardBackChoice(u) ?? DEFAULT_CARD_BACK,
           table: tableThemeChoice(u) ?? DEFAULT_TABLE_THEME,
+          // server-side only: the bots' read on how this player really plays
+          habits: habitsFrom(u.habits),
         },
       ]),
     );
@@ -401,10 +406,15 @@ export class UserService {
     return toPublicUser(updated!);
   }
 
-  /** the app opened or closed on this account: kept as their last online time */
-  async markSeen(userId: string): Promise<void> {
-    if (!/^[a-f0-9]{24}$/i.test(userId)) return;
-    await this.cols.users.updateOne({ _id: new ObjectId(userId) }, { $set: { lastSeenAt: new Date() } });
+  /** the app opened or closed on this account: kept as their last online time; returns the time it replaced */
+  async markSeen(userId: string): Promise<Date | null> {
+    if (!/^[a-f0-9]{24}$/i.test(userId)) return null;
+    const before = await this.cols.users.findOneAndUpdate(
+      { _id: new ObjectId(userId) },
+      { $set: { lastSeenAt: new Date() } },
+      { returnDocument: 'before', projection: { lastSeenAt: 1 } },
+    );
+    return before?.lastSeenAt ?? null;
   }
 
   /** the practice tutorial for a game is done (finished or skipped); shown once per account */
