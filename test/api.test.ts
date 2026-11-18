@@ -1072,6 +1072,25 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect(heard3).toHaveLength(0);
     for (const s of [late, mine3]) s.disconnect();
     restarted.srv.close();
+
+    // a friend at the same table coming back says nothing; one elsewhere still does
+    const table = await start({ awayMs: 0, quietMs: 0 });
+    const mine4 = await table.open(me.body.token);
+    const heard4: FriendOnlineEvent[] = [];
+    mine4.on('friend:online', (e: FriendOnlineEvent) => heard4.push(e));
+    const seat = await table.open(p1.body.token);
+    await until(() => heard4.length === 1);
+    const { code } = (await mine4.timeout(3000).emitWithAck('room:create', {})) as { code: string };
+    await seat.timeout(3000).emitWithAck('room:join', { code });
+    seat.disconnect();
+    const seatBack = await table.open(p1.body.token);
+    await wait(250);
+    expect(heard4).toHaveLength(1);
+    const elsewhere = await table.open(p2.body.token);
+    await until(() => heard4.length === 2);
+    expect(heard4[1].username).toBe('on_p2');
+    for (const s of [seatBack, elsewhere, mine4]) s.disconnect();
+    table.srv.close();
   });
 
   it("tells both people's open apps when a request is sent, accepted or removed, so no screen needs to keep asking", async () => {

@@ -51,13 +51,13 @@ const INVITE_GAP_MS = 30_000;
 
 /** when friends hear "came online" */
 export interface OnlineAlertTimes {
-  /** only after being away at least this long, so a quick app switch or reconnect says nothing */
+  /** only after being away at least this long, so a quick reconnect says nothing */
   awayMs: number;
   /** a restart brings everyone back at once: no alerts this soon after the server starts */
   quietMs: number;
 }
 
-const ONLINE_ALERTS: OnlineAlertTimes = { awayMs: 5 * 60_000, quietMs: 2 * 60_000 };
+const ONLINE_ALERTS: OnlineAlertTimes = { awayMs: 15_000, quietMs: 2 * 60_000 };
 /** forget when someone went offline after this long (they count as long gone anyway) */
 const OFFLINE_MEMORY_MS = 24 * 60 * 60_000;
 
@@ -295,7 +295,9 @@ export function registerHandlers(
     if (left === undefined && now - startedAt < alerts.quietMs) return;
     const away = left !== undefined ? now - left : seenBefore ? now - seenBefore.getTime() : Infinity;
     if (away < alerts.awayMs || !hooks.friendIdsOf) return;
-    const online = (await hooks.friendIdsOf(u.id)).filter((id) => presence.isOnline(id));
+    // friends already in the same room know: they share the table
+    const here = rooms.roomOfUser(u.id);
+    const online = (await hooks.friendIdsOf(u.id)).filter((id) => presence.isOnline(id) && (!here || rooms.roomOfUser(id) !== here));
     // they may have closed the app again meanwhile
     if (online.length === 0 || !presence.isOnline(u.id)) return;
     let avatar: string | null = null;
