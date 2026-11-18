@@ -20,6 +20,7 @@ import {
   type Crazy7View,
   type GameConfig,
   type Phase,
+  type PlayerPlays,
   type RoomView,
   type SazaBadge,
   type ThrowEvent,
@@ -700,6 +701,15 @@ export class Room {
     this.sazaPick = { loserId: loser.id, winnerId: won[0] };
     notes.push(this.note('room', `${loser.name} gets the ${badge.name} saza ${badge.emoji}`));
     return notes;
+  }
+
+  /** game over with the lie reveal on: everything one player of this game put down, and the cards they still held */
+  playsOf(playerId: string): PlayerPlays {
+    const g = this.game;
+    if (!g?.over) throw new GameError('The cards are shown once the game is over');
+    if (g.config.secretLies) throw new GameError('Lies are kept secret in this room');
+    if (!g.order.includes(playerId)) throw new GameError('They were not in this game');
+    return g.playsOf(playerId)!;
   }
 
   /** the winner swaps the loser's badge while the game-over screen is up */

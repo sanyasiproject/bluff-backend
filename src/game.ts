@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { buildDeck, secureRandom, shuffle, sortHand, type RandomInt } from './cards.js';
 import { emptyHabits, noteBotCall, noteBotPlay, notePass, notePlay } from './habits.js';
 import type { BetResult, GameEvent, Habits, PlayerStats, PlayRecord } from './models.js';
-import { MAX_BLUFF_CALLS_IN_A_ROW, RANKS, type Card, type GameConfig, type LieRecap, type Rank, type RevealView } from './types.js';
+import { MAX_BLUFF_CALLS_IN_A_ROW, RANKS, type Card, type GameConfig, type LieRecap, type PlayerPlays, type Rank, type RevealView } from './types.js';
 
 /** how many uncaught lies the game-over reveal lists */
 const LIE_RECAP_MAX = 6;
@@ -48,8 +48,8 @@ export class Game {
   readonly bots: ReadonlySet<string>;
   /** a bot's last play that people may still call: saved in their habits once it stands, or for whoever calls it */
   private botWatch: { playId: string; lie: boolean; people: string[] } | null = null;
-  /** every lying play with its true cards, for the lie reveal once the game is over */
-  private readonly lies: { playId: string; playerId: string; rank: Rank; cards: Card[]; called: boolean; caught: boolean }[] = [];
+  /** every play with its true cards, for the reveal once the game is over */
+  private readonly playLog: { playId: string; playerId: string; rank: Rank; cards: Card[]; called: boolean; caught: boolean }[] = [];
 
   constructor(
     readonly order: string[],
@@ -112,7 +112,7 @@ export class Game {
     this.pileBy.push(...cards.map(() => playerId));
     this.roundRank = claim;
     this.lastPlay = { id: randomUUID(), playerId, cards, rank: claim };
-    if (lie) this.lies.push({ playId: this.lastPlay.id, playerId, rank: claim, cards, called: false, caught: false });
+    this.playLog.push({ playId: this.lastPlay.id, playerId, rank: claim, cards, called: false, caught: false });
     // a bot's play that doesn't empty its hand: how people treat it is saved for the bots, once each person has had their chance at it
     if (this.bots.has(playerId) && hand.length > cards.length) {
       const people = this.order.filter((id) => !this.bots.has(id) && this.hand(id).length > 0 && this.partnerOf(id) !== playerId && this.bluffCallsLeft(id) > 0);
@@ -190,10 +190,10 @@ export class Game {
       noteBotCall(this.habits(callerId), watch.lie);
     }
     const bluff = checked.some((c) => c.rank !== play.rank);
-    const lie = this.lies.find((l) => l.playId === playId);
-    if (lie) {
-      lie.called = true;
-      lie.caught = bluff;
+    const logged = this.playLog.find((l) => l.playId === playId);
+    if (logged) {
+      logged.called = true;
+      logged.caught = bluff;
     }
     const loserId = bluff ? play.playerId : callerId;
     const winnerId = bluff ? callerId : play.playerId;
@@ -260,7 +260,7 @@ export class Game {
   lieRecap(nameOf: (id: string) => string): LieRecap | null {
     if (!this.over) return null;
     const fakes = (l: { rank: Rank; cards: Card[] }) => l.cards.filter((c) => c.rank !== l.rank).length;
-    const away = this.lies.filter((l) => !l.caught);
+    const away = this.playLog.filter((l) => fakes(l) > 0 && !l.caught);
     // most fake cards first; the sort is stable, so ties keep the order they were played
     const lies = [...away]
       .sort((a, b) => fakes(b) - fakes(a))
@@ -271,6 +271,15 @@ export class Game {
       return { playerId: id, name: nameOf(id), plays: s.plays, lies: s.bluffs, caught: s.caught };
     });
     return { lies, uncaught: away.length, players };
+  }
+
+  /** game over: every play one player made, in order, with the real cards, and what they still held; null while the game runs */
+  playsOf(playerId: string): PlayerPlays | null {
+    if (!this.over) return null;
+    const plays = this.playLog
+      .filter((l) => l.playerId === playerId)
+      .map((l) => ({ rank: l.rank, cards: [...l.cards], called: l.called, caught: l.caught }));
+    return { plays, hand: [...this.hand(playerId)] };
   }
 
   /** 1st place, or both partners of the winning team */

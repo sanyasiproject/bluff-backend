@@ -51,6 +51,36 @@ describe('lie reveal', () => {
     });
   });
 
+  it('shows every play one player made, truths too, and the cards they still held, only once the game is over', () => {
+    const [two, three, qh, four, five, six, seven] = [card('2'), card('3'), card('Q', 'H'), card('4'), card('5'), card('6'), card('7')];
+    const [qs, jack] = [card('Q'), card('J')];
+    const g = setup({ a: [two, three, qh, four, five, six, seven], b: [qs, jack] });
+    g.play('a', ids(two, three), 'K');
+    g.callBluff('b', g.lastPlay!.id, 0);
+    g.play('b', ids(qs), 'Q');
+    g.play('a', ids(qh, four));
+    g.callBluff('b', g.lastPlay!.id, 0);
+    g.play('a', ids(five, six, seven), 'A');
+    g.pass('b');
+    expect(g.playsOf('a')).toBe(null);
+    g.close();
+
+    expect(g.playsOf('a')).toEqual({
+      plays: [
+        { rank: 'K', cards: [two, three], called: true, caught: true },
+        { rank: 'Q', cards: [qh, four], called: true, caught: false },
+        { rank: 'A', cards: [five, six, seven], called: false, caught: false },
+      ],
+      // the caught pair came back to their hand
+      hand: expect.arrayContaining([two, three]),
+    });
+    expect(g.playsOf('a')!.hand).toHaveLength(2);
+    expect(g.playsOf('b')).toEqual({
+      plays: [{ rank: 'Q', cards: [qs], called: false, caught: false }],
+      hand: expect.arrayContaining([jack, qs, qh, four]),
+    });
+  });
+
   it('lists the six boldest but counts every lie that got away', () => {
     const fakes = Array.from({ length: 8 }, (_, i) => Array.from({ length: (i % 3) + 1 }, () => card('2')));
     const g = setup({ a: [...fakes.flat(), card('9')], b: [card('K')] });
@@ -94,13 +124,24 @@ describe('lie reveal', () => {
       // Asha goes out on a lie nobody calls
       g.play(asha.id, [g.hand(asha.id)[0].id], 'K');
       const during = [asha, ravi, watcher].map((m) => r.view(m.id).lieRecap);
+      let duringPlays = '';
+      try {
+        r.playsOf(asha.id);
+      } catch (err) {
+        duringPlays = (err as Error).message;
+      }
       g.pass(ravi.id);
       expect(r.phase).toBe('over');
-      return { during, after: [asha, ravi, watcher].map((m) => r.view(m.id).lieRecap), r, asha, ravi };
+      return { during, duringPlays, after: [asha, ravi, watcher].map((m) => r.view(m.id).lieRecap), r, asha, ravi, watcher };
     };
 
     const shown = play(BLUFF);
     expect(shown.during).toEqual([null, null, null]);
+    expect(shown.duringPlays).toBe('The cards are shown once the game is over');
+    // each player's plays and what they still held, for anyone in the room once it's over
+    expect(shown.r.playsOf(shown.asha.id)).toEqual({ plays: [{ rank: 'K', cards: [expect.objectContaining({ rank: '2' })], called: false, caught: false }], hand: [] });
+    expect(shown.r.playsOf(shown.ravi.id).hand.map((c) => c.rank).sort()).toEqual(['3', '4']);
+    expect(() => shown.r.playsOf(shown.watcher.id)).toThrow('They were not in this game');
     for (const recap of shown.after) {
       expect(recap!.lies).toEqual([{ playerId: shown.asha.id, rank: 'K', cards: [expect.objectContaining({ rank: '2' })], survivedCall: false }]);
       expect(recap!.uncaught).toBe(1);
@@ -112,6 +153,7 @@ describe('lie reveal', () => {
 
     const secret = play({ ...BLUFF, secretLies: true });
     expect(secret.after).toEqual([null, null, null]);
+    expect(() => secret.r.playsOf(secret.asha.id)).toThrow('Lies are kept secret in this room');
 
     const c7 = new Room('SEVN');
     const host = c7.addMember('Asha');
@@ -119,6 +161,7 @@ describe('lie reveal', () => {
     c7.setConfig(host.id, { ...BLUFF, game: 'crazy7' });
     c7.start(host.id);
     expect(c7.view(host.id).lieRecap).toBe(null);
+    expect(() => c7.playsOf(host.id)).toThrow('The cards are shown once the game is over');
   });
 
   it('reads the setting from what apps send', () => {

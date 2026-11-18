@@ -654,6 +654,12 @@ export function registerHandlers(
       afterMove(room, room.endGame(member.id));
     });
 
+    // game over: everything one player put down, for the lie reveal (refused while the game runs or when lies are secret)
+    on('room:plays', (p) => {
+      const { room } = current();
+      return room.playsOf(parseMemberId(p.playerId));
+    });
+
     on('room:saza', (p) => {
       const { room, member } = current();
       publish(room, room.pickSaza(member.id, parseSaza(p.badge)));

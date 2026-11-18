@@ -104,6 +104,23 @@ export interface LieReveal {
   survivedCall: boolean;
 }
 
+/** one play in the game-over reveal: what was said and the real cards */
+export interface PlayReveal {
+  rank: Rank;
+  /** in tap order */
+  cards: Card[];
+  /** someone called it */
+  called: boolean;
+  /** the call turned over a fake */
+  caught: boolean;
+}
+
+/** game over with the lie reveal on: every play one player made, in order, and the cards they still held */
+export interface PlayerPlays {
+  plays: PlayReveal[];
+  hand: Card[];
+}
+
 /** Bluff's lie reveal at game over: the boldest lies that got away, and how much each player lied */
 export interface LieRecap {
   /** the boldest uncaught lies, most fake cards first (a few at most) */

@@ -247,6 +247,29 @@ describe('socket server', () => {
     expect(b.state!.players.find((p) => p.id === loserId)!.saza).toBe('kachua');
   });
 
+  it('shows a player\'s every play and leftover cards only once the game is over', async () => {
+    const [a, b] = [await client(), await client()];
+    const { code } = await send(a, 'room:create', { name: 'Host' });
+    await send(b, 'room:join', { code, name: 'Guest' });
+    await send(a, 'room:start');
+    await until(() => b.state?.phase === 'playing');
+    expect(await send(b, 'room:plays', { playerId: a.state!.meId })).toEqual({ ok: false, error: 'The cards are shown once the game is over' });
+
+    const game = server.rooms.get(code!).game!;
+    const [mover, other] = game.turnId === a.state!.meId ? [a, b] : [b, a];
+    const last = game.hand(mover.state!.meId).slice(0, 1);
+    game.hands.set(mover.state!.meId, last);
+    await send(mover, 'game:play', { cardIds: [last[0].id], rank: 'K' });
+    await send(other, 'game:pass');
+    await until(() => a.state?.phase === 'over' && b.state?.phase === 'over');
+
+    const res = (await send(other, 'room:plays', { playerId: mover.state!.meId })) as Res & { plays: unknown[]; hand: unknown[] };
+    expect(res).toMatchObject({ ok: true, plays: [{ rank: 'K', cards: [last[0]], called: false, caught: false }], hand: [] });
+    const mine = (await send(other, 'room:plays', { playerId: other.state!.meId })) as Res & { hand: unknown[] };
+    expect(mine.hand).toHaveLength(game.hand(other.state!.meId).length);
+    expect(await send(a, 'room:plays', { playerId: 'nope' })).toEqual({ ok: false, error: 'Invalid player' });
+  });
+
   it('lets the host end the game once someone has won, and everyone else loses', async () => {
     const [a, b, c] = [await client(), await client(), await client()];
     const { code } = await send(a, 'room:create', { name: 'Host' });
