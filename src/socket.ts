@@ -298,8 +298,11 @@ export function registerHandlers(
     const away = left !== undefined ? now - left : seenBefore ? now - seenBefore.getTime() : Infinity;
     if (away < alerts.awayMs || !hooks.friendIdsOf) return;
     // friends already in the same room know: they share the table
-    const here = rooms.roomOfUser(u.id);
-    const online = (await hooks.friendIdsOf(u.id)).filter((id) => presence.isOnline(id) && (!here || rooms.roomOfUser(id) !== here));
+    const sameRoom = (id: string) => {
+      const here = rooms.roomOfUser(u.id);
+      return here !== null && rooms.roomOfUser(id) === here;
+    };
+    const online = (await hooks.friendIdsOf(u.id)).filter((id) => presence.isOnline(id) && !sameRoom(id));
     // they may have closed the app again meanwhile
     if (online.length === 0 || !presence.isOnline(u.id)) return;
     let avatar: string | null = null;
@@ -309,7 +312,8 @@ export function registerHandlers(
       // the first letter shows instead
     }
     const event: FriendOnlineEvent = { id: u.id, name: u.displayName, username: u.username, avatar };
-    for (const id of online) for (const sid of presence.socketsOf(id)) io.to(sid).emit('friend:online', event);
+    // checked again: someone may have joined the same table during the lookups
+    for (const id of online) if (!sameRoom(id)) for (const sid of presence.socketsOf(id)) io.to(sid).emit('friend:online', event);
   };
 
   /** accounts on or off, and whether guests may play right now */
