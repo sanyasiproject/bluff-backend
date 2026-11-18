@@ -89,6 +89,29 @@ export interface GameConfig {
   botLevel: BotLevel;
   /** Bluff: the last player wears a silly badge until they win a game in this room (older apps don't send it: off) */
   saza: boolean;
+  /** Bluff: no lie reveal when the game ends (older apps don't send it: off, so the lies are shown) */
+  secretLies: boolean;
+}
+
+/** one lie nobody caught, turned face-up when the game ends */
+export interface LieReveal {
+  playerId: string;
+  /** what they said: as many of this rank as there are cards */
+  rank: Rank;
+  /** what they really put down, in tap order */
+  cards: Card[];
+  /** someone called it, but the card turned over was real */
+  survivedCall: boolean;
+}
+
+/** Bluff's lie reveal at game over: the boldest lies that got away, and how much each player lied */
+export interface LieRecap {
+  /** the boldest uncaught lies, most fake cards first (a few at most) */
+  lies: LieReveal[];
+  /** every lie that got away, including those not listed */
+  uncaught: number;
+  /** each player's plays, lies and lies caught this game, in seat order */
+  players: { playerId: string; plays: number; lies: number; caught: number }[];
 }
 
 /** Saza for the loser: the badges the winner picks from (the loser gets one at random first) */
@@ -507,6 +530,8 @@ export interface RoomView {
   crazy7: Crazy7View | null;
   /** game over with Saza on: who wears the new badge, and the winner who may still swap it; null otherwise */
   sazaPick: { loserId: string; winnerId: string } | null;
+  /** a Bluff game is over: its lies, unless the host keeps them secret; null otherwise (never while the game runs) */
+  lieRecap: LieRecap | null;
 }
 
 export type Role = 'user' | 'admin';

@@ -56,7 +56,7 @@ without the keys push is off; an admin can also switch it off in the app).
 - Saza badges (`Member.saza`) live in the room only: set in `Room.settleSaza` at a Bluff game's end, swapped by the winner with `room:saza`, never saved.
 - New room settings default to **off** and must accept older apps that don't send them (see `parseConfig`). `config.game` picks Bluff or Crazy 7; Crazy 7 forces Bluff's extras off.
 - Code that works for both games goes through `room.table`; Bluff-only code uses `room.game`, Crazy 7 `room.c7`.
-- Seated players never get another player's cards (except 2v2 partners via `partnerHand`). Add a test when touching `view()`.
+- Seated players never get another player's cards (except 2v2 partners via `partnerHand`, and past lies once the game is over: `Game.lieRecap`). Add a test when touching `view()`.
 - Watchers see every hand, so once a game is playing `room:join` becomes a watch request (`requestWatch`) the host approves with `room:admit`; `room:lobby` lets everyone still waiting in.
 - `room:leave` mid-game with cards, or with last cards not yet settled, is a forfeit (`game.leave`): the player is in `losers()` and still pays the stake. A kick (`removePlayer`) pays nothing.
 - Limits: one room per account (`releaseOthers` in `socket.ts`), per-IP sockets/rooms (`RoomLimits`, `MAX_CONNECTIONS_PER_IP`), per-account 20/min on search, profiles and friend actions (`userRateLimit`). Tests use roomy limits; the limits test runs its own server.

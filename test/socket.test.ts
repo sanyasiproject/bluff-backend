@@ -52,7 +52,7 @@ describe('socket server', () => {
     const code = created.code!;
     // new rooms start on the "pick one card" bluff rule
     await until(() => a.state !== null);
-    expect(a.state!.config).toEqual({ game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false });
+    expect(a.state!.config).toEqual({ game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false });
     expect(await send(b, 'room:join', { code: code.toLowerCase(), name: 'Ravi' })).toMatchObject({ ok: true });
     expect(await send(c, 'room:join', { code, name: 'ravi' })).toEqual({ ok: false, error: 'That name is taken in this room' });
     expect(await send(c, 'room:join', { code, name: 'Meena' })).toMatchObject({ ok: true });

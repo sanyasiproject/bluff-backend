@@ -60,10 +60,13 @@ export function parseConfig(p: Payload): GameConfig {
   // the bot level came later too; older apps get the strongest bots
   const botLevel = p.botLevel === undefined ? 'expert' : (BOT_LEVELS as readonly unknown[]).includes(p.botLevel) ? (p.botLevel as BotLevel) : null;
   const saza = p.saza === undefined ? false : typeof p.saza === 'boolean' ? p.saza : null;
+  const secretLies = p.secretLies === undefined ? false : typeof p.secretLies === 'boolean' ? p.secretLies : null;
   if (!decks || !bluffRule || stake === null || peeks === null || bets === null || teams === null) throw new GameError('Invalid settings');
-  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null) throw new GameError('Invalid settings');
+  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null) {
+    throw new GameError('Invalid settings');
+  }
   // Bluff's extras are kept while Crazy 7 is picked (it ignores them), so switching back keeps them; bets need coins at stake
-  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza };
+  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies };
 }
 
 // only the browsers' own push services: the server never posts to any other address a client sends

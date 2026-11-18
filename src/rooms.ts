@@ -62,7 +62,7 @@ export const DEFAULT_ROOM_LIMITS: RoomLimits = { createsPerIp: 10, liveRoomsPerI
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false };
+  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false };
   /** game over with Saza on: the loser's new badge, which the winner may swap until the room goes back to the lobby */
   sazaPick: { loserId: string; winnerId: string } | null = null;
   /** a Bluff game */
@@ -665,6 +665,8 @@ export class Room {
       crazy7: this.c7 ? this.crazy7View(meId) : null,
       // set only at a Saza game's end, cleared back in the lobby
       sazaPick: this.sazaPick,
+      // null until the game is over
+      lieRecap: b && !b.config.secretLies ? b.lieRecap() : null,
     };
   }
 
