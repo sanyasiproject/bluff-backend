@@ -2,7 +2,15 @@ import { Router } from 'express';
 import type { PlayerLook } from '../../models.js';
 import type { Store } from '../../services/store.js';
 import { toPublicUser } from '../../services/users.js';
-import { DEFAULT_CARD_BACK, DEFAULT_TABLE_THEME, type MissionsResponse, type ProfileOverview, type PublicUser } from '../../types.js';
+import {
+  DEFAULT_CARD_BACK,
+  DEFAULT_TABLE_THEME,
+  type LeagueResponse,
+  type MissionsResponse,
+  type ProfileOverview,
+  type PublicUser,
+  type RivalsResponse,
+} from '../../types.js';
 import { asPayload, parseQueryInt } from '../../validate.js';
 import { ApiError } from '../errors.js';
 import { ah, currentUser, requireUser } from '../middleware.js';
@@ -30,6 +38,37 @@ export function meRoutes(store: Store, onLookChanged: (userId: string, look: Pla
       const me = currentUser(res);
       const [overview, friends] = await Promise.all([store.users.overview(me), store.friends.countFor(me._id)]);
       const body: ProfileOverview = { ...overview, friends };
+      res.json(body);
+    }),
+  );
+
+  // this week's friends league board, and last week's
+  r.get(
+    '/league',
+    ah(async (_req, res) => {
+      const body: LeagueResponse = await store.league.board(currentUser(res)._id);
+      res.json(body);
+    }),
+  );
+
+  // leave me off my friends' league boards, or put me back
+  r.post(
+    '/league/hide',
+    ah(async (req, res) => {
+      const hidden = asPayload(req.body).hidden;
+      if (typeof hidden !== 'boolean') throw new ApiError(400, 'Say whether to hide you');
+      const me = currentUser(res)._id;
+      await store.league.setHidden(me, hidden);
+      const body: LeagueResponse = await store.league.board(me);
+      res.json(body);
+    }),
+  );
+
+  // my records against every friend I've finished a game with
+  r.get(
+    '/rivals',
+    ah(async (_req, res) => {
+      const body: RivalsResponse = await store.rivals.list(currentUser(res)._id);
       res.json(body);
     }),
   );

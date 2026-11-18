@@ -65,7 +65,7 @@ export const DEFAULT_ROOM_LIMITS: RoomLimits = { createsPerIp: 10, liveRoomsPerI
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false };
+  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false };
   /** game over with Saza on: the loser's new badge, which the winner may swap until the room goes back to the lobby */
   sazaPick: { loserId: string; winnerId: string } | null = null;
   /** a Bluff game */
@@ -179,6 +179,7 @@ export class Room {
   addBot(by: string, name: string): { bot: Member; stakeLowered: boolean } {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Bots can only join in the lobby');
+    if (this.rankedTable) throw new GameError("Bots can't play ranked games");
     if (this.players().length >= MAX_PLAYERS) throw new GameError(`All ${MAX_PLAYERS} seats are taken`);
     const bot = this.addMember(name);
     bot.bot = true;
@@ -344,6 +345,8 @@ export class Room {
   setConfig(by: string, config: GameConfig): { stakeLowered: boolean; readyAgain: boolean } {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Settings can only change in the lobby');
+    // a ranked Bluff table is for people only (Crazy 7 keeps the setting but ignores it)
+    if (config.ranked && config.game !== 'crazy7' && this.hasBots) throw new GameError('Ranked tables are for people only. Remove the bots first');
     // picking a stake above what the bots allow is refused; picking a lower bot level brings the stake down with it
     const sameBots = stakeLevelOf(config) === stakeLevelOf(this.config);
     if (this.hasBots && sameBots && config.stake > botStakeCap(config)) throw new GameError(botStakeText(config));
@@ -353,8 +356,8 @@ export class Room {
     // Saza switched off: every badge comes off
     if (!config.saza) for (const m of this.members) m.saza = null;
     const stakeLowered = this.capStake();
-    // a new stake or a different game: everyone agrees again before the host can start
-    const changed = this.config.stake !== before.stake || this.config.game !== before.game;
+    // a new stake, a different game, or ranked on or off: everyone agrees again before the host can start
+    const changed = this.config.stake !== before.stake || this.config.game !== before.game || this.config.ranked !== before.ranked;
     const readyAgain = changed && this.members.some((m) => m.ready && m.id !== this.hostId);
     if (changed) for (const m of this.members) m.ready = false;
     return { stakeLowered, readyAgain };
@@ -438,6 +441,11 @@ export class Room {
     if (this.players().length < 2) throw new GameError('Need at least 2 players');
     if (!this.players().some((m) => !m.bot)) throw new GameError('Someone has to play with the bots');
     if (this.bluffTeams && this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
+    if (this.rankedTable) {
+      if (this.players().some((m) => m.bot)) throw new GameError('Ranked tables are for people only. Remove the bots first');
+      const guests = this.players().filter((m) => !m.bot && !m.userId);
+      if (guests.length > 0) throw new GameError(`Ranked games need everyone logged in: ${guests.map((m) => m.name).join(', ')}`);
+    }
     const waiting = this.waitingFor();
     if (waiting.length > 0) throw new GameError(`Waiting for ${waiting.map((m) => m.name).join(', ')} to be ready`);
   }
@@ -445,6 +453,11 @@ export class Room {
   /** 2v2 is on and the game is Bluff (Crazy 7 keeps the setting but ignores it) */
   private get bluffTeams(): boolean {
     return this.config.teams && this.config.game !== 'crazy7';
+  }
+
+  /** a rated table: ranked is on and the game is Bluff (Crazy 7 keeps the setting but ignores it) */
+  private get rankedTable(): boolean {
+    return this.config.ranked && this.config.game !== 'crazy7';
   }
 
   /** host swaps partners: the 1st player gets a different partner (the 2nd or the 4th seat, at random) */
@@ -550,6 +563,8 @@ export class Room {
       })),
       awards: status === 'finished' ? computeAwards(g.stats, g.config.game) : [],
       bets: status === 'finished' ? [...g.bets] : [],
+      // who caught whom lying, for the rivals records (Bluff only)
+      catches: this.game ? this.game.catchList() : [],
     };
   }
 

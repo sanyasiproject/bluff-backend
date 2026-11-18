@@ -106,6 +106,19 @@ export function adminRoutes(
     }),
   );
 
+  // a new ranked season: everyone's rank starts again; open apps get the new season number
+  r.post(
+    '/ranked/season',
+    ...admin,
+    ah(async (req, res) => {
+      const from = asPayload(req.body).from;
+      if (from !== undefined && !Number.isInteger(from)) throw new ApiError(400, 'Which season is it now?');
+      const season = await store.ranked.newSeason(actorOf(res), from as number | undefined);
+      onSettingsChanged(await store.settings.view());
+      res.json({ season });
+    }),
+  );
+
   r.post(
     '/users/:id/password',
     ...admin,

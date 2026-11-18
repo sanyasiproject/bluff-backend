@@ -2,6 +2,7 @@ import { MongoServerError, ObjectId, type WithId } from 'mongodb';
 import type { Collections, FriendDoc, UserDoc } from '../db/documents.js';
 import { ApiError } from '../http/errors.js';
 import { levelOf, type FriendView, type PlayerSearchResult, type PublicProfile } from '../types.js';
+import { rankBadgeOf } from './ranked.js';
 import { avatarOf, escapeRegex, lastSeenOf, statsOf } from './users.js';
 
 const pairOf = (a: ObjectId, b: ObjectId) => [a.toHexString(), b.toHexString()].sort().join('_');
@@ -136,7 +137,7 @@ export class FriendService {
   async profileOf(me: ObjectId, username: string): Promise<PublicProfile> {
     const u = await this.cols.users.findOne(
       { username, blocked: { $ne: true } },
-      { projection: { username: 1, displayName: 1, stats: 1, createdAt: 1, avatar: 1, lastSeenAt: 1, lastLoginAt: 1 } },
+      { projection: { username: 1, displayName: 1, stats: 1, createdAt: 1, avatar: 1, lastSeenAt: 1, lastLoginAt: 1, ranked: 1 } },
     );
     if (!u) throw new ApiError(404, 'No player with that username');
     let status: PublicProfile['status'] = 'me';
@@ -156,6 +157,8 @@ export class FriendService {
       lastSeen: status === 'friend' ? lastSeenOf(u) : null,
       stats,
       status,
+      // this season's division and points; none from another season
+      rank: rankBadgeOf(u.ranked),
     };
   }
 

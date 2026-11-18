@@ -91,6 +91,8 @@ export interface GameConfig {
   saza: boolean;
   /** Bluff: no lie reveal when the game ends (older apps don't send it: off, so the lies are shown) */
   secretLies: boolean;
+  /** Bluff: a rated table, logged-in people only and no bots (older apps don't send it: off) */
+  ranked: boolean;
 }
 
 /** one lie nobody caught, turned face-up when the game ends */
@@ -472,6 +474,8 @@ export interface CoinResult {
   missionsDone: { id: string; coins: number; xp: number }[];
   /** bonus XP from this game's secret mission card (0 when not done or the game didn't count) */
   secretXp: number;
+  /** a rated game's rank points before and after, the division now, and what held the change back: the daily cap, the floor, or paying back losses they held off earlier; null otherwise */
+  rank: { before: number; after: number; division: RankDivisionId; held: 'cap' | 'floor' | 'debt' | null } | null;
 }
 
 export interface LastPlayView {
@@ -712,6 +716,126 @@ export interface SecretView {
   done: boolean;
 }
 
+/** points a game gives in the weekly friends league (never coins); only games of MIN_REWARD_GAME_SEC or more with 2+ logged-in people count */
+export const LEAGUE_POINTS = { game: 1, win: 10, goodCall: 3, cleanBluff: 2 } as const;
+
+/** each week's side titles: most points, most liars caught, most lies nobody caught */
+export const LEAGUE_CROWNS = [
+  { id: 'champion', emoji: '👑', title: 'Champion of the week', stat: 'points' },
+  { id: 'cid', emoji: '🕵️', title: 'CID of the week', stat: 'goodCalls' },
+  { id: 'jhootha', emoji: '🤥', title: 'Jhootha No. 1', stat: 'cleanBluffs' },
+] as const;
+export type LeagueCrownId = (typeof LEAGUE_CROWNS)[number]['id'];
+
+/** one player's week in the league */
+export interface LeagueStats {
+  points: number;
+  games: number;
+  wins: number;
+  goodCalls: number;
+  cleanBluffs: number;
+}
+
+export interface LeagueRow extends LeagueStats {
+  id: string;
+  username: string;
+  displayName: string;
+  avatar: string | null;
+  level: number;
+  /** 1-based place on this board; ties share a place */
+  place: number;
+  me: boolean;
+}
+
+/** one week's board: me and my friends who played that week (hidden friends left out), best first */
+export interface LeagueBoard {
+  /** the IST Monday the week started (YYYY-MM-DD) */
+  week: string;
+  rows: LeagueRow[];
+  /** who holds each crown (ties share it); a crown nobody scored for is left out */
+  crowns: { id: LeagueCrownId; userIds: string[]; value: number }[];
+}
+
+/** GET /api/me/league */
+export interface LeagueResponse {
+  thisWeek: LeagueBoard;
+  /** last week's final board; null when nobody on it played */
+  lastWeek: LeagueBoard | null;
+  /** when this week ends (ISO time, Monday 00:00 IST) */
+  resetAt: string;
+  /** I'm left off my friends' boards (I still see mine) */
+  hidden: boolean;
+}
+
+/** the Dosti meter: finished games together; levels never go down */
+export const DOSTI_LEVELS = [
+  { level: 1, games: 1, name: 'Hi-Hello' },
+  { level: 2, games: 5, name: 'Dost' },
+  { level: 3, games: 15, name: 'Pakke Dost' },
+  { level: 4, games: 40, name: 'Jigri Yaar' },
+  { level: 5, games: 100, name: 'Jaan se Pyaare' },
+] as const;
+
+/** the Dosti level for a number of games together, or null before the first */
+export const dostiOf = (games: number) => [...DOSTI_LEVELS].reverse().find((d) => games >= d.games) ?? null;
+
+/** decided games (one finished ahead of the other) needed before a Rival or Nemesis tag shows */
+export const RIVAL_MIN_GAMES = 10;
+
+/** my record against one friend, from our saved games together */
+export interface RivalRecord {
+  id: string;
+  username: string;
+  displayName: string;
+  avatar: string | null;
+  level: number;
+  /** finished games together: the Dosti meter */
+  games: number;
+  /** games I finished ahead of them, and they of me; games where neither was ahead aren't in either */
+  ahead: number;
+  behind: number;
+  /** times I caught them lying, and they caught me (counted since this came in) */
+  iCaught: number;
+  theyCaught: number;
+  /** rival: a close record; nemesis: they finish ahead most of the time; null until RIVAL_MIN_GAMES decided games */
+  tag: 'rival' | 'nemesis' | null;
+}
+
+/** GET /api/me/rivals: every friend I've finished a game with, most games first */
+export interface RivalsResponse {
+  records: RivalRecord[];
+}
+
+/** ranked divisions by rank points; reaching one makes its start a floor for the rest of the season */
+export const RANK_DIVISIONS = [
+  { id: 'bronze', name: 'Bronze', emoji: '🥉', min: 0 },
+  { id: 'silver', name: 'Silver', emoji: '🥈', min: 300 },
+  { id: 'gold', name: 'Gold', emoji: '🥇', min: 700 },
+  { id: 'platinum', name: 'Platinum', emoji: '💠', min: 1_200 },
+  { id: 'diamond', name: 'Diamond', emoji: '💎', min: 1_800 },
+  { id: 'badshah', name: 'Bluff Badshah', emoji: '👑', min: 2_500 },
+] as const;
+export type RankDivisionId = (typeof RANK_DIVISIONS)[number]['id'];
+
+/** the division for some rank points */
+export const divisionOf = (points: number) => [...RANK_DIVISIONS].reverse().find((d) => points >= d.min) ?? RANK_DIVISIONS[0];
+
+/** rank points a player can win or lose in one IST day, so one night can't make or break a season */
+export const RANK_DAILY_CAP = 150;
+
+/** my ranked standing this season */
+export interface RankView {
+  season: number;
+  points: number;
+  division: RankDivisionId;
+  /** points never drop below this: the start of the best division reached this season */
+  floor: number;
+  games: number;
+  wins: number;
+  /** today's change so far, within RANK_DAILY_CAP either way */
+  today: number;
+}
+
 /** XP needed to reach a level: each level needs 100 more than the last (0, 100, 300, 600, 1000…) */
 export const xpForLevel = (level: number) => 50 * (level - 1) * level;
 
@@ -741,6 +865,8 @@ export interface PublicUser {
   giftLeft: number;
   /** games whose practice tutorial this account has finished or skipped */
   tutorials: GameKind[];
+  /** this season's ranked standing; null before a ranked game this season (older servers don't send it) */
+  rank: RankView | null;
 }
 
 export interface AuthResponse {
@@ -814,6 +940,8 @@ export interface ServerInfo {
 export interface AppSettings {
   /** false: everyone must log in to create or join a room */
   guestsAllowed: boolean;
+  /** the ranked season now on; an admin starts a new one (older documents: 1) */
+  rankedSeason: number;
   /** friend invites go to offline friends as phone notifications; an admin can switch it off */
   pushInvites: boolean;
   /** the admin who last changed it, and when; null if never changed */
@@ -896,6 +1024,8 @@ export interface PublicProfile {
   stats: LifetimeStats;
   /** how they relate to me */
   status: 'me' | 'friend' | 'sent' | 'incoming' | 'none';
+  /** this season's division and rank points; null before a ranked game this season */
+  rank: { division: RankDivisionId; points: number } | null;
 }
 
 export interface FriendsResponse {

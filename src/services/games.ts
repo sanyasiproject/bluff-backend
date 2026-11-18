@@ -1,6 +1,6 @@
 import { ObjectId, type AnyBulkWriteOperation } from 'mongodb';
 import { istDay } from '../days.js';
-import type { Collections, GameDoc, GamePlayerDoc, UserDoc } from '../db/documents.js';
+import type { CatchDoc, Collections, GameDoc, GamePlayerDoc, UserDoc } from '../db/documents.js';
 import { HABIT_KEYS } from '../habits.js';
 import type { GameRecord } from '../models.js';
 import {
@@ -13,7 +13,9 @@ import {
   type GameSummary,
   type LifetimeStats,
 } from '../types.js';
+import type { LeagueService } from './league.js';
 import type { MissionCounts, MissionDone, MissionService } from './missions.js';
+import type { RankedService } from './ranked.js';
 import { statsOf } from './users.js';
 
 /** a friendship's key: both user ids sorted and joined, as in services/friends.ts */
@@ -40,6 +42,8 @@ export class GameRecorder {
   constructor(
     private readonly cols: Collections,
     private readonly missions: MissionService,
+    private readonly league: LeagueService,
+    private readonly ranked: RankedService,
   ) {}
 
   async save(record: GameRecord): Promise<CoinResult[]> {
@@ -80,6 +84,8 @@ export class GameRecorder {
       stake: record.config.stake,
       pot,
       players: players.map(({ memberId: _memberId, ...p }) => p),
+      // who caught whom lying, between logged-in players who weren't removed (for the rivals records)
+      catches: finished ? this.catchesOf(players, record.catches) : [],
       winnerName: players.find((p) => p.won)?.name ?? null,
       loserName: players.find((p) => p.loser)?.name ?? null,
       awards: record.awards.map((a) => ({
@@ -99,6 +105,24 @@ export class GameRecorder {
     if (record.config.game !== 'crazy7') await this.addHabits(players);
     // missions move only with games that count, like the daily ladder; finished ones are paid as they're saved
     const missionsDone = counts ? await this.countMissions(players, record.config.game === 'crazy7', secretDone) : new Map<string, MissionDone[]>();
+    // the weekly friends league counts games of 2+ logged-in people that count; never coins
+    const people = players.filter((p) => p.userId && !p.kicked);
+    if (counts && people.length >= 2) {
+      const crazy7 = record.config.game === 'crazy7';
+      await this.league
+        .count(people.map((p) => ({ userId: p.userId!, won: p.won, goodCalls: crazy7 ? 0 : p.stats.goodCalls, cleanBluffs: crazy7 ? 0 : Math.max(0, p.stats.bluffs - p.stats.caught) })))
+        .catch((err: Error) => console.error('[league] could not count a game:', err.message));
+    }
+    // a ranked Bluff table that finished and counts moves each player's rank points (Crazy 7 is never ranked)
+    const ranks =
+      counts && record.config.ranked && record.config.game !== 'crazy7' && people.length >= 2
+        ? await this.ranked
+            .rate(people.map((p) => ({ memberId: p.memberId, userId: p.userId!, won: p.won, place: p.place })), new Date(), record.config.teams)
+            .catch((err: Error) => {
+              console.error('[ranked] could not rate a game:', err.message);
+              return new Map<string, NonNullable<CoinResult['rank']>>();
+            })
+        : new Map<string, NonNullable<CoinResult['rank']>>();
 
     const today = istDay();
     const accounts = await this.cols.users
@@ -124,6 +148,7 @@ export class GameRecorder {
         // both already added to coins and stats.bonusXp above
         missionsDone: u ? (missionsDone.get(p.memberId) ?? []) : [],
         secretXp: u ? secretXpOf(p) : 0,
+        rank: u ? (ranks.get(p.memberId) ?? null) : null,
       };
     });
   }
@@ -273,6 +298,16 @@ export class GameRecorder {
       }
     }
     return done;
+  }
+
+  /** catches between logged-in players who weren't removed, by user id; older records have none */
+  private catchesOf(players: (GamePlayerDoc & { memberId: string })[], catches: GameRecord['catches'] | undefined): CatchDoc[] {
+    const userOf = new Map(players.filter((p) => p.userId && !p.kicked).map((p) => [p.memberId, p.userId!]));
+    return (catches ?? []).flatMap((c) => {
+      const by = userOf.get(c.by);
+      const of = userOf.get(c.of);
+      return by && of && c.n > 0 ? [{ by, of, n: c.n }] : [];
+    });
   }
 
   /** pair keys of the accepted friendships among these accounts */

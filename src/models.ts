@@ -167,6 +167,8 @@ export interface GameRecord {
   awards: Award[];
   /** bets on bluff calls, by member id */
   bets: BetResult[];
+  /** Bluff: how many times each player caught another lying, by member id */
+  catches: { by: string; of: string; n: number }[];
 }
 
 /** optional server features wired in by server.ts (accounts, coins, friends) */

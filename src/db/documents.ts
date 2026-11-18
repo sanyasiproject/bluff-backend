@@ -1,6 +1,6 @@
 import type { Collection, ObjectId } from 'mongodb';
 import type { Habits, PlayerStats } from '../models.js';
-import type { AuditAction, GameConfig, GameKind, LifetimeStats, Role } from '../types.js';
+import type { AuditAction, GameConfig, GameKind, LeagueStats, LifetimeStats, Role } from '../types.js';
 
 /** database and collection names, all overridable from env */
 export interface DbNames {
@@ -53,6 +53,41 @@ export interface UserDoc {
   habits?: Partial<Habits>;
   /** today's and this week's missions (services/missions.ts); missing until first read or counted */
   missions?: MissionsDoc;
+  /** this week's friends league counters, and last week's (services/league.ts) */
+  league?: LeagueDoc;
+  /** left off friends' league boards */
+  leagueHidden?: boolean;
+  /** ranked standing for the season it was earned in (services/ranked.ts) */
+  ranked?: RankedDoc;
+}
+
+/** one IST week of league counters */
+export interface LeagueWeekDoc extends LeagueStats {
+  /** the IST Monday the week started */
+  week: string;
+}
+
+/** this week's league counters, with last week's kept for its final board */
+export interface LeagueDoc extends LeagueWeekDoc {
+  prev?: LeagueWeekDoc | null;
+}
+
+/** a player's hidden skill and visible rank points for one season */
+export interface RankedDoc {
+  season: number;
+  /** skill estimate and its uncertainty (src/rating.ts) */
+  mu: number;
+  sigma: number;
+  points: number;
+  /** points can't drop below this: the start of the best division reached this season */
+  floor: number;
+  games: number;
+  wins: number;
+  /** IST day that today counts, and the points change so far that day */
+  day: string;
+  today: number;
+  /** losses the floor or the daily cap held off; later gains pay them back first (older documents: 0) */
+  debt?: number;
 }
 
 /** one of an account's current missions */
@@ -87,6 +122,13 @@ export interface SessionDoc {
   createdAt: Date;
   /** TTL index removes the session after this */
   expiresAt: Date;
+}
+
+/** who caught whom lying in a saved game, between logged-in players */
+export interface CatchDoc {
+  by: ObjectId;
+  of: ObjectId;
+  n: number;
 }
 
 export interface GamePlayerDoc {
@@ -124,6 +166,8 @@ export interface GameDoc {
   winnerName: string | null;
   loserName: string | null;
   awards: { emoji: string; title: string; names: string[]; detail: string }[];
+  /** who caught whom lying, between logged-in players (games saved since rivals came in) */
+  catches?: CatchDoc[];
 }
 
 export interface AuditDoc {
@@ -173,6 +217,8 @@ export interface SettingsDoc {
   guestsAllowed: boolean;
   /** missing in older documents: on */
   pushInvites?: boolean;
+  /** the ranked season now on; missing in older documents: 1 */
+  rankedSeason?: number;
   updatedBy: ObjectId | null;
   updatedAt: Date;
 }

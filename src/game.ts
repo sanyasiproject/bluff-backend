@@ -48,6 +48,8 @@ export class Game {
   readonly bots: ReadonlySet<string>;
   /** a bot's last play that people may still call: saved in their habits once it stands, or for whoever calls it */
   private botWatch: { playId: string; lie: boolean; people: string[] } | null = null;
+  /** how many times each player caught each other one lying ("caller>player") */
+  private readonly catches = new Map<string, number>();
   /** every play with its true cards, for the reveal once the game is over; settled: it stood or was called, not cut off by a walk-out or End game */
   private readonly playLog: { playId: string; playerId: string; rank: Rank; cards: Card[]; called: boolean; caught: boolean; settled: boolean }[] = [];
 
@@ -201,6 +203,8 @@ export class Game {
     if (bluff) {
       this.stat(callerId).goodCalls++;
       this.stat(play.playerId).caught++;
+      const pair = `${callerId}>${play.playerId}`;
+      this.catches.set(pair, (this.catches.get(pair) ?? 0) + 1);
     } else {
       this.stat(callerId).wrongCalls++;
     }
@@ -289,6 +293,14 @@ export class Game {
       .map((l) => ({ rank: l.rank, cards: [...l.cards], called: l.called, caught: l.caught, open: !l.settled }));
   }
 
+  /** who caught whom lying this game, for the saved game */
+  catchList(): { by: string; of: string; n: number }[] {
+    return [...this.catches].map(([pair, n]) => {
+      const [by, of] = pair.split('>');
+      return { by, of, n };
+    });
+  }
+
   /** 1st place, or both partners of the winning team */
   winners(): string[] {
     if (this.aborted || !this.over) return [];
@@ -328,7 +340,9 @@ export class Game {
       this.winningTeam = this.teams.find((t) => !t.includes(playerId)) ?? null;
       return [{ kind: 'gameOver', loserId: null }];
     }
-    const left = this.order.filter((p) => this.hand(p).length > 0);
+    // someone whose last cards are still open to a call is still in the game
+    const out = this.goingOut();
+    const left = this.order.filter((p) => this.hand(p).length > 0 || p === out);
     if (left.length <= 1) {
       // the last one still holding cards finishes next: 1st if nobody had finished yet
       const events: GameEvent[] = [];

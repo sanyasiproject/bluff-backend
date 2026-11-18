@@ -58,7 +58,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
   };
   // every open app hears about it, so home screens show or hide guest play right away
   settingsChanged = (settings) => {
-    io.emit('settings:changed', { guestsAllowed: settings.guestsAllowed, pushInvites: !!store?.push.ready && settings.pushInvites });
+    io.emit('settings:changed', { guestsAllowed: settings.guestsAllowed, pushInvites: !!store?.push.ready && settings.pushInvites, rankedSeason: settings.rankedSeason });
   };
 
   const rooms = new RoomManager({ ...DEFAULT_ROOM_LIMITS, ...deps.limits });

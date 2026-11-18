@@ -329,6 +329,25 @@ describe('leaving a game in progress', () => {
     expect(g.losers()).toEqual(['a']);
   });
 
+  it('counts a player whose last cards are still open to a call as still in the game when someone else walks out', () => {
+    const fake = card('9');
+    // two players: the one going out is the last one left, so they finish 1st
+    const g = setup(['a', 'b'], { a: [fake], b: [card('3'), card('4')] });
+    g.play('a', ids(fake), 'Q');
+    expect(g.leave('b')).toEqual([
+      { kind: 'finish', playerId: 'a', place: 1 },
+      { kind: 'gameOver', loserId: null },
+    ]);
+    expect(g.winners()).toEqual(['a']);
+    expect(g.losers()).toEqual(['b']);
+    // three players: the game goes on and the last cards can still be called
+    const h = setup(['a', 'b', 'c'], { a: [card('9', 'H')], b: [card('3')], c: [card('4')] });
+    h.play('a', ids(h.hand('a')[0]!), 'Q');
+    expect(h.leave('c')).toEqual([]);
+    expect(h.over).toBe(false);
+    expect(h.goingOut()).toBe('a');
+  });
+
   it('in 2v2 makes the leaver\'s team lose', () => {
     const g = setup(['a', 'b', 'c', 'd'], { a: [card('2')], b: [card('3')], c: [card('4')], d: [card('5')] }, { teams: true });
     expect(g.leave('c')).toEqual([{ kind: 'gameOver', loserId: null }]);
