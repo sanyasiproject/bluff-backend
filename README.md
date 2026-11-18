@@ -105,6 +105,7 @@ XP, the daily ladder, kicks, leaving and Stop game work the same for both.
 - New lifetime stats `plays` and `chances` (plays by others you could have called) feed the bots' read on each player; older accounts fall back to estimates.
 - A player can call **Bluff at most 2 times in a row**; after that the call is refused until they play or pass on their own turn (`MAX_BLUFF_CALLS_IN_A_ROW` in `src/types.ts`). A player's last cards can always be called, even then (`Game.goingOut`).
 - New rooms start on the **pick one card** bluff rule; the host can switch to show all in the lobby.
+- **Saza for the loser** (`config.saza`, Bluff only, off by default): at game over (`Room.settleSaza`, called from `afterMove`) whoever won takes their badge off, and the one player left holding cards gets a random badge from `SAZA_BADGES` (`PublicPlayer.saza`, bots too). The winner may swap it with `room:saza` while `RoomView.sazaPick` is set (game over, cleared back in the lobby). It stays on through other games until its wearer wins one in the room (a team win and the host's End game count). 2v2, End game and walk-outs leave no single last player, so nobody gets a new one then. Switching Saza off takes every badge off; while Crazy 7 is picked they're hidden. Badges live in the room only, never saved.
 
 `/health` answers `{"ok":true,"accounts":"on","guests":true}` when the database is connected (`guests` is false while an admin has guest play turned off).
 
@@ -198,11 +199,12 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `room:cancelRequest` | – (withdraw a pending join request) |
 | `room:admit` | `{ requestId, accept }` (host: let a pending request in to watch, or turn it down). After asking, or a no, the same account (a guest: network + name) waits 10 s before asking again |
 | `room:rejoin` | `{ code, token }` |
-| `room:config` | `{ game: 'bluff' \| 'crazy7', decks: 1 \| 2, bluffRule: 'all' \| 'one', stake, peeks: 0–3, bets: boolean, teams: boolean, handSize: 5 \| 7, maxPicks: 1–7, stack7: boolean, botLevel: 'normal' \| 'hard' \| 'expert' }` (host, lobby; missing fields: Bluff, off, 7 cards, 1 pick, stacking on, expert bots; Crazy 7 turns Bluff's extras off) |
+| `room:config` | `{ game: 'bluff' \| 'crazy7', decks: 1 \| 2, bluffRule: 'all' \| 'one', stake, peeks: 0–3, bets: boolean, teams: boolean, handSize: 5 \| 7, maxPicks: 1–7, stack7: boolean, botLevel: 'normal' \| 'hard' \| 'expert', saza: boolean }` (host, lobby; missing fields: Bluff, off, 7 cards, 1 pick, stacking on, expert bots, no saza; Crazy 7 turns Bluff's extras off) |
 | `room:ready` | `{ ready: boolean }` (lobby, seated, not the host: ready to start, or "wait a minute"; Start and Play again are refused until every other person is ready; a new stake or game clears everyone's ready; apps that connect with `auth.ready: true` have the button, older apps always count as ready; `PublicPlayer.ready`) |
 | `room:start` / `room:lobby` / `room:leave` | – (`room:leave` mid-game with cards is a forfeit: a loss that still pays the stake) |
 | `room:rematch` | – (host, after game over: same table, same settings, dealt again) |
 | `room:end` | – (host, once someone finished 1st: game over, 1st wins and everyone else loses) |
+| `room:saza` | `{ badge }` (game over with Saza on: the winner swaps the last player's badge for another from `SAZA_BADGES`, until the room goes back to the lobby) |
 | `room:host` | `{ memberId }` (host, lobby only: make an online member the host) |
 | `room:teams` | – (host, lobby, 2v2 with 4 players: give slot 1 a different partner) |
 | `room:slot` | `{ slot: 0–3 }` (2v2 lobby: move yourself to a free slot; 🔵 0 & 2, 🟠 1 & 3) |

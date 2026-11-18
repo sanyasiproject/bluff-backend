@@ -9,6 +9,8 @@ import {
   botStakeCap,
   DEFAULT_CARD_BACK,
   DEFAULT_TABLE_THEME,
+  SAZA_BADGES,
+  sazaOf,
   stakeLevelOf,
   type AnnounceKind,
   type Announcement,
@@ -19,6 +21,7 @@ import {
   type GameConfig,
   type Phase,
   type RoomView,
+  type SazaBadge,
   type ThrowEvent,
 } from './types.js';
 
@@ -59,7 +62,9 @@ export const DEFAULT_ROOM_LIMITS: RoomLimits = { createsPerIp: 10, liveRoomsPerI
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert' };
+  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false };
+  /** game over with Saza on: the loser's new badge, which the winner may swap until the room goes back to the lobby */
+  sazaPick: { loserId: string; winnerId: string } | null = null;
   /** a Bluff game */
   game: Game | null = null;
   /** a Crazy 7 game */
@@ -137,6 +142,7 @@ export class Room {
       habits: account?.habits ?? null,
       ready: false,
       hasReady: false,
+      saza: null,
     };
     this.members.push(member);
     if (!this.hostId) this.hostId = member.id;
@@ -338,6 +344,8 @@ export class Room {
     const before = this.config;
     this.config = config;
     if (!config.teams) this.swapAsks.clear();
+    // Saza switched off: every badge comes off
+    if (!config.saza) for (const m of this.members) m.saza = null;
     const stakeLowered = this.capStake();
     // a new stake or a different game: everyone agrees again before the host can start
     const changed = this.config.stake !== before.stake || this.config.game !== before.game;
@@ -517,6 +525,7 @@ export class Room {
     this.game = null;
     this.c7 = null;
     this.coinResults = null;
+    this.sazaPick = null;
     this.departed.clear();
     this.fillSeats();
   }
@@ -598,6 +607,7 @@ export class Room {
         level: m.level,
         bot: m.bot,
         ready: m.bot || m.id === this.hostId || !m.hasReady || m.ready,
+        saza: this.sazaOn ? m.saza : null,
       })),
       watchers: this.members
         .filter((m) => !seatedIds.has(m.id))
@@ -653,7 +663,51 @@ export class Room {
           })
         : [],
       crazy7: this.c7 ? this.crazy7View(meId) : null,
+      // set only at a Saza game's end, cleared back in the lobby
+      sazaPick: this.sazaPick,
     };
+  }
+
+  /** Saza is played: switched on, and the game is Bluff */
+  private get sazaOn(): boolean {
+    return this.config.saza && this.config.game !== 'crazy7';
+  }
+
+  /**
+   * A Bluff game just ended with Saza on: whoever won takes their badge off, and the one player left holding cards gets a badge at
+   * random, which the winner may swap. 2v2, the host's End game and walk-outs leave no single last player, so no new badge then.
+   */
+  settleSaza(rand: () => number = Math.random): Announcement[] {
+    const g = this.game;
+    if (!g?.over || !this.sazaOn) return [];
+    const notes: Announcement[] = [];
+    const won = g.winners();
+    for (const m of this.members) {
+      if (!won.includes(m.id) || !m.saza) continue;
+      m.saza = null;
+      notes.push(this.note('over', `${m.name} won and the saza comes off!`));
+    }
+    const loser = this.members.find((m) => m.id === g.loserId);
+    if (!loser || g.teams || won.length === 0) return notes;
+    const badge = SAZA_BADGES[Math.floor(rand() * SAZA_BADGES.length)];
+    loser.saza = badge.id;
+    // a winner who already left can't swap it
+    this.sazaPick = { loserId: loser.id, winnerId: won[0] };
+    notes.push(this.note('over', `${loser.name} gets the ${badge.name} saza ${badge.emoji}`));
+    return notes;
+  }
+
+  /** the winner swaps the loser's badge while the game-over screen is up */
+  pickSaza(by: string, badge: SazaBadge): Announcement[] {
+    const pick = this.sazaPick;
+    if (!pick || this.phase !== 'over' || !this.sazaOn) throw new GameError('There is no saza to pick now');
+    if (pick.winnerId !== by) throw new GameError('Only the winner picks the saza');
+    const loser = this.members.find((m) => m.id === pick.loserId);
+    if (!loser) throw new GameError('They already left');
+    if (loser.saza === badge) return [];
+    loser.saza = badge;
+    const b = sazaOf(badge)!;
+    return [this.note('room', `${this.member(by).name} gave ${loser.name} the ${b.name} saza ${b.emoji}`)];
   }
 
   /** the Crazy 7 table as one member sees it: the my-turn fields are filled only for the player on turn */

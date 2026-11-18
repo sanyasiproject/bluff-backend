@@ -9,6 +9,7 @@ import {
   QUICK_MESSAGES,
   RANKS,
   REACTIONS,
+  sazaOf,
   STAKES,
   THROWS,
   type BotLevel,
@@ -16,6 +17,7 @@ import {
   type GameConfig,
   type Rank,
   type Role,
+  type SazaBadge,
 } from './types.js';
 
 export type Payload = Record<string, unknown>;
@@ -57,10 +59,11 @@ export function parseConfig(p: Payload): GameConfig {
   const stack7 = p.stack7 === undefined ? true : typeof p.stack7 === 'boolean' ? p.stack7 : null;
   // the bot level came later too; older apps get the strongest bots
   const botLevel = p.botLevel === undefined ? 'expert' : (BOT_LEVELS as readonly unknown[]).includes(p.botLevel) ? (p.botLevel as BotLevel) : null;
+  const saza = p.saza === undefined ? false : typeof p.saza === 'boolean' ? p.saza : null;
   if (!decks || !bluffRule || stake === null || peeks === null || bets === null || teams === null) throw new GameError('Invalid settings');
-  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null) throw new GameError('Invalid settings');
+  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null) throw new GameError('Invalid settings');
   // Bluff's extras are kept while Crazy 7 is picked (it ignores them), so switching back keeps them; bets need coins at stake
-  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel };
+  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza };
 }
 
 // only the browsers' own push services: the server never posts to any other address a client sends
@@ -86,6 +89,12 @@ export function parsePushSubscription(p: Payload): { endpoint: string; p256dh: s
   const auth = key(keys.auth);
   if (!p256dh || !auth) throw new GameError('Invalid notification settings');
   return { endpoint: parsePushEndpoint(p.endpoint), p256dh, auth };
+}
+
+/** one of the saza badges */
+export function parseSaza(value: unknown): SazaBadge {
+  if (typeof value === 'string' && sazaOf(value)) return value as SazaBadge;
+  throw new GameError('Pick one of the badges');
 }
 
 /** a card id like "7S1" */

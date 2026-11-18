@@ -1,4 +1,4 @@
-import type { Award, Card, CoinResult, GameConfig, InviteEvent, LifetimeStats, Rank } from './types.js';
+import type { Award, Card, CoinResult, GameConfig, InviteEvent, LifetimeStats, Rank, SazaBadge } from './types.js';
 
 // Server-only shapes, never sent to clients as-is
 export interface Member {
@@ -38,6 +38,8 @@ export interface Member {
   ready: boolean;
   /** their app has the Ready button; people on older apps always count as ready */
   hasReady: boolean;
+  /** Bluff's saza badge in this room: the last player wears it until they win a game here */
+  saza: SazaBadge | null;
 }
 
 /**

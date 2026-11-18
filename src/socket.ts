@@ -34,6 +34,7 @@ import {
   parseName,
   parsePlayId,
   parseRank,
+  parseSaza,
   parseSlot,
   parseThrow,
   parseToken,
@@ -132,10 +133,11 @@ export function registerHandlers(
   const afterMove = (room: Room, events: GameEvent[], notes: Announcement[] = []) => {
     // once no person holds cards against the bots, the result is settled
     const all = [...events, ...room.endIfOnlyBots()];
+    const over = all.some((e) => e.kind === 'gameOver');
     bots.observe(room, all);
     c7bots.observe(room, all);
-    publish(room, [...notes, ...room.announce(all)]);
-    if (all.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot(room.table?.aborted ? 'ended_early' : 'finished'));
+    publish(room, [...notes, ...room.announce(all), ...(over ? room.settleSaza() : [])]);
+    if (over) saveGame(room, room.snapshot(room.table?.aborted ? 'ended_early' : 'finished'));
   };
 
   /** after someone leaves: a room with no person left never carries on with bots alone */
@@ -646,6 +648,11 @@ export function registerHandlers(
     on('room:end', () => {
       const { room, member } = current();
       afterMove(room, room.endGame(member.id));
+    });
+
+    on('room:saza', (p) => {
+      const { room, member } = current();
+      publish(room, room.pickSaza(member.id, parseSaza(p.badge)));
     });
 
     on('room:kick', (p) => {

@@ -87,7 +87,24 @@ export interface GameConfig {
   stack7: boolean;
   /** Bluff: how well the bots play (older apps don't send it: expert) */
   botLevel: BotLevel;
+  /** Bluff: the last player wears a silly badge until they win a game in this room (older apps don't send it: off) */
+  saza: boolean;
 }
+
+/** Saza for the loser: the badges the winner picks from (the loser gets one at random first) */
+export const SAZA_BADGES = [
+  { id: 'joker', name: 'Joker', emoji: '🤡' },
+  { id: 'murga', name: 'Murga', emoji: '🐔' },
+  { id: 'kachua', name: 'Kachua', emoji: '🐢' },
+  { id: 'aloo', name: 'Aloo', emoji: '🥔' },
+  { id: 'bandar', name: 'Bandar', emoji: '🐒' },
+  { id: 'mirchi', name: 'Mirchi', emoji: '🌶️' },
+] as const;
+
+export type SazaBadge = (typeof SAZA_BADGES)[number]['id'];
+
+/** the catalog entry for a saza id, or null */
+export const sazaOf = (id: string | null | undefined) => SAZA_BADGES.find((b) => b.id === id) ?? null;
 
 /** one move at a Crazy 7 table, for seat labels and animations */
 export interface Crazy7Move {
@@ -390,6 +407,8 @@ export interface PublicPlayer {
   bot: boolean;
   /** lobby: ready to start; the host, bots and people on older apps always count as ready */
   ready: boolean;
+  /** the saza badge they wear in this room (Bluff's last player, until they win here); null when none or Saza is off */
+  saza: SazaBadge | null;
 }
 
 /** how one player's coins changed when a game ended */
@@ -486,6 +505,8 @@ export interface RoomView {
   leftPlayers: { id: string; name: string; registered: boolean; level: number | null }[];
   /** the Crazy 7 table while a Crazy 7 game is on, else null */
   crazy7: Crazy7View | null;
+  /** game over with Saza on: who wears the new badge, and the winner who may still swap it; null otherwise */
+  sazaPick: { loserId: string; winnerId: string } | null;
 }
 
 export type Role = 'user' | 'admin';

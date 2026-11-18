@@ -52,7 +52,7 @@ describe('socket server', () => {
     const code = created.code!;
     // new rooms start on the "pick one card" bluff rule
     await until(() => a.state !== null);
-    expect(a.state!.config).toEqual({ game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert' });
+    expect(a.state!.config).toEqual({ game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false });
     expect(await send(b, 'room:join', { code: code.toLowerCase(), name: 'Ravi' })).toMatchObject({ ok: true });
     expect(await send(c, 'room:join', { code, name: 'ravi' })).toEqual({ ok: false, error: 'That name is taken in this room' });
     expect(await send(c, 'room:join', { code, name: 'Meena' })).toMatchObject({ ok: true });
@@ -211,6 +211,40 @@ describe('socket server', () => {
     expect(await send(a, 'room:rematch')).toEqual({ ok: true });
     await until(() => b.state?.phase === 'playing' && b.state.hand.length === 26);
     await until(() => a.notes.at(-1)?.text.startsWith('Rematch. ') === true);
+  });
+
+  it('puts a saza on the last player, which only the winner can swap until the lobby', async () => {
+    const [a, b] = [await client(), await client()];
+    const { code } = await send(a, 'room:create', { name: 'Host' });
+    await send(b, 'room:join', { code, name: 'Guest' });
+    expect(await send(a, 'room:config', { decks: 1, bluffRule: 'one', saza: true })).toEqual({ ok: true });
+    expect(await send(a, 'room:saza', { badge: 'aloo' })).toEqual({ ok: false, error: 'There is no saza to pick now' });
+    await send(a, 'room:start');
+    await until(() => b.state?.phase === 'playing');
+
+    const game = server.rooms.get(code!).game!;
+    const [mover, other] = game.turnId === a.state!.meId ? [a, b] : [b, a];
+    const last = game.hand(mover.state!.meId).slice(0, 1);
+    game.hands.set(mover.state!.meId, last);
+    await send(mover, 'game:play', { cardIds: [last[0].id], rank: 'A' });
+    await send(other, 'game:pass');
+    await until(() => a.state?.phase === 'over' && b.state?.phase === 'over');
+    const loserId = other.state!.meId;
+    expect(b.state!.sazaPick).toEqual({ loserId, winnerId: mover.state!.meId });
+    expect(a.state!.players.find((p) => p.id === loserId)!.saza).not.toBe(null);
+    expect(a.state!.players.find((p) => p.id !== loserId)!.saza).toBe(null);
+    await until(() => a.notes.some((n) => / gets the .+ saza /.test(n.text)));
+
+    expect(await send(other, 'room:saza', { badge: 'aloo' })).toEqual({ ok: false, error: 'Only the winner picks the saza' });
+    expect(await send(mover, 'room:saza', { badge: 'gold' })).toEqual({ ok: false, error: 'Pick one of the badges' });
+    expect(await send(mover, 'room:saza', { badge: 'kachua' })).toEqual({ ok: true });
+    await until(() => other.state?.players.find((p) => p.id === loserId)?.saza === 'kachua');
+    await until(() => other.notes.at(-1)?.text.endsWith('the Kachua saza 🐢') === true);
+
+    expect(await send(a, 'room:lobby')).toEqual({ ok: true });
+    await until(() => b.state?.phase === 'lobby');
+    expect(b.state!.sazaPick).toBe(null);
+    expect(b.state!.players.find((p) => p.id === loserId)!.saza).toBe('kachua');
   });
 
   it('lets the host end the game once someone has won, and everyone else loses', async () => {
