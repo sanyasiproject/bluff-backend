@@ -136,9 +136,37 @@ describe('saza for the loser', () => {
     expect(sazaIn(teams.r, kiran.id)).toEqual({ Asha: null, Ravi: null, Meena: 'murga', Kiran: null });
     expect(teams.r.view(kiran.id).sazaPick).toBe(null);
 
+    // closed before anyone went out: nobody won
     const closed = room(['Asha', 'Ravi']);
     closed.r.game!.close();
     expect(closed.r.settleSaza()).toEqual([]);
+  });
+
+  it('gives it to the bot holding the most cards when a person went out and only bots were left, and only shows (never speaks) it', () => {
+    const r = new Room('SAZA');
+    const host = r.addMember('Asha');
+    const isha = r.addBot(host.id, 'Isha').bot;
+    const vihu = r.addBot(host.id, 'Vihu').bot;
+    r.setConfig(host.id, SAZA);
+    r.start(host.id);
+    host.saza = 'mirchi';
+    const g = r.game!;
+    g.hands.set(host.id, [card('K')]);
+    g.hands.set(isha.id, [card('2'), card('3')]);
+    g.hands.set(vihu.id, [card('4'), card('5'), card('6')]);
+    g.turnId = host.id;
+    g.play(host.id, [g.hand(host.id)[0].id], 'K');
+    // both bots let it go: Asha is out and only bots hold cards
+    g.pass(g.turnId!);
+    g.pass(g.turnId!);
+    r.endIfOnlyBots();
+    expect(g.closed).toBe(true);
+    const notes = r.settleSaza(() => 0);
+    expect(texts(notes)).toEqual(['Asha won and the saza comes off!', 'Vihu gets the Joker saza 🤡']);
+    // announced as room notes: shown on screen, not read aloud after the game-over lines
+    expect(notes.map((n) => n.kind)).toEqual(['room', 'room']);
+    expect(sazaIn(r, host.id)).toEqual({ Asha: null, Isha: null, Vihu: 'joker' });
+    expect(r.view(host.id).sazaPick).toEqual({ loserId: vihu.id, winnerId: host.id });
   });
 
   it('takes every badge off when the host switches Saza off, and hides them while Crazy 7 is picked', () => {
