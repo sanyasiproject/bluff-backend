@@ -51,6 +51,32 @@ export interface UserDoc {
   tableTheme?: string;
   /** how they really play Bluff, summed over their saved games; only the server and its bots read it */
   habits?: Partial<Habits>;
+  /** today's and this week's missions (services/missions.ts); missing until first read or counted */
+  missions?: MissionsDoc;
+}
+
+/** one of an account's current missions */
+export interface MissionDoc {
+  /** a MISSIONS id */
+  id: string;
+  /** counted so far, at most the goal */
+  progress: number;
+  /** reached the goal; its coins and XP were paid in that same write */
+  done: boolean;
+}
+
+/** an account's daily and weekly sets; a set from an earlier IST day or week is replaced when next read or counted */
+export interface MissionsDoc {
+  /** goes up by one on every write; each write checks it, so two writes can't overwrite each other or pay twice */
+  rev: number;
+  /** IST day (YYYY-MM-DD) of the daily set */
+  day: string;
+  daily: MissionDoc[];
+  /** IST day of the Monday that starts the weekly set */
+  week: string;
+  weekly: MissionDoc[];
+  /** IST day the free swap was last used */
+  swapDay?: string;
 }
 
 export interface SessionDoc {

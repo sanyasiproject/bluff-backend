@@ -39,6 +39,8 @@ const emptyStats = (): PlayerStats => ({
   sevens: 0,
   missedCalls: 0,
   picks: 0,
+  stacks: 0,
+  lastCalls: 0,
 });
 
 /** Crazy 7 rules: match the top card's suit or number; a 7 makes the next player pick 2; first one out wins */
@@ -264,8 +266,10 @@ export class Crazy7Game implements TableGame {
     this.topBy = id;
     this.idle = 0;
     if (card.rank === '7') {
-      this.penalty += SEVEN_PENALTY;
       const s = this.stat(id);
+      // a 7 answering a 7 that was waiting
+      if (this.penalty > 0) s.stacks = (s.stacks ?? 0) + 1;
+      this.penalty += SEVEN_PENALTY;
       s.sevens = (s.sevens ?? 0) + 1;
     }
     this.move('play', id, card, 0);
@@ -322,6 +326,8 @@ export class Crazy7Game implements TableGame {
     }
     this.called.add(id);
     if (this.atRisk === id) this.atRisk = null;
+    const s = this.stat(id);
+    s.lastCalls = (s.lastCalls ?? 0) + 1;
     this.move('call', id, null, 0);
     return [{ kind: 'c7call', playerId: id }];
   }

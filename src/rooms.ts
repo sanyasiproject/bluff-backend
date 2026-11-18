@@ -4,6 +4,7 @@ import { cardName, describeClaim, ordinal, secureRandom } from './cards.js';
 import { Crazy7Game } from './crazy7/game.js';
 import { Game, GameError } from './game.js';
 import type { GameEvent, GameRecord, Member, MemberAccount, TableGame, WatchRequest } from './models.js';
+import { dealSecrets, secretView } from './secrets.js';
 import {
   BOT_LEVEL_NAMES,
   botStakeCap,
@@ -23,6 +24,7 @@ import {
   type PlayerPlays,
   type RoomView,
   type SazaBadge,
+  type SecretView,
   type ThrowEvent,
 } from './types.js';
 
@@ -77,6 +79,8 @@ export class Room {
   starting = false;
   /** the last game's save, still settling coins */
   saving: Promise<void> | null = null;
+  /** secret mission card of each person in the current game, by member id; server only, each person sees just their own */
+  secretCards = new Map<string, string>();
   /** players the host removed mid-game, kept so the saved game still has their name */
   private departed = new Map<string, Member>();
   /** 2v2 lobby: who asked whom to swap places, by the asked player's id */
@@ -275,9 +279,10 @@ export class Room {
     if (targetId === by) throw new GameError("You can't remove yourself");
     const target = this.member(targetId);
     let events: GameEvent[] = [];
-    if (this.phase === 'playing' && this.table?.order.includes(targetId)) {
-      events = this.table.removePlayer(targetId);
+    if (this.table?.order.includes(targetId)) {
+      // kept so the saved game and the game-over screen still have their name
       this.departed.set(targetId, target);
+      if (this.phase === 'playing') events = this.table.removePlayer(targetId);
     }
     this.members = this.members.filter((m) => m.id !== targetId);
     this.lastChat.delete(targetId);
@@ -483,12 +488,40 @@ export class Room {
       this.game = null;
       // stepwise: the automatic picks and passes come one at a time (Crazy7Auto), so people can follow them
       this.c7 = new Crazy7Game(this.players().map((m) => m.id), this.config, secureRandom, true, true);
+      this.dealSecretCards();
       return;
     }
     this.c7 = null;
     // 2v2 plays in slot order, so the teams alternate turns
     const order = this.config.teams ? (this.slotIds().filter((id) => id !== null) as string[]) : this.players().map((m) => m.id);
     this.game = new Game(order, this.config, secureRandom, order.filter((id) => this.isBot(id)));
+    this.dealSecretCards();
+  }
+
+  /** every person at the new table gets a secret mission card for this game; bots get none, and no card the table's settings rule out */
+  private dealSecretCards(): void {
+    const order = this.table?.order ?? [];
+    // Crazy 7 without Stack 7s can't answer a 7; with lies kept secret, cards that would show whether someone lied aren't dealt
+    const skip = this.c7 ? (this.config.stack7 ? [] : ['stack7']) : this.config.secretLies ? ['sneak2', 'bigLie', 'bait'] : [];
+    this.secretCards = dealSecrets(order.filter((id) => !this.isBot(id)), this.c7 ? 'crazy7' : 'bluff', secureRandom, skip);
+  }
+
+  /** a person's secret card with live progress from their own game; null for bots, watchers and in the lobby */
+  private secretOf(id: string): SecretView | null {
+    const g = this.table;
+    const card = this.secretCards.get(id);
+    return g && card ? secretView(card, g.stats.get(id), this.game?.playLogOf(id) ?? []) : null;
+  }
+
+  /** game over: every person's card in seat order, turned over (not those the host removed); empty while the game runs */
+  private revealedSecrets(): RoomView['secrets'] {
+    const g = this.table;
+    if (!g?.over) return [];
+    return g.order.flatMap((id) => {
+      const s = g.kicked.has(id) ? null : this.secretOf(id);
+      const name = (this.members.find((m) => m.id === id) ?? this.departed.get(id))?.name ?? 'Someone';
+      return s ? [{ playerId: id, name, id: s.id, done: s.done }] : [];
+    });
   }
 
   /** the current game as a record to save; take it before the game is cleared */
@@ -512,10 +545,18 @@ export class Room {
         kicked: g.kicked.has(id),
         bot: member(id)?.bot ?? false,
         stats: { ...g.stats.get(id)! },
+        // the card dealt to this person and whether it's done by now; null for bots
+        secret: this.secretRecord(id),
       })),
       awards: status === 'finished' ? computeAwards(g.stats, g.config.game) : [],
       bets: status === 'finished' ? [...g.bets] : [],
     };
+  }
+
+  /** a person's card this game and whether it's done, for the saved game */
+  private secretRecord(id: string): { id: string; done: boolean } | null {
+    const s = this.secretOf(id);
+    return s ? { id: s.id, done: s.done } : null;
   }
 
   /** after game over anyone can return; mid-game only the host (or anyone if the host is offline) */
@@ -528,6 +569,7 @@ export class Room {
     this.coinResults = null;
     this.sazaPick = null;
     this.departed.clear();
+    this.secretCards.clear();
     this.fillSeats();
   }
 
@@ -668,6 +710,9 @@ export class Room {
       sazaPick: this.sazaPick,
       // null until the game is over
       lieRecap: b && !b.config.secretLies ? b.lieRecap((id) => (this.members.find((m) => m.id === id) ?? this.departed.get(id))?.name ?? 'Someone') : null,
+      // only my own card while the game runs; everyone's once it's over
+      secret: this.secretOf(meId),
+      secrets: this.revealedSecrets(),
     };
   }
 

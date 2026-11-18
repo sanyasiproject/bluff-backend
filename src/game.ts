@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { buildDeck, secureRandom, shuffle, sortHand, type RandomInt } from './cards.js';
 import { emptyHabits, noteBotCall, noteBotPlay, notePass, notePlay } from './habits.js';
-import type { BetResult, GameEvent, Habits, PlayerStats, PlayRecord } from './models.js';
+import type { BetResult, GameEvent, Habits, LoggedPlay, PlayerStats, PlayRecord } from './models.js';
 import { MAX_BLUFF_CALLS_IN_A_ROW, RANKS, type Card, type GameConfig, type LieRecap, type PlayerPlays, type Rank, type RevealView } from './types.js';
 
 /** how many uncaught lies the game-over reveal lists */
@@ -48,8 +48,8 @@ export class Game {
   readonly bots: ReadonlySet<string>;
   /** a bot's last play that people may still call: saved in their habits once it stands, or for whoever calls it */
   private botWatch: { playId: string; lie: boolean; people: string[] } | null = null;
-  /** every play with its true cards, for the reveal once the game is over */
-  private readonly playLog: { playId: string; playerId: string; rank: Rank; cards: Card[]; called: boolean; caught: boolean }[] = [];
+  /** every play with its true cards, for the reveal once the game is over; settled: it stood or was called, not cut off by a walk-out or End game */
+  private readonly playLog: { playId: string; playerId: string; rank: Rank; cards: Card[]; called: boolean; caught: boolean; settled: boolean }[] = [];
 
   constructor(
     readonly order: string[],
@@ -112,7 +112,7 @@ export class Game {
     this.pileBy.push(...cards.map(() => playerId));
     this.roundRank = claim;
     this.lastPlay = { id: randomUUID(), playerId, cards, rank: claim };
-    this.playLog.push({ playId: this.lastPlay.id, playerId, rank: claim, cards, called: false, caught: false });
+    this.playLog.push({ playId: this.lastPlay.id, playerId, rank: claim, cards, called: false, caught: false, settled: false });
     // a bot's play that doesn't empty its hand: how people treat it is saved for the bots, once each person has had their chance at it
     if (this.bots.has(playerId) && hand.length > cards.length) {
       const people = this.order.filter((id) => !this.bots.has(id) && this.hand(id).length > 0 && this.partnerOf(id) !== playerId && this.bluffCallsLeft(id) > 0);
@@ -282,6 +282,13 @@ export class Game {
     return { plays, hand: [...this.hand(playerId)] };
   }
 
+  /** server only: one player's plays so far with the true cards, for their secret mission card; never put it in a view */
+  playLogOf(playerId: string): LoggedPlay[] {
+    return this.playLog
+      .filter((l) => l.playerId === playerId)
+      .map((l) => ({ rank: l.rank, cards: [...l.cards], called: l.called, caught: l.caught, open: !l.settled }));
+  }
+
   /** 1st place, or both partners of the winning team */
   winners(): string[] {
     if (this.aborted || !this.over) return [];
@@ -420,6 +427,9 @@ export class Game {
 
   /** The last play stands; a player whose hand it emptied is now finished */
   private settleLastPlay(): GameEvent[] {
+    // the play had its chance to be called: it stood, or a call just settled it
+    const logged = this.lastPlay ? this.playLog.find((l) => l.playId === this.lastPlay!.id) : undefined;
+    if (logged) logged.settled = true;
     const id = this.lastPlay?.playerId;
     if (!id || this.hand(id).length > 0 || this.places.includes(id) || this.kicked.has(id)) return [];
     this.places.push(id);

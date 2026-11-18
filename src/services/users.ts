@@ -43,6 +43,7 @@ const EMPTY_STATS: LifetimeStats = {
   plays: 0,
   chances: 0,
   crazy7Games: 0,
+  bonusXp: 0,
 };
 
 /** lifetime stats, with zeros for any an older account is missing */

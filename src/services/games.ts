@@ -7,12 +7,17 @@ import {
   DAILY_GAME_REWARDS,
   levelOf,
   MIN_REWARD_GAME_SEC,
+  SECRET_XP,
   xpOf,
   type CoinResult,
   type GameSummary,
   type LifetimeStats,
 } from '../types.js';
+import type { MissionCounts, MissionDone, MissionService } from './missions.js';
 import { statsOf } from './users.js';
+
+/** a friendship's key: both user ids sorted and joined, as in services/friends.ts */
+const pairKey = (a: string, b: string) => [a, b].sort().join('_');
 
 /** one game's numbers in the shape of lifetime stats */
 const asLifetime = (p: GamePlayerDoc, crazy7 = false): LifetimeStats => ({
@@ -27,11 +32,15 @@ const asLifetime = (p: GamePlayerDoc, crazy7 = false): LifetimeStats => ({
   plays: p.stats.plays ?? 0,
   chances: p.stats.chances ?? 0,
   crazy7Games: crazy7 ? 1 : 0,
+  bonusXp: 0,
 });
 
-/** saves games, settles stakes, pays daily game rewards, and adds to lifetime stats */
+/** saves games, settles stakes, pays daily game rewards, counts missions, and adds to lifetime stats */
 export class GameRecorder {
-  constructor(private readonly cols: Collections) {}
+  constructor(
+    private readonly cols: Collections,
+    private readonly missions: MissionService,
+  ) {}
 
   async save(record: GameRecord): Promise<CoinResult[]> {
     const finished = record.status === 'finished';
@@ -81,9 +90,15 @@ export class GameRecorder {
       })),
     });
 
-    if (finished) await this.addLifetimeStats(players, record.config.game === 'crazy7');
+    // a secret mission card done pays bonus XP, only in a game that counts for a logged-in player who wasn't removed
+    const secretDone = new Set(record.players.filter((p) => p.secret?.done).map((p) => p.memberId));
+    const secretXpOf = (p: GamePlayerDoc & { memberId: string }) => (counts && p.userId && !p.kicked && secretDone.has(p.memberId) ? SECRET_XP : 0);
+
+    if (finished) await this.addLifetimeStats(players, record.config.game === 'crazy7', secretXpOf);
     // how each person really plays, for the bots; a stopped game's plays count too
     if (record.config.game !== 'crazy7') await this.addHabits(players);
+    // missions move only with games that count, like the daily ladder; finished ones are paid as they're saved
+    const missionsDone = counts ? await this.countMissions(players, record.config.game === 'crazy7', secretDone) : new Map<string, MissionDone[]>();
 
     const today = istDay();
     const accounts = await this.cols.users
@@ -106,6 +121,9 @@ export class GameRecorder {
         bets: p.betChange ?? 0,
         // same rule as addLifetimeStats: finished games of logged-in players who weren't removed
         xp: finished && u && !p.kicked ? xpOf(asLifetime(p)) : 0,
+        // both already added to coins and stats.bonusXp above
+        missionsDone: u ? (missionsDone.get(p.memberId) ?? []) : [],
+        secretXp: u ? secretXpOf(p) : 0,
       };
     });
   }
@@ -191,7 +209,8 @@ export class GameRecorder {
     }
   }
 
-  private async addLifetimeStats(players: GamePlayerDoc[], crazy7: boolean): Promise<void> {
+  /** bonusXpOf: XP from the player's secret mission card this game */
+  private async addLifetimeStats<P extends GamePlayerDoc>(players: P[], crazy7: boolean, bonusXpOf: (p: P) => number): Promise<void> {
     const updates: AnyBulkWriteOperation<UserDoc>[] = players
       .filter((p) => p.userId && !p.kicked)
       .map((p) => ({
@@ -210,11 +229,59 @@ export class GameRecorder {
               'stats.plays': p.stats.plays ?? 0,
               'stats.chances': p.stats.chances ?? 0,
               'stats.crazy7Games': crazy7 ? 1 : 0,
+              'stats.bonusXp': bonusXpOf(p),
             },
           },
         },
       }));
     if (updates.length > 0) await this.cols.users.bulkWrite(updates);
+  }
+
+  /** counts a game for each logged-in, non-removed player's missions; returns what each one finished, by member id */
+  private async countMissions(
+    players: (GamePlayerDoc & { memberId: string })[],
+    crazy7: boolean,
+    secretDone: Set<string>,
+  ): Promise<Map<string, MissionDone[]>> {
+    const counted = players.filter((p) => p.userId && !p.kicked);
+    // a failed friends lookup only loses this game's friends missions
+    const friends = await this.friendPairs(counted.map((p) => p.userId!.toHexString())).catch((err: Error) => {
+      console.error('[missions] could not read friends:', err.message);
+      return new Set<string>();
+    });
+    const done = new Map<string, MissionDone[]>();
+    for (const p of counted) {
+      const me = p.userId!.toHexString();
+      // another logged-in, non-removed player of this game is an accepted friend
+      const withFriend = counted.some((q) => q.userId!.toHexString() !== me && friends.has(pairKey(me, q.userId!.toHexString())));
+      const tally: MissionCounts = {
+        games: 1,
+        wins: p.won ? 1 : 0,
+        goodCalls: crazy7 ? 0 : p.stats.goodCalls,
+        cleanBluffs: crazy7 ? 0 : Math.max(0, p.stats.bluffs - p.stats.caught),
+        crazy7Games: crazy7 ? 1 : 0,
+        crazy7Wins: crazy7 && p.won ? 1 : 0,
+        sevens: crazy7 ? (p.stats.sevens ?? 0) : 0,
+        friendGames: withFriend ? 1 : 0,
+        secrets: secretDone.has(p.memberId) ? 1 : 0,
+      };
+      try {
+        done.set(p.memberId, await this.missions.count(p.userId!, tally));
+      } catch (err) {
+        // a missions hiccup never costs the game's other results
+        console.error('[missions] could not count a game:', (err as Error).message);
+      }
+    }
+    return done;
+  }
+
+  /** pair keys of the accepted friendships among these accounts */
+  private async friendPairs(userIds: string[]): Promise<Set<string>> {
+    const ids = [...new Set(userIds)];
+    const pairs = ids.flatMap((a, i) => ids.slice(i + 1).map((b) => pairKey(a, b)));
+    if (pairs.length === 0) return new Set();
+    const links = await this.cols.friends.find({ pair: { $in: pairs }, status: 'accepted' }, { projection: { pair: 1 } }).toArray();
+    return new Set(links.map((f) => f.pair));
   }
 
   /** adds this game's true plays to each account's habits (server only; the bots read them at the next join or deal) */

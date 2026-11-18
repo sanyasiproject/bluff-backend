@@ -1,4 +1,9 @@
-import type { Award, Card, CoinResult, GameConfig, InviteEvent, LifetimeStats, Rank, SazaBadge } from './types.js';
+import type { Award, Card, CoinResult, GameConfig, InviteEvent, LifetimeStats, PlayReveal, Rank, SazaBadge } from './types.js';
+
+/** one of a player's plays this game with the true cards (server only); open: it never stood or was called (still waiting, or cut off by a walk-out or End game) */
+export interface LoggedPlay extends PlayReveal {
+  open: boolean;
+}
 
 // Server-only shapes, never sent to clients as-is
 export interface Member {
@@ -140,6 +145,8 @@ export interface GameRecordPlayer {
   won: boolean;
   bot: boolean;
   stats: PlayerStats;
+  /** their secret mission card this game and whether they did it; null for bots */
+  secret: { id: string; done: boolean } | null;
 }
 
 /** a bet on a bluff call: the loser of the call pays the winner when the game is saved */
@@ -219,6 +226,10 @@ export interface PlayerStats {
   missedCalls?: number;
   /** Crazy 7: cards picked (kept apart from Bluff's pickedUp, which feeds the Collector achievement) */
   picks?: number;
+  /** Crazy 7: 7s played to answer a waiting 7 */
+  stacks?: number;
+  /** Crazy 7: "last card" said in time */
+  lastCalls?: number;
   /** Bluff: how they really played this game, added to the account's habits when the game is saved */
   habits?: Habits;
 }

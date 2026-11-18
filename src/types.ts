@@ -466,8 +466,12 @@ export interface CoinResult {
   counted: boolean;
   /** coins won (+) or lost (-) on bluff-call bets */
   bets: number;
-  /** XP this game earned; 0 for guests, stopped games and removed players */
+  /** XP this game earned (the game itself only: missionsDone and secretXp come on top); 0 for guests, stopped games and removed players */
   xp: number;
+  /** daily and weekly missions this game finished; their coins and XP are already added */
+  missionsDone: { id: string; coins: number; xp: number }[];
+  /** bonus XP from this game's secret mission card (0 when not done or the game didn't count) */
+  secretXp: number;
 }
 
 export interface LastPlayView {
@@ -549,6 +553,10 @@ export interface RoomView {
   sazaPick: { loserId: string; winnerId: string } | null;
   /** a Bluff game is over: its lies, unless the host keeps them secret; null otherwise (never while the game runs) */
   lieRecap: LieRecap | null;
+  /** my secret mission card this game; null for bots, watchers and in the lobby */
+  secret: SecretView | null;
+  /** game over: each person's secret mission card, turned over (not players the host removed), named even after leaving; empty while the game runs */
+  secrets: { playerId: string; name: string; id: string; done: boolean }[];
 }
 
 export type Role = 'user' | 'admin';
@@ -569,9 +577,11 @@ export interface LifetimeStats {
   chances: number;
   /** of gamesPlayed, how many were Crazy 7 (Bluff bots read only Bluff games) */
   crazy7Games: number;
+  /** XP from missions and secret mission cards (older accounts: 0) */
+  bonusXp: number;
 }
 
-/** XP from each finished game: playing it, winning, catching a liar, and each bluff nobody caught */
+/** XP from each finished game: playing it, winning, catching a liar, and each bluff nobody caught; missions add bonusXp */
 export const XP_RULES = { game: 20, win: 50, goodCall: 5, cleanBluff: 3 } as const;
 
 export function xpOf(s: LifetimeStats): number {
@@ -579,8 +589,127 @@ export function xpOf(s: LifetimeStats): number {
     s.gamesPlayed * XP_RULES.game +
     s.wins * XP_RULES.win +
     s.goodCalls * XP_RULES.goodCall +
-    Math.max(0, s.bluffs - s.bluffsCaught) * XP_RULES.cleanBluff
+    Math.max(0, s.bluffs - s.bluffsCaught) * XP_RULES.cleanBluff +
+    (s.bonusXp ?? 0)
   );
+}
+
+/** what a daily or weekly mission counts, from each finished game of MIN_REWARD_GAME_SEC or more (logged in, not removed) */
+export type MissionCounter =
+  /** games finished, either game */
+  | 'games'
+  /** games won (a 2v2 team win counts) */
+  | 'wins'
+  /** Bluff: calls that turned over a fake */
+  | 'goodCalls'
+  /** Bluff: lies nobody caught */
+  | 'cleanBluffs'
+  /** Crazy 7 games finished */
+  | 'crazy7Games'
+  /** Crazy 7 games won */
+  | 'crazy7Wins'
+  /** Crazy 7: 7s played */
+  | 'sevens'
+  /** games finished with an accepted friend at the table */
+  | 'friendGames'
+  /** secret mission cards done */
+  | 'secrets';
+
+export type MissionPeriod = 'daily' | 'weekly';
+
+export interface MissionDef {
+  id: string;
+  period: MissionPeriod;
+  emoji: string;
+  title: string;
+  counter: MissionCounter;
+  goal: number;
+  coins: number;
+  xp: number;
+  /** needs a real friend at the table; each day's and each week's set is dealt with exactly one (a swap may change that) */
+  social: boolean;
+}
+
+/** 3 missions a day and 3 a week, each set with one social mission; daily ones start again at IST midnight, weekly ones on Monday */
+export const MISSIONS: readonly MissionDef[] = [
+  { id: 'd-games3', period: 'daily', emoji: '🎴', title: 'Finish 3 games', counter: 'games', goal: 3, coins: 150, xp: 30, social: false },
+  { id: 'd-win1', period: 'daily', emoji: '🏆', title: 'Win a game', counter: 'wins', goal: 1, coins: 200, xp: 40, social: false },
+  { id: 'd-catch2', period: 'daily', emoji: '🕵️', title: 'Catch 2 liars in Bluff', counter: 'goodCalls', goal: 2, coins: 150, xp: 30, social: false },
+  { id: 'd-sneak3', period: 'daily', emoji: '😎', title: 'Get 3 lies past everyone in Bluff', counter: 'cleanBluffs', goal: 3, coins: 150, xp: 30, social: false },
+  { id: 'd-c7games2', period: 'daily', emoji: '7️⃣', title: 'Finish 2 games of Crazy 7', counter: 'crazy7Games', goal: 2, coins: 150, xp: 30, social: false },
+  { id: 'd-sevens3', period: 'daily', emoji: '🃏', title: 'Play 3 sevens in Crazy 7', counter: 'sevens', goal: 3, coins: 150, xp: 30, social: false },
+  { id: 'd-secret1', period: 'daily', emoji: '🤫', title: 'Complete a secret mission', counter: 'secrets', goal: 1, coins: 150, xp: 30, social: false },
+  { id: 'd-friend1', period: 'daily', emoji: '👯', title: 'Finish a game with a friend', counter: 'friendGames', goal: 1, coins: 200, xp: 40, social: true },
+  { id: 'd-friend2', period: 'daily', emoji: '👯', title: 'Finish 2 games with friends', counter: 'friendGames', goal: 2, coins: 250, xp: 50, social: true },
+  { id: 'w-games15', period: 'weekly', emoji: '🎴', title: 'Finish 15 games', counter: 'games', goal: 15, coins: 1_000, xp: 150, social: false },
+  { id: 'w-wins5', period: 'weekly', emoji: '🏆', title: 'Win 5 games', counter: 'wins', goal: 5, coins: 1_200, xp: 200, social: false },
+  { id: 'w-catch10', period: 'weekly', emoji: '🕵️', title: 'Catch 10 liars in Bluff', counter: 'goodCalls', goal: 10, coins: 1_000, xp: 150, social: false },
+  { id: 'w-sneak12', period: 'weekly', emoji: '😎', title: 'Get 12 lies past everyone in Bluff', counter: 'cleanBluffs', goal: 12, coins: 1_000, xp: 150, social: false },
+  { id: 'w-c7wins3', period: 'weekly', emoji: '7️⃣', title: 'Win 3 games of Crazy 7', counter: 'crazy7Wins', goal: 3, coins: 1_000, xp: 150, social: false },
+  { id: 'w-secret5', period: 'weekly', emoji: '🤫', title: 'Complete 5 secret missions', counter: 'secrets', goal: 5, coins: 1_000, xp: 150, social: false },
+  { id: 'w-friend5', period: 'weekly', emoji: '👯', title: 'Finish 5 games with friends', counter: 'friendGames', goal: 5, coins: 1_200, xp: 200, social: true },
+];
+
+/** missions in each day's set and in each week's set */
+export const MISSIONS_PER_SET = 3;
+
+/** the catalogue entry for a mission id, or null */
+export const missionOf = (id: string | null | undefined) => MISSIONS.find((m) => m.id === id) ?? null;
+
+/** one of a player's current missions */
+export interface MissionView {
+  id: string;
+  /** counted so far, at most the goal */
+  progress: number;
+  /** reached the goal; its coins and XP were added right then */
+  done: boolean;
+}
+
+/** GET /api/me/missions and the swap: today's and this week's missions */
+export interface MissionsResponse {
+  daily: MissionView[];
+  weekly: MissionView[];
+  /** today's free swap of one unfinished mission is still there */
+  rerollLeft: boolean;
+  /** when today's set and this week's set start again (ISO time) */
+  dailyResetAt: string;
+  weeklyResetAt: string;
+}
+
+/** a secret mission card: one per person per game, dealt at random when the game starts, revealed at game over */
+export interface SecretMissionDef {
+  id: string;
+  game: GameKind;
+  emoji: string;
+  title: string;
+  /** how it counts, in one line */
+  how: string;
+  goal: number;
+}
+
+export const SECRET_MISSIONS: readonly SecretMissionDef[] = [
+  { id: 'catch2', game: 'bluff', emoji: '🕵️', title: 'Catch 2 liars', how: 'Two bluff calls that turn over a fake', goal: 2 },
+  { id: 'sneak2', game: 'bluff', emoji: '😎', title: 'Get 2 lies past everyone', how: 'Two plays with a fake in them that stand or survive a call', goal: 2 },
+  { id: 'bigLie', game: 'bluff', emoji: '🎭', title: 'Get a lie of 3 or more cards past everyone', how: 'One play of 3 or more cards with a fake in it that stands or survives a call', goal: 1 },
+  { id: 'bait', game: 'bluff', emoji: '🪤', title: 'Get called on the truth', how: 'Put down only real cards and have someone call bluff on them', goal: 1 },
+  { id: 'bigDrop', game: 'bluff', emoji: '🃏', title: 'Put down 4 cards in one go', how: '4 or more cards in one play, truth or lie', goal: 1 },
+  { id: 'sevens2', game: 'crazy7', emoji: '7️⃣', title: 'Play two 7s', how: 'Any two 7s; one that answers a 7 counts too', goal: 2 },
+  { id: 'stack7', game: 'crazy7', emoji: '🔁', title: 'Answer a 7 with your own 7', how: 'When a 7 makes you pick, play your own 7 instead (only dealt with Stack 7s on)', goal: 1 },
+  { id: 'lastCard', game: 'crazy7', emoji: '📢', title: 'Say last card in time', how: 'Tap 📢 Last card before anyone else moves', goal: 1 },
+];
+
+/** the catalogue entry for a secret mission id, or null */
+export const secretMissionOf = (id: string | null | undefined) => SECRET_MISSIONS.find((m) => m.id === id) ?? null;
+
+/** bonus XP for a secret mission card done in a game that counts (logged in, finished, MIN_REWARD_GAME_SEC or more) */
+export const SECRET_XP = 25;
+
+/** my own secret mission card while the game runs (and at its end) */
+export interface SecretView {
+  id: string;
+  /** counted so far from my own game, at most the goal */
+  progress: number;
+  done: boolean;
 }
 
 /** XP needed to reach a level: each level needs 100 more than the last (0, 100, 300, 600, 1000…) */

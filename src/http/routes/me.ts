@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { PlayerLook } from '../../models.js';
 import type { Store } from '../../services/store.js';
 import { toPublicUser } from '../../services/users.js';
-import { DEFAULT_CARD_BACK, DEFAULT_TABLE_THEME, type ProfileOverview, type PublicUser } from '../../types.js';
+import { DEFAULT_CARD_BACK, DEFAULT_TABLE_THEME, type MissionsResponse, type ProfileOverview, type PublicUser } from '../../types.js';
 import { asPayload, parseQueryInt } from '../../validate.js';
 import { ApiError } from '../errors.js';
 import { ah, currentUser, requireUser } from '../middleware.js';
@@ -30,6 +30,26 @@ export function meRoutes(store: Store, onLookChanged: (userId: string, look: Pla
       const me = currentUser(res);
       const [overview, friends] = await Promise.all([store.users.overview(me), store.friends.countFor(me._id)]);
       const body: ProfileOverview = { ...overview, friends };
+      res.json(body);
+    }),
+  );
+
+  // today's and this week's missions; a new day or week deals a fresh set
+  r.get(
+    '/missions',
+    ah(async (_req, res) => {
+      const body: MissionsResponse = await store.missions.get(currentUser(res)._id);
+      res.json(body);
+    }),
+  );
+
+  // today's one free swap of an unfinished daily or weekly mission
+  r.post(
+    '/missions/swap',
+    ah(async (req, res) => {
+      const id = asPayload(req.body).id;
+      if (typeof id !== 'string' || id.length > 40) throw new ApiError(400, "That isn't one of your missions");
+      const body: MissionsResponse = await store.missions.swap(currentUser(res)._id, id);
       res.json(body);
     }),
   );

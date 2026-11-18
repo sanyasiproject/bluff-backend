@@ -4,6 +4,7 @@ import { io as connect, type Socket } from 'socket.io-client';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBluffServer } from '../src/server.js';
+import { istDay, istWeek } from '../src/days.js';
 import { emptyHabits } from '../src/habits.js';
 import type { GameRecord } from '../src/models.js';
 import { createStore, type Store } from '../src/services/store.js';
@@ -75,6 +76,22 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
   const bearer = (token: string) => ({ Authorization: `Bearer ${token}` });
   const register = (username: string, password = 'secret-pass-1', displayName?: string) =>
     api().post('/api/auth/register').send({ username, password, displayName });
+
+  /** today's and this week's missions already finished, so a test that checks exact coin sums isn't paid a random mission */
+  async function noMissionPay(...usernames: string[]) {
+    const done = (ids: string[]) => ids.map((id) => ({ id, progress: 99, done: true }));
+    const missions = {
+      rev: 1,
+      day: istDay(),
+      daily: done(['d-games3', 'd-win1', 'd-friend1']),
+      week: istWeek(),
+      weekly: done(['w-games15', 'w-wins5', 'w-friend5']),
+    };
+    const client = new MongoClient(MONGO!);
+    await client.connect();
+    await client.db(DB).collection('users').updateMany({ username: { $in: usernames } }, { $set: { missions } });
+    await client.close();
+  }
 
   async function socketClient(token?: string): Promise<Client> {
     const c: Client = {
@@ -258,6 +275,7 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
   async function stakedRoom(a: string, b: string) {
     const ra = await register(a, 'secret-pass-1', a.slice(0, 16));
     const rb = await register(b, 'secret-pass-1', b.slice(0, 16));
+    await noMissionPay(a, b);
     const host = await socketClient(ra.body.token);
     const other = await socketClient(rb.body.token);
     const { code } = await send(host, 'room:create', {});
@@ -422,6 +440,7 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
 
   it('pays the daily game ladder at 1, 3, 5… games, skips games under a minute, and restarts each day', async () => {
     const reg = await register('ladder_l');
+    await noMissionPay('ladder_l');
     const userId = reg.body.user.id as string;
     const zero = { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0 };
     const game = (seconds: number): GameRecord => ({
@@ -912,6 +931,7 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
 
   it('settles stakes and bets against bots: a winner takes every seat\'s stake, coins lost to a bot are gone', async () => {
     const reg = await register('bot_fan');
+    await noMissionPay('bot_fan');
     const userId = reg.body.user.id as string;
     const zero = { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0, plays: 0, chances: 0 };
     const game = (won: boolean, bets: GameRecord['bets'] = []): GameRecord => ({
