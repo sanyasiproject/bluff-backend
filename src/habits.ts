@@ -22,6 +22,16 @@ export const HABIT_KEYS = [
   'fakeMid',
   'slotLast',
   'fakeLast',
+  'heldHonest',
+  'heldKept',
+  'heldLies',
+  'liesKept',
+  'overPlays',
+  'overLies',
+  'botSeen',
+  'botCalls',
+  'botLieSeen',
+  'botLieCalls',
 ] as const satisfies readonly (keyof Habits)[];
 
 export const emptyHabits = (): Habits => Object.fromEntries(HABIT_KEYS.map((k) => [k, 0])) as unknown as Habits;
@@ -37,12 +47,32 @@ export function habitsFrom(saved: Partial<Habits> | null | undefined): Habits | 
   return h;
 }
 
+/** where a play happened: it opened the round; cards already claimed this round; copies of a rank in the game */
+export interface PlaySpot {
+  opening: boolean;
+  before: number;
+  copies: number;
+}
+
 /** one play, with the true cards: hand is the hand before the play, cards in tap order */
-export function notePlay(h: Habits, hand: Card[], cards: Card[], claim: Rank, opening: boolean): void {
+export function notePlay(h: Habits, hand: Card[], cards: Card[], claim: Rank, { opening, before, copies }: PlaySpot): void {
   const n = cards.length;
   const real = cards.filter((c) => c.rank === claim).length;
   const fakes = n - real;
   const held = hand.filter((c) => c.rank === claim).length;
+  // holding the rank: honest but keeping some back, or faking while the real ones wait for later
+  if (fakes === 0 && held >= 2) {
+    h.heldHonest++;
+    if (real < held) h.heldKept++;
+  } else if (fakes > 0 && held >= 1) {
+    h.heldLies++;
+    if (real < held) h.liesKept++;
+  }
+  // the round's claims went past the copies with this play: a lie, or real cards springing a trap?
+  if (before > 0 && n <= copies && before + n > copies) {
+    h.overPlays++;
+    if (fakes > 0) h.overLies++;
+  }
   if (opening) {
     h.openPlays++;
     if (fakes > 0) h.openLies++;
@@ -81,6 +111,18 @@ export function notePlay(h: Habits, hand: Card[], cards: Card[], claim: Rank, op
       h.fakeMid += fake;
     }
   });
+}
+
+/** a bot's play this person had their chance to call (it stood, or they called it; not its last cards), and whether it hid a fake */
+export function noteBotPlay(h: Habits, lie: boolean): void {
+  h.botSeen++;
+  if (lie) h.botLieSeen++;
+}
+
+/** this person called a bot's play (not its last cards) */
+export function noteBotCall(h: Habits, lie: boolean): void {
+  h.botCalls++;
+  if (lie) h.botLieCalls++;
 }
 
 /** a pass while a round is on: holding its rank or not */

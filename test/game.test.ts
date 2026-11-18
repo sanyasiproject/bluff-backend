@@ -534,4 +534,60 @@ describe('habits for the bots', () => {
     expect(g.stats.get('b')!.habits).toMatchObject({ pushes: 1, lies: 1, lieCards: 1, endTurns: 1, endFakes: 0, followPlays: 0 });
     expect(g.stats.get('c')!.habits).toMatchObject({ passNone: 1, passHeld: 0, endTurns: 1 });
   });
+
+  it("records the fake-then-real trap and how a person treats bots' plays", () => {
+    const [qp1, qp2, qb1, qb2] = [card('Q'), card('Q', 'H'), card('Q', 'D'), card('Q', 'C')];
+    const [five, nine, four, six, three] = [card('5'), card('9'), card('4'), card('6'), card('3')];
+    const [seven, eight, k1, k2, jack] = [card('7'), card('8'), card('K'), card('K', 'H'), card('J')];
+    // p is a person, b a bot
+    const g = new Game(['p', 'b'], { decks: 1, bluffRule: 'all', stake: 0, peeks: 0, bets: false, teams: false } as GameConfig, keepOrder, ['b']);
+    g.hands.set('p', [qp1, qp2, five, nine, four, six, three]);
+    g.hands.set('b', [qb1, qb2, seven, eight, k1, k2, jack]);
+    g.turnId = 'p';
+    // p claims two Queens with junk, keeping the real ones; the bot follows with its real two; p then plays the real two
+    g.play('p', ids(five, nine), 'Q');
+    g.play('b', ids(qb1, qb2));
+    g.play('p', ids(qp1, qp2));
+    // the bot calls and is wrong; p opens 4s, the bot fakes one, p calls it
+    g.callBluff('b', g.lastPlay!.id);
+    g.play('p', ids(four), '4');
+    g.play('b', ids(seven));
+    g.callBluff('p', g.lastPlay!.id);
+    expect(g.stats.get('p')!.habits).toMatchObject({
+      heldLies: 1, liesKept: 1, heldHonest: 1, heldKept: 0, overPlays: 1, overLies: 0,
+      botSeen: 2, botLieSeen: 1, botCalls: 1, botLieCalls: 1,
+    });
+    // these are about people: the bot's own record stays empty
+    expect(g.stats.get('b')!.habits).toMatchObject({ botSeen: 0, botCalls: 0, botLieSeen: 0 });
+  });
+
+
+  it("counts a bot's play for a person only once they had their chance to call it", () => {
+    const k = (n: number) => card('K', (['S', 'H', 'D', 'C'] as Suit[])[n]);
+    const g = new Game(['p', 'b1', 'b2'], { decks: 1, bluffRule: 'all', stake: 0, peeks: 0, bets: false, teams: false } as GameConfig, keepOrder, ['b1', 'b2']);
+    g.hands.set('p', [card('2'), card('3'), card('4')]);
+    g.hands.set('b1', [k(0), k(1), k(2), card('8'), card('8', 'H'), card('J')]);
+    g.hands.set('b2', [card('9'), card('9', 'H'), card('10')]);
+    g.turnId = 'b1';
+    // another bot calls first: the person never had their full chance at it
+    g.play('b1', [g.hand('b1').find((c) => c.rank === 'K')!.id], 'K');
+    g.callBluff('b2', g.lastPlay!.id);
+    expect(g.stats.get('p')!.habits).toMatchObject({ botSeen: 0, botCalls: 0 });
+    // the person calls twice in a row (wrong both times): each counts
+    g.play('b1', [g.hand('b1').find((c) => c.rank === 'K')!.id], 'K');
+    g.callBluff('p', g.lastPlay!.id);
+    g.play('b1', [g.hand('b1').find((c) => c.rank === 'K')!.id], 'K');
+    g.callBluff('p', g.lastPlay!.id);
+    expect(g.stats.get('p')!.habits).toMatchObject({ botSeen: 2, botCalls: 2, botLieSeen: 0 });
+    // now out of calls in a row: the bot's next play stands, but the person couldn't have called it
+    g.play('b1', [g.hand('b1').find((c) => c.rank === '8')!.id], '8');
+    g.turnId = 'b2';
+    g.play('b2', [g.hand('b2')[0].id]);
+    expect(g.stats.get('p')!.habits).toMatchObject({ botSeen: 2, botCalls: 2 });
+    // a bot play that stands while the person could call it counts as seen, not called
+    g.pass('p');
+    g.play('b1', [g.hand('b1').find((c) => c.rank === '8')!.id]);
+    g.play('b2', [g.hand('b2')[0].id]);
+    expect(g.stats.get('p')!.habits).toMatchObject({ botSeen: 3, botCalls: 2 });
+  });
 });

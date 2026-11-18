@@ -477,11 +477,9 @@ export class Room {
       return;
     }
     this.c7 = null;
-    this.game = new Game(
-      // 2v2 plays in slot order, so the teams alternate turns
-      this.config.teams ? (this.slotIds().filter((id) => id !== null) as string[]) : this.players().map((m) => m.id),
-      this.config,
-    );
+    // 2v2 plays in slot order, so the teams alternate turns
+    const order = this.config.teams ? (this.slotIds().filter((id) => id !== null) as string[]) : this.players().map((m) => m.id);
+    this.game = new Game(order, this.config, secureRandom, order.filter((id) => this.isBot(id)));
   }
 
   /** the current game as a record to save; take it before the game is cleared */

@@ -67,6 +67,11 @@ export interface Read {
   /** cards of their plays turned over (by any call, or my peeks): how many fakes my reads expected, and how many there were */
   expected: number;
   found: number;
+  /** their called plays that took the round's claims past the copies: caught with a fake, or held up (real cards springing a trap) */
+  overCaught: number;
+  overHonest: number;
+  /** traps sprung: an earlier claim of theirs that round was fake while they kept the real cards for later */
+  keptLies: number;
 }
 
 /** one play sitting in the current pile */
@@ -86,10 +91,18 @@ export interface PileEntry {
   knownBefore: number;
   /** real cards the bot reckons the play holds, once it has read it */
   realEst: number | null;
-  /** cards of it this bot peeked at */
+  /** cards of it this bot peeked at, each once */
   seen: Card[];
+  /** where in the play each of those cards sits (same order as seen) */
+  seenAt: number[];
   /** what this bot's read said when it weighed calling it: the chance of a fake anywhere, and at each card */
   read: { lie: number; spots: number[] } | null;
+  /** the chance it holds 0, 1, 2… fakes, from that read (kept up to date after a peek); null until read */
+  fakes: number[] | null;
+  /** copies of the rank this bot was sure weren't the player's when it read the play (its own, its partner's, its pile cards, its discards) */
+  sure: number | null;
+  /** real cards seen in it already proved the player's earlier claim this round was fake (counted once) */
+  trapped: boolean;
 }
 
 /** how a player tends to play, as a bot reckons it: every number is a chance unless said otherwise */
@@ -114,8 +127,28 @@ export interface Policy {
   size: number;
   /** odds that the first, a middle and the last card of a mixed play is the fake (tap order) */
   spots: [number, number, number];
+  /** a claim of theirs that takes the round past the copies is a lie (low: they set traps with real cards) */
+  over: number;
   /** how much is known about them (0 nothing, 1 plenty) */
   known: number;
+}
+
+/** a bot's mood for a few rounds: plain, heavy on fakes, full of tricks, or honest and sharp */
+export type PlanMode = 'straight' | 'pressure' | 'tricky' | 'tight';
+
+/** what a bot is up to for the next few rounds; drawn again every few rounds and after a setback, so its play can't be learned */
+export interface Plan {
+  mode: PlanMode;
+  /** added to every lying option (in cards) */
+  lie: number;
+  /** added to options that keep real cards back: a pass while holding the rank, fakes now and the real ones later */
+  trap: number;
+  /** added to its leaning on calls */
+  call: number;
+  /** how much it fancies opening each rank this time (RANKS order), so its openings don't give its biggest group away */
+  fancy: number[];
+  /** the round it changes */
+  until: number;
 }
 
 export type BotMove = { kind: 'call'; cardIndex?: number } | { kind: 'play'; cardIds: string[]; rank?: Rank } | { kind: 'pass' };

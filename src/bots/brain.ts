@@ -1,10 +1,10 @@
-import type { Card, LifetimeStats, Rank, RoomView } from '../types.js';
+import { RANKS, type Card, type LifetimeStats, type PublicPlayer, type Rank, type RoomView } from '../types.js';
 import { copiesOf, likeliestFake, readPlay, realIn, seenReal, spotWeights, sureCopies, type PlayRead, type Sight } from './detector.js';
 import { skillOf, type Skill } from './levels.js';
 import { partnerIn, type BotMemory } from './memory.js';
-import type { BotMove, Personality, Rand } from './models.js';
-import { holdChance } from './odds.js';
-import { policyOf } from './profile.js';
+import type { BotMove, BotStyle, Personality, Plan, PlanMode, Rand } from './models.js';
+import { holdChance, type Unseen } from './odds.js';
+import { botCallsOf, policyOf } from './profile.js';
 
 /** chance a player calls any one play, before knowing anything about them */
 const PRIOR_CALL = 0.12;
@@ -50,7 +50,11 @@ function shuffled<T>(items: T[], rand: Rand): T[] {
 
 /** picks one option, better scores more often; tau says how loose the choice is */
 function choose<T>(options: T[], score: (o: T) => number, tau: number, rand: Rand): T {
-  const scores = options.map(score);
+  // a score that went wrong never wins
+  const scores = options.map((o) => {
+    const x = score(o);
+    return Number.isFinite(x) ? x : -1e9;
+  });
   const top = Math.max(...scores);
   const weights = scores.map((x) => Math.exp((x - top) / tau));
   let r = rand() * weights.reduce((a, b) => a + b, 0);
@@ -61,7 +65,7 @@ function choose<T>(options: T[], score: (o: T) => number, tau: number, rand: Ran
   return options[options.length - 1];
 }
 
-/** how likely a player is to call bluff on any one play */
+/** how likely a player is to call bluff on any one play (for a person: how they treat bots' plays above all) */
 export function callRate(s: Situation, id: string): number {
   let a = PRIOR_CALL * 10;
   let b = (1 - PRIOR_CALL) * 10;
@@ -72,6 +76,13 @@ export function callRate(s: Situation, id: string): number {
     const w = Math.min(40, chances) / chances;
     a += calls * w;
     b += (chances - calls) * w;
+  }
+  // saved from past games: how often they call a bot's play (someone who trusts bots is easy to lie to)
+  const bots = botCallsOf(s.mem, id, skillIn(s).level);
+  if (bots) {
+    const n = Math.min(40, bots.seen);
+    a += bots.rate * n;
+    b += (1 - bots.rate) * n;
   }
   const r = s.mem.reads.get(id);
   if (r) {
@@ -134,12 +145,47 @@ export function suspicion(s: Situation): Suspicion {
   return { p: read.lie, minFake: read.minFake, allFake: read.lie > 0 ? all / read.lie : 0 };
 }
 
-/** how much bolder to lie than usual: players at the table who rarely call are easy to lie to */
-function boldness(s: Situation): number {
-  const others = opponents(s.view);
-  if (others.length === 0) return 1;
-  const rate = others.reduce((sum, o) => sum + callRate(s, o.id), 0) / others.length;
-  return clamp(Math.pow(PRIOR_CALL / Math.max(0.01, rate), 0.6 * s.me.readWeight), 0.8, 2.2);
+/** the moods a bot plays in for a few rounds: plain, heavy on fakes, full of tricks (slow-plays, fake now and real later), or honest and sharp */
+const MODES: Record<PlanMode, { lie: number; trap: number; call: number }> = {
+  straight: { lie: 0, trap: 0.1, call: 0 },
+  pressure: { lie: 0.9, trap: -0.2, call: -0.3 },
+  tricky: { lie: 0.2, trap: 1.3, call: 0.1 },
+  tight: { lie: -0.9, trap: 0.3, call: 0.5 },
+};
+
+/** how often each style goes into each mode (any style can be in any of them) */
+const MODE_ODDS: Record<BotStyle, Record<PlanMode, number>> = {
+  shark: { straight: 3, pressure: 2, tricky: 3, tight: 2 },
+  maniac: { straight: 2, pressure: 5, tricky: 2, tight: 1 },
+  rock: { straight: 3, pressure: 1, tricky: 2, tight: 4 },
+  detective: { straight: 3, pressure: 2, tricky: 2, tight: 3 },
+  trickster: { straight: 2, pressure: 2, tricky: 5, tight: 1 },
+  gambler: { straight: 2, pressure: 4, tricky: 3, tight: 1 },
+};
+
+/**
+ * What it's up to for the next few rounds: one of its modes (plain, heavy on fakes, tricky, or honest and sharp), each a little off
+ * its centre, plus which ranks it fancies opening. Drawn again every 1 to 4 rounds and right after it's caught or calls wrong, so a
+ * pattern someone spots in one round says little about the next.
+ */
+export function planOf(s: Situation): Plan {
+  const mem = s.mem;
+  if (mem.plan && mem.rounds < mem.plan.until) return mem.plan;
+  const skill = skillIn(s);
+  const odds = MODE_ODDS[s.me.style] ?? MODE_ODDS.shark;
+  const names = Object.keys(odds) as PlanMode[];
+  // sloppier levels play fewer tricks
+  const mode = choose(names, (m) => Math.log(odds[m] * (m === 'tricky' ? skill.tricks : 1) + 0.01), 1, s.rand);
+  const m = MODES[mode];
+  mem.plan = {
+    mode,
+    lie: clamp((m.lie + noise(s.rand) * 0.25) * skill.swing, -1.5, 1.5),
+    trap: clamp((m.trap + noise(s.rand) * 0.25) * skill.tricks, -0.6, 1.6),
+    call: clamp((m.call + noise(s.rand) * 0.25) * skill.swing, -1, 1),
+    fancy: RANKS.map(() => (s.rand() - 0.5) * 2.4 * skill.swing),
+    until: mem.rounds + 1 + Math.floor(s.rand() * 4),
+  };
+  return mem.plan;
 }
 
 /** players still holding cards who could call on me (never my 2v2 partner) */
@@ -175,17 +221,26 @@ function stakes(s: Situation, onTurn: boolean): { gain: number; loss: number } {
   return { gain, loss };
 }
 
-/** the call: worth it when catching a liar outweighs being wrong, with this bot's leanings and its level's wobble */
+/** the call: worth it when catching a liar outweighs being wrong, with this bot's leanings; close calls are mixed, never a fixed line */
 function wantsCall(s: Situation, hit: number, gain: number, loss: number, read: PlayRead): boolean {
   const skill = skillIn(s);
   if (hit >= 0.999) return s.rand() < skill.sureCall;
   // a reckless style calls on a hunch now and then (barely at higher levels)
   if (hit > 0.2 && s.rand() < Math.max(0, s.me.call) * 0.25 * skill.style) return true;
   const ev = (hit * gain - (1 - hit) * loss) / (gain + loss);
-  const lean = (s.me.call * 0.3 + s.mem.mood * 0.05) * skill.style;
+  const lean = (s.me.call * 0.3 + s.mem.mood * 0.05) * skill.style + planOf(s).call * 0.05;
   // someone it knows little about: an early close call also teaches it how they play
   const learn = hit > 0.3 ? (1 - read.known) * 0.04 : 0;
-  return ev + lean + learn + noise(s.rand) * skill.noise > 0;
+  // near the line its answer is mixed, so nobody can find the exact point where it stops calling; steadier on a big pile,
+  // and with more players around (everyone's doubts add up, and others may call anyway)
+  const pile = s.view.pileCount;
+  const around = Math.max(1, opponents(s.view).length);
+  const temp = skill.callTemp / Math.sqrt(around) / (1 + pile / 10);
+  if (s.rand() < 1 / (1 + Math.exp(-(ev + lean + learn) / temp))) return true;
+  // now and then it tests a claim that looks fine while the pile is small: cheap to be wrong, and no lie is ever free (shared round the
+  // table); never when the pile would cost it its own finish
+  const cheap = pile <= 4 && s.view.hand.length > 3;
+  return cheap && hit > 0.06 && s.rand() < (skill.audit / around) * Math.min(1, hit / 0.25) * (1 - pile / 6);
 }
 
 /** under "pick one": the card to turn over; good bots go for the likeliest fake */
@@ -252,26 +307,42 @@ export function decideCall(s: Situation, onTurn: boolean, peek: Peek): { cardInd
   const one = v.config.bluffRule === 'one';
   // their last cards: if the play stands they're out, so it's always called
   const last = v.players.find((p) => p.id === play.playerId)?.cardCount === 0;
-  let read = readPlay(sightOf(s), skill.level);
+  const sight = sightOf(s);
+  let read = readPlay(sight, skill.level);
   const entry = s.mem.entryOf(play.id);
+  // cards it already peeked at in this play (weighing it again on its own turn): a fake one is a sure call, a real one is known
+  let fakeAt: number | null = null;
+  for (let i = 0; i < (entry?.seen.length ?? 0); i++) {
+    if (entry!.seen[i].rank !== play.rank) fakeAt = entry!.seenAt[i];
+    else read = seenReal(read, entry!.seenAt[i]);
+  }
   if (entry) {
     entry.realEst = realIn(read);
-    // kept to check against whatever gets turned over
-    entry.read = { lie: read.lie, spots: read.spots };
+    entry.fakes = read.fakes;
+    entry.sure ??= sureCopies(sight, play.rank);
+    // kept to check against whatever gets turned over, unless a peek already steered the call
+    entry.read = entry.seen.length > 0 ? null : { lie: read.lie, spots: read.spots };
   }
   const { gain, loss } = stakes(s, onTurn);
   const target = (r: PlayRead) => (last ? anyLikely(r, s.rand) : aim(s, r));
-  let index = target(read);
-  let hit = one ? read.spots[index] : read.lie;
+  let index = fakeAt ?? target(read);
+  let hit = fakeAt !== null ? 1 : one ? read.spots[index] : read.lie;
 
-  // on last cards a good bot peeks at the card it means to turn over; under "show all" the call shows every card anyway
-  const canLook = v.peeksLeft > 0 && (last ? one && read.minFake < play.count : hit < 0.999);
+  // on last cards a good bot peeks at the card it means to turn over; under "show all" the call shows every card anyway; never twice at one card
+  const fresh = (entry?.seen.length ?? 0) < play.count;
+  const canLook = fakeAt === null && fresh && v.peeksLeft > 0 && (last ? one && read.minFake < play.count : hit < 0.999);
   const look = !canLook ? null : !skill.smartPeek ? whimPeek(s, hit) : last ? index : planPeek(s, read, gain, loss);
-  if (look !== null) {
+  if (look !== null && !entry?.seenAt.includes(look)) {
     const card = peek(look);
     if (card) {
-      entry?.seen.push(card);
-      s.mem.checkRead(play.playerId, read.spots[look], card.rank !== play.rank);
+      if (entry) {
+        entry.seen.push(card);
+        entry.seenAt.push(look);
+        // a real card there may prove the player's earlier claim this round was the fake one
+        if (card.rank === play.rank) s.mem.noteTrap(entry, entry.seen.filter((c) => c.rank === play.rank).length, v.config.decks);
+      }
+      // a play that clashes with the round (or springs a proven trap) is about the round, not this player's honesty
+      if (!entry || !(s.mem.clash(entry, v.config.decks) || entry.trapped)) s.mem.checkRead(play.playerId, read.spots[look], card.rank !== play.rank);
       // the rest of this play's reveal was steered by the peek, so it doesn't check the read again
       if (entry) entry.read = null;
       if (card.rank !== play.rank) {
@@ -279,7 +350,10 @@ export function decideCall(s: Situation, onTurn: boolean, peek: Peek): { cardInd
         index = look;
       } else {
         read = seenReal(read, look);
-        if (entry) entry.realEst = realIn(read);
+        if (entry) {
+          entry.realEst = realIn(read);
+          entry.fakes = read.fakes;
+        }
         index = target(read);
         hit = one ? read.spots[index] : read.lie;
       }
@@ -290,35 +364,152 @@ export function decideCall(s: Situation, onTurn: boolean, peek: Peek): { cardInd
   return { cardIndex: one ? index : undefined };
 }
 
-/** chance someone calls this play of mine and finds a fake; good bots also count who could prove it false from their own cards */
-function caughtChance(s: Situation, fakes: number, count: number, finishing: boolean, rank: Rank): number {
-  if (fakes === 0) return 0;
-  const v = s.view;
-  const skill = skillIn(s);
-  // my cards go down shuffled, so under "pick one" a call finds a fake only by luck
-  const shown = v.config.bluffRule === 'all' ? 1 : fakes / count;
-  // anyone holding this many copies knows the round's claims can't all be true
-  const claimed = s.mem.pile.reduce((n, e) => n + e.count, 0);
-  const need = copiesOf(v) - claimed - count + 1;
-  const unseen = s.mem.unseen(v, rank);
-  let safe = 1;
-  for (const o of opponents(v)) {
-    const rate = s.me.readWeight * callRate(s, o.id) * (0.6 + 0.8 * callSkill(s, o.id)) + (1 - s.me.readWeight) * PRIOR_CALL;
-    // big claims and finishing plays draw calls; a big pile makes callers think twice
-    let c = rate * (1 + 0.25 * (count - 1)) * (finishing ? 2.2 : 1) * (1 - Math.min(0.5, v.pileCount * 0.03));
-    if (skill.provable) c += (1 - c) * 0.85 * (need <= 0 ? 1 : holdChance(unseen, o.cardCount, need));
-    // other bots always call last cards
-    safe *= 1 - (finishing && o.bot ? 1 : clamp(c, 0.02, 0.97)) * shown;
-  }
-  return 1 - safe;
+/** one way to play this turn */
+interface Choice {
+  cards: Card[];
+  rank: Rank;
+  /** fake cards in it */
+  fakes: number;
+  /** real cards of the rank it keeps back for later */
+  kept: number;
 }
 
-/** cards to pass off as something else: from ranks it holds least of, with some chance */
-function pickFakes(s: Situation, claim: Rank, n: number): Card[] {
-  const others = s.view.hand.filter((c) => c.rank !== claim);
-  const size = (r: Rank) => countIn(s.view.hand, r);
-  return others
-    .map((c) => ({ c, key: size(c.rank) + s.rand() * 1.5 }))
+/** an opponent who could call my play: how often they call any play, and how much likelier on a lie or on the truth */
+interface Rival {
+  p: PublicPlayer;
+  rate: number;
+  lie: number;
+  truth: number;
+}
+
+/** what every option of one turn shares, worked out once */
+interface Turn {
+  s: Situation;
+  skill: Skill;
+  plan: Plan;
+  /** extra worth of lying and of keeping real cards back: its style, its mood and its current plan */
+  lean: { lie: number; trap: number };
+  /** cards claimed so far this round, by anyone */
+  claimed: number;
+  rivals: Rival[];
+  /** a wrong call lands the pile on someone else: all of it counts heads-up, less with more players around */
+  heads: number;
+  unseen: Map<Rank, Unseen>;
+  /** cards other people have in the pile or threw away: in nobody's hand */
+  outCards: number;
+}
+
+function turnOf(s: Situation): Turn {
+  const v = s.view;
+  const skill = skillIn(s);
+  const plan = planOf(s);
+  const rivals = opponents(v).map((p) => {
+    const rate = s.me.readWeight * callRate(s, p.id) * (0.6 + 0.8 * callSkill(s, p.id)) + (1 - s.me.readWeight) * PRIOR_CALL;
+    // people who read bots well call their lies more than their truths (saved habits)
+    const seen = botCallsOf(s.mem, p.id, skill.level);
+    return { p, rate, lie: seen ? seen.lie / seen.rate : 1, truth: seen ? seen.truth / seen.rate : 1 };
+  });
+  return {
+    s,
+    skill,
+    plan,
+    lean: {
+      lie: (s.me.bluff - 0.4) * 1.2 * skill.style + s.mem.mood * 0.25 + plan.lie,
+      trap: (s.me.sandbag - 0.2) * 0.8 * skill.style + plan.trap,
+    },
+    claimed: s.mem.pile.reduce((t, e) => t + e.count, 0),
+    rivals,
+    heads: rivals.length <= 1 ? 1 : 0.6,
+    unseen: new Map(),
+    outCards: s.mem.pile.reduce((n, e) => (e.mine ? n : n + e.count), 0) + s.mem.othersGone,
+  };
+}
+
+function unseenIn(t: Turn, rank: Rank): Unseen {
+  let u = t.unseen.get(rank);
+  if (!u) {
+    u = t.s.mem.unseen(t.s.view, rank);
+    t.unseen.set(rank, u);
+  }
+  return u;
+}
+
+/** what opponents' hands are dealt from: the cards I can't see minus other people's cards in the pile and the thrown-away piles */
+function handsPool(t: Turn, rank: Rank): Unseen {
+  const u = unseenIn(t, rank);
+  let real = t.s.mem.goneMean(rank);
+  for (const e of t.s.mem.pile) if (!e.mine) real += e.realEst ?? e.count * 0.55;
+  return { cards: Math.max(1, u.cards - t.outCards), copies: Math.max(0, u.copies - real) };
+}
+
+/** chance a play gets called (by anyone), and that the call finds a fake; good bots count who could prove a claim false from their own cards */
+function risk(t: Turn, n: number, fakes: number, rank: Rank): { called: number; caught: number } {
+  const v = t.s.view;
+  const finishing = n === v.hand.length;
+  let quiet = 1;
+  for (const r of t.rivals) {
+    // other bots always call last cards
+    if (finishing && r.p.bot) {
+      quiet = 0;
+      continue;
+    }
+    // big claims and finishing plays draw calls; a big pile makes callers think twice
+    let c = r.rate * (fakes > 0 ? r.lie : r.truth) * (1 + 0.25 * (n - 1)) * (finishing ? 2.2 : 1) * (1 - Math.min(0.5, v.pileCount * 0.03));
+    if (t.skill.provable > 0) {
+      // anyone holding this many copies knows the round's claims can't all be true and calls: right only if I lied (else my trap worked)
+      const need = copiesOf(v) - t.claimed - n + 1;
+      c += (1 - c) * 0.85 * t.skill.provable * (need <= 0 ? 1 : holdChance(handsPool(t, rank), r.p.cardCount, need));
+    }
+    quiet *= 1 - clamp(c, 0.02, 0.97);
+  }
+  const called = 1 - quiet;
+  // my cards go down shuffled, so under "pick one" a call finds a fake only by luck
+  const shown = fakes === 0 ? 0 : v.config.bluffRule === 'all' ? 1 : fakes / n;
+  return { called, caught: called * shown };
+}
+
+/** 0..1: how hard a card of this rank is to get rid of honestly: a lone card, or a rank whose other copies are mostly gone */
+function junkiness(t: Turn, rank: Rank): number {
+  const held = countIn(t.s.view.hand, rank);
+  const alone = held === 1 ? 1 : held === 2 ? 0.55 : held === 3 ? 0.25 : 0.1;
+  const left = unseenIn(t, rank).copies - t.s.mem.goneMean(rank);
+  return clamp(alone * 0.8 + (left <= 1 ? 0.2 : 0), 0, 1);
+}
+
+/** emptying my hand: worth most while 1st place is still open */
+const finishBonus = (s: Situation, n: number) =>
+  n === s.view.hand.length ? (s.view.players.every((p) => p.place === null) ? 8 : 5) * (0.5 + s.me.closer) : 0;
+
+/** near the end, a hand left as one rank can go out honestly next time (bots always call last cards, people often do) */
+function exitBonus(t: Turn, cards: Card[]): number {
+  if (!t.skill.junk) return 0;
+  const rest = t.s.view.hand.filter((x) => !cards.includes(x));
+  if (rest.length === 0 || rest.length > 6) return 0;
+  const ranks = new Set(rest.map((x) => x.rank)).size;
+  return ranks === 1 ? 1.2 : ranks === 2 ? 0.35 : 0;
+}
+
+/** what a play is worth, in cards: what it sheds (junk counts extra), minus the pile it may cost, plus the pile a wrong call hands someone */
+function worth(t: Turn, c: Choice): number {
+  const v = t.s.view;
+  const n = c.cards.length;
+  const { called, caught } = risk(t, n, c.fakes, c.rank);
+  let w = n - caught * (v.pileCount + n + 2) + (called - caught) * (v.pileCount + n) * t.heads;
+  w += finishBonus(t.s, n) * (1 - caught) + exitBonus(t, c.cards);
+  if (c.fakes > 0) {
+    for (const x of c.cards) if (x.rank !== c.rank) w += t.skill.junk ? 0.6 * junkiness(t, x.rank) - 0.15 : 0.1;
+    w += t.lean.lie;
+  }
+  if (c.kept > 0) w += t.lean.trap;
+  return w;
+}
+
+/** cards to pass off as the claim: good bots take the ones hardest to get rid of honestly, others mostly their smallest groups */
+function pickFakes(t: Turn, claim: Rank, n: number): Card[] {
+  const hand = t.s.view.hand;
+  return hand
+    .filter((c) => c.rank !== claim)
+    .map((c) => ({ c, key: (t.skill.junk ? -3 * junkiness(t, c.rank) : countIn(hand, c.rank)) + t.s.rand() * 1.5 }))
     .sort((a, b) => a.key - b.key)
     .slice(0, n)
     .map((x) => x.c);
@@ -337,102 +528,91 @@ export function chooseTurn(s: Situation, peek: Peek): BotMove {
   return s.view.roundRank ? follow(s, s.view.roundRank) : open(s);
 }
 
-type Option = { cards: Card[]; rank: Rank; score: number } | { pass: true; score: number };
-
 const tauOf = (s: Situation) => (0.3 + 1.1 * s.me.temper) * skillIn(s).loose;
-/** how keen this style is on a lie, added to every lying option's score (a maniac loves one, a rock doesn't) */
-const appetite = (s: Situation) => (s.me.bluff - 0.4) * 1.5 * skillIn(s).style;
-/** emptying my hand: worth most while 1st place is still open */
-const finishBonus = (s: Situation, n: number) =>
-  n === s.view.hand.length ? (s.view.players.every((p) => p.place === null) ? 8 : 5) * (0.5 + s.me.closer) : 0;
 /** a claim nobody could believe, as far as anyone could tell from my side (more copies than can be out there) */
 const impossible = (s: Situation, rank: Rank, n: number, real: number) => n > copiesOf(s.view) - (sureCopies(sightOf(s), rank) - real);
 
 /** the whole hand as one claim, real cards and fakes together, to go out now */
-function finishOption(s: Situation, rank: Rank, real: Card[]): Option | null {
-  const v = s.view;
+function finishOption(t: Turn, rank: Rank, real: Card[]): Choice | null {
+  const v = t.s.view;
   const fakes = v.hand.length - real.length;
-  if (fakes === 0 || fakes > skillIn(s).finishFakes || impossible(s, rank, v.hand.length, real.length)) return null;
-  const pc = caughtChance(s, fakes, v.hand.length, true, rank);
-  const n = v.hand.length;
-  return { cards: v.hand, rank, score: n - pc * (v.pileCount + n + 2) + finishBonus(s, n) * (1 - pc) + appetite(s) };
+  if (fakes === 0 || fakes > t.skill.finishFakes || impossible(t.s, rank, v.hand.length, real.length)) return null;
+  return { cards: v.hand, rank, fakes, kept: 0 };
 }
 
-/** starting a round: pick the rank to claim, sometimes with fakes slipped in */
+/** ways to claim a rank it holds: all of them, some kept back, fakes slipped in, or fakes now with the real ones kept for later */
+function claimsOf(t: Turn, rank: Rank, real: Card[], others: number): Choice[] {
+  const s = t.s;
+  const k = real.length;
+  const out: Choice[] = [];
+  if (k > 0) out.push({ cards: real, rank, fakes: 0, kept: 0 });
+  if (k >= 2) out.push({ cards: real.slice(0, k - 1), rank, fakes: 0, kept: 1 });
+  const finish = finishOption(t, rank, real);
+  if (finish) out.push(finish);
+  for (let f = 1; f <= s.me.padMax && f <= others; f++) {
+    const fakes = pickFakes(t, rank, f);
+    // emptying the hand on fakes is the finishing option's call (its level caps the fakes)
+    if (k + f < s.view.hand.length && !impossible(s, rank, k + f, k)) out.push({ cards: [...real, ...fakes], rank, fakes: f, kept: 0 });
+    // the trap: claim no more than it holds, keep the real ones; later they make an honest claim look impossible
+    if (k > 0 && f <= k && t.skill.tricks > 0 && f < s.view.hand.length) out.push({ cards: fakes, rank, fakes: f, kept: k });
+  }
+  return out;
+}
+
+/** starting a round: any rank it holds, in any of those ways, or now and then a rank it hasn't got */
 function open(s: Situation): BotMove {
   const v = s.view;
   const groups = new Map<Rank, Card[]>();
   for (const c of v.hand) groups.set(c.rank, [...(groups.get(c.rank) ?? []), c]);
   if (groups.size === 1) return put(s, v.hand, v.hand[0].rank);
-
-  const bluffy = clamp((s.me.openBluff + s.mem.mood * 0.25) * boldness(s), 0.02, 0.95);
-  const options: Option[] = [];
-  for (const [rank, cards] of groups) {
-    const k = cards.length >= 3 && s.rand() < s.me.sandbag ? cards.length - 1 : cards.length;
-    const real = cards.slice(0, k);
-    options.push({ cards: real, rank, score: k + finishBonus(s, k) + noise(s.rand) * 0.3 });
-    const finish = finishOption(s, rank, cards);
-    if (finish) options.push(finish);
-    if (s.rand() >= bluffy) continue;
-    const fakes = pickFakes(s, rank, 1 + Math.floor(s.rand() * s.me.padMax));
-    const n = k + fakes.length;
-    if (fakes.length === 0 || impossible(s, rank, n, k)) continue;
-    const pc = caughtChance(s, fakes.length, n, n === v.hand.length, rank);
-    options.push({ cards: [...real, ...fakes], rank, score: n - pc * (n + 2) + finishBonus(s, n) * (1 - pc) + appetite(s) });
-  }
-  // now and then claim a rank it doesn't hold at all
-  if (s.rand() < bluffy * s.me.bluff * 0.4) {
-    const missing = (['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'] as Rank[]).filter((r) => !groups.has(r));
-    if (missing.length > 0) {
-      const rank = missing[Math.floor(s.rand() * missing.length)];
-      const fakes = pickFakes(s, rank, 1 + Math.floor(s.rand() * s.me.padMax));
-      if (!impossible(s, rank, fakes.length, 0)) {
-        const pc = caughtChance(s, fakes.length, fakes.length, fakes.length === v.hand.length, rank);
-        options.push({ cards: fakes, rank, score: fakes.length - pc * (fakes.length + 2) + appetite(s) });
-      }
+  const t = turnOf(s);
+  const options: Choice[] = [];
+  for (const [rank, cards] of groups) options.push(...claimsOf(t, rank, cards, v.hand.length - cards.length));
+  // a few ranks it hasn't got, claimed with junk
+  for (const rank of shuffled(RANKS.filter((r) => !groups.has(r)), s.rand).slice(0, 3)) {
+    for (let f = 1; f <= s.me.padMax && f < v.hand.length; f++) {
+      if (impossible(s, rank, f, 0)) break;
+      options.push({ cards: pickFakes(t, rank, f), rank, fakes: f, kept: 0 });
     }
   }
-  const pick = choose(options, (o) => o.score, tauOf(s), s.rand) as Extract<Option, { cards: Card[] }>;
+  // the ranks it fancies opening change with its plan, so an opening doesn't give its biggest group away
+  const pick = choose(options, (o) => worth(t, o) + t.plan.fancy[RANKS.indexOf(o.rank)], tauOf(s), s.rand);
   return put(s, pick.cards, pick.rank);
 }
 
-/** a round is on: play real cards of its rank, slip in fakes, go out with fakes, or pass */
+/** a round is on: real cards (all or some), fakes slipped in, fakes now and the real ones later, a lone push, or pass (even holding the rank) */
 function follow(s: Situation, rank: Rank): BotMove {
   const v = s.view;
+  const t = turnOf(s);
   const real = v.hand.filter((c) => c.rank === rank);
-  const others = v.hand.length - real.length;
-  const claimed = s.mem.pile.reduce((n, e) => n + e.count, 0);
-  const options: Option[] = [];
-
+  const options: (Choice | null)[] = claimsOf(t, rank, real, v.hand.length - real.length);
+  const scores = new Map<Choice | null, number>(options.map((o) => [o, worth(t, o!)]));
   // a pass that ends the round throws an opponent's last play away (fakes and all) and hands them the next opening
   const lp = v.lastPlay;
-  const gift =
-    !!lp &&
-    partnerIn(v, v.meId) !== lp.playerId &&
-    v.players.every((p) => p.id === v.meId || p.id === lp.playerId || p.cardCount === 0 || v.passedIds.includes(p.id));
   if (lp) {
-    const passScore = -0.4 + (real.length === 0 ? 0.3 : -0.8) + s.me.sandbag * 0.6 - (v.hand.length <= 3 ? 1.2 * s.me.closer : 0) - (gift ? 0.7 : 0);
-    options.push({ pass: true, score: passScore });
-  }
-  if (real.length > 0) {
-    const k = real.length >= 2 && s.rand() < s.me.sandbag * 0.6 ? real.length - 1 : real.length;
-    options.push({ cards: real.slice(0, k), rank, score: k + finishBonus(s, k) });
-  }
-  const finish = finishOption(s, rank, real);
-  if (finish) options.push(finish);
-  const bluffy = clamp((s.me.bluff + s.mem.mood * 0.25) * boldness(s), 0.02, 0.97);
-  for (let f = 1; f <= s.me.padMax && f <= others; f++) {
-    // even a careful bot thinks about a fake card rather than give the round away
-    if (s.rand() >= (f === 1 && gift ? Math.max(bluffy, 0.55) : bluffy)) continue;
-    const fakes = pickFakes(s, rank, f);
-    const n = real.length + f;
-    let pc = caughtChance(s, f, n, n === v.hand.length, rank);
-    // more claims of a rank than exist: anyone adding up the round would know
-    if (claimed + n > copiesOf(v)) pc = Math.max(pc, 0.92);
-    options.push({ cards: [...real, ...fakes], rank, score: n - pc * (v.pileCount + n + 2) + finishBonus(s, n) * (1 - pc) + appetite(s) });
+    const gift =
+      partnerIn(v, v.meId) !== lp.playerId &&
+      v.players.every((p) => p.id === v.meId || p.id === lp.playerId || p.cardCount === 0 || v.passedIds.includes(p.id));
+    // holding the rank and passing anyway hides it: nobody can read "none" from a pass
+    const hold = real.length > 0 ? t.lean.trap - 0.9 : s.me.sandbag * 0.3;
+    // handing the next opening to someone about to go out can lose the game
+    const left = v.players.find((p) => p.id === lp.playerId)?.cardCount ?? 9;
+    const opening = gift ? 0.7 + (t.skill.junk && left <= 3 ? (4 - left) * 0.9 : 0) : 0;
+    scores.set(null, -0.15 + hold - (v.hand.length <= 3 ? 1.2 * s.me.closer : 0) - opening);
+    options.push(null);
   }
   // nothing else left to do: a single fake card
-  if (options.length === 0) return put(s, pickFakes(s, rank, 1), rank);
-  const pick = choose(options, (o) => o.score, tauOf(s), s.rand);
-  return 'pass' in pick ? { kind: 'pass' } : put(s, pick.cards, pick.rank);
+  if (options.length === 0) return put(s, pickFakes(t, rank, 1), rank);
+  // now and then (in tricky moods most) it keeps its real cards back anyway: half the time a plain pass, so a pass doesn't always say
+  // "none", unless that hands the next opening to someone about to go out; a play that goes out is never given up for it
+  const slow = real.length > 0 && v.hand.length > 4 && s.rand() < slowChance(t);
+  const about = lp !== null && (v.players.find((p) => p.id === lp.playerId)?.cardCount ?? 9) <= 3;
+  const out = options.some((o) => o !== null && o.cards.length === v.hand.length);
+  if (slow && options.includes(null) && !about && !out && s.rand() < 0.5) return { kind: 'pass' };
+  const held = options.filter((o) => o === null || o.kept > 0 || o.cards.length === v.hand.length);
+  const pick = choose(slow && held.length > 0 ? held : options, (o) => scores.get(o)!, tauOf(s), s.rand);
+  return pick === null ? { kind: 'pass' } : put(s, pick.cards, rank);
 }
+
+/** chance it holds its real cards back on a turn it could play them: more in tricky moods, less at sloppier levels */
+const slowChance = (t: Turn) => clamp(0.03 + 0.1 * Math.max(0, t.plan.trap), 0, 0.2) * t.skill.tricks;

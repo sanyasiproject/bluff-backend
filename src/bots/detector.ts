@@ -1,9 +1,9 @@
 import type { Card, Rank, RoomView } from '../types.js';
 import { skillOf } from './levels.js';
-import { partnerIn, type BotMemory } from './memory.js';
+import { hiddenReal, partnerIn, type BotMemory } from './memory.js';
 import type { Policy } from './models.js';
-import { holdingOdds } from './odds.js';
-import { policyOf } from './profile.js';
+import { convolve, holdingOdds } from './odds.js';
+import { policyOf, PRIOR } from './profile.js';
 
 /**
  * The lie detector. It reads the last play from what this bot's seat can see (its own cards, the public table and what it remembers)
@@ -141,6 +141,25 @@ function playChance(n: number, f: number, k: number, lie: number, pol: Policy): 
   return lie * reals * fakeCount(f, pol.size);
 }
 
+/**
+ * Real copies of the rank out of the claimer's reach that the bot can only guess at (the real cards of earlier plays this round and of
+ * thrown-away piles), as [copies, chance] pairs. Good bots keep the whole spread, so an earlier claim they believed may turn out to be
+ * the lie: that's what beats "fake first, real later". Sloppier ones take one best guess.
+ */
+function goneSpread(s: Sight, playId: string, rank: Rank, joint: boolean): [number, number][] {
+  if (!joint) return [[pileReal(s, playId) + s.mem.goneMean(rank), 1]];
+  let spread = s.mem.goneReal.get(rank) ?? [1];
+  for (const e of s.mem.pile) {
+    if (e.mine || e.id === playId) continue;
+    // cards it peeked at and saw real are certain; the rest as it read them
+    const seenReal = e.seen.filter((c) => c.rank === e.rank).length;
+    spread = convolve(spread, [...new Array<number>(seenReal).fill(0), ...hiddenReal(e)]);
+  }
+  return spread.flatMap((p, g) => (p > 1e-4 ? [[g, p] as [number, number]] : []));
+}
+
+const oddsOf = (p: number) => p / (1 - p);
+
 /** reads the last play: how many fakes it likely holds and where */
 export function readPlay(s: Sight, level?: Parameters<typeof skillOf>[0]): PlayRead {
   const v = s.view;
@@ -152,47 +171,55 @@ export function readPlay(s: Sight, level?: Parameters<typeof skillOf>[0]): PlayR
   const entry = s.mem.entryOf(play.id);
   const opening = entry ? entry.opening : s.mem.pile.length <= 1;
   const sharp = s.rand() < s.recall;
+  const joint = skillOf(level).joint;
   const pol = policyOf(s.mem, play.playerId, player?.bot ?? false, level);
 
   // card counting: what can't be in their hand for sure, and what probably isn't
-  const maxReal = Math.max(0, copiesOf(v) - sureCopies(s, play.rank));
+  const sure = sureCopies(s, play.rank);
+  const maxReal = Math.max(0, copiesOf(v) - sure);
   const minFake = Math.max(0, n - maxReal);
   const unseen = s.mem.unseen(v, play.rank);
   // their hand came from the cards nobody can see that aren't sitting in this pile or the discards
   const pool = Math.max(hand, unseen.cards - pileOthers(s, play.id) - s.mem.othersGone);
-  const soft = sharp ? 0.7 * remembered(s, play.rank, play.playerId) + pileReal(s, play.id) + (s.mem.likelyGone.get(play.rank) ?? 0) : 0;
-  let odds = holdingOdds(pool, Math.max(0, Math.min(maxReal, unseen.copies, pool) - soft), hand);
+  const room = Math.max(0, Math.min(maxReal, unseen.copies, pool));
+  // copies others probably hold (picked up in front of it), and real copies in earlier plays and thrown-away piles
+  const held = sharp ? 0.7 * remembered(s, play.rank, play.playerId) : 0;
+  const gone: [number, number][] = sharp ? goneSpread(s, play.id, play.rank, joint) : [[0, 1]];
   // copies I saw them pick up are (most likely) still with them
   const known = sharp ? Math.min(entry?.knownBefore ?? 0, hand) : 0;
-  if (known > 0) {
-    const kept = odds.map((p, k) => (k >= known ? p : 0));
-    const total = kept.reduce((a, b) => a + b, 0);
-    if (total > 0) odds = odds.map((p, k) => 0.15 * p + (0.85 * kept[k]) / total);
-  }
 
+  // every way the earlier claims could have gone, weighed by how likely each makes this claim (the joint read of the round)
   const w = new Array<number>(n + 1).fill(0);
-  odds.forEach((pk, k) => {
-    if (pk <= 0) return;
-    // an opener picks the rank: one they hold, their bigger groups far more often, rarely one they don't hold
-    const chose = opening ? (k > 0 ? (1 - pol.openNone) * ((k * k) / hand) : pol.openNone / 7) : 1;
-    if (left === 0) {
-      // the whole hand went down: true only if it was all this rank
-      const f = hand - Math.min(k, hand);
-      w[f] += pk * chose * (f === 0 ? 1 : pol.finish);
-      return;
+  for (const [g, pg] of gone) {
+    let odds = holdingOdds(pool, Math.max(0, room - held - g), hand);
+    if (known > 0) {
+      const kept = odds.map((p, k) => (k >= known ? p : 0));
+      const total = kept.reduce((a, b) => a + b, 0);
+      if (total > 0) odds = odds.map((p, k) => 0.15 * p + (0.85 * kept[k]) / total);
     }
-    for (let f = 0; f <= n; f++) {
-      let like: number;
-      if (opening) {
-        like = chose * playChance(n, f, k, k > 0 ? pol.openPad : 1, pol);
-      } else if (k === 0) {
-        like = f === n ? pol.push * fakeCount(n, pol.size) : 0;
-      } else {
-        like = (1 - pol.hold) * playChance(n, f, k, pol.pad, pol);
+    odds.forEach((pk, k) => {
+      if (pk <= 0) return;
+      // an opener picks the rank: one they hold, their bigger groups far more often, rarely one they don't hold
+      const chose = opening ? (k > 0 ? (1 - pol.openNone) * ((k * k) / hand) : pol.openNone / 7) : 1;
+      if (left === 0) {
+        // the whole hand went down: true only if it was all this rank
+        const f = hand - Math.min(k, hand);
+        w[f] += pg * pk * chose * (f === 0 ? 1 : pol.finish);
+        return;
       }
-      w[f] += pk * like;
-    }
-  });
+      for (let f = 0; f <= n; f++) {
+        let like: number;
+        if (opening) {
+          like = chose * playChance(n, f, k, k > 0 ? pol.openPad : 1, pol);
+        } else if (k === 0) {
+          like = f === n ? pol.push * fakeCount(n, pol.size) : 0;
+        } else {
+          like = (1 - pol.hold) * playChance(n, f, k, pol.pad, pol);
+        }
+        w[f] += pg * pk * like;
+      }
+    });
+  }
   for (let f = 0; f < Math.min(minFake, n + 1); f++) w[f] = 0;
   let total = w.reduce((a, b) => a + b, 0);
   if (!(total > 0)) {
@@ -201,7 +228,18 @@ export function readPlay(s: Sight, level?: Parameters<typeof skillOf>[0]): PlayR
     w[Math.max(minFake, 1) <= n ? Math.max(minFake, 1) : n] = 1;
     total = 1;
   }
-  const fakes = w.map((x) => x / total);
+  let fakes = w.map((x) => x / total);
+  // this claim clashes with the round (everyone's claims go past the copies, or other people's do with the copies only I know of), so some
+  // claim of the round is a lie: this player's record says whether it's usually theirs
+  const claimed = s.mem.pile.reduce((t, e) => t + e.count, 0);
+  const others = s.mem.pile.reduce((t, e) => (e.mine ? t : t + e.count), 0);
+  const clash = claimed > copiesOf(v) || others + sure > copiesOf(v);
+  const lift = joint && entry && s.mem.pile.length > 1 && n <= copiesOf(v) && clash ? oddsOf(pol.over) / oddsOf(PRIOR.over) : 1;
+  if (minFake === 0 && lift !== 1) {
+    const scaled = fakes.map((p, f) => (f === 0 ? p : p * lift));
+    const sum = scaled.reduce((a, b) => a + b, 0);
+    fakes = scaled.map((p) => p / sum);
+  }
   const weights = spotWeights(pol, n);
   return { fakes, lie: 1 - fakes[0], minFake, spots: spotChances(fakes, weights), weights, known: pol.known };
 }

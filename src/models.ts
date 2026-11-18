@@ -73,6 +73,20 @@ export interface Habits {
   fakeMid: number;
   slotLast: number;
   fakeLast: number;
+  /** honest plays while holding 2+ of the rank, and how many of those kept some back */
+  heldHonest: number;
+  heldKept: number;
+  /** lies while holding 1+ of the rank, and how many of those kept real ones back (fake now, the real ones later) */
+  heldLies: number;
+  liesKept: number;
+  /** plays that took the round's claims past the copies in the game (so one claim was a lie), and how many of those were lies */
+  overPlays: number;
+  overLies: number;
+  /** bots' plays they had their chance to call (the play stood, or they called it; not a bot's last cards) and how many they called; the same for the bot plays that hid a fake */
+  botSeen: number;
+  botCalls: number;
+  botLieSeen: number;
+  botLieCalls: number;
 }
 
 /** how a player looks to others at the table */

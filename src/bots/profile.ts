@@ -16,6 +16,7 @@ export const PRIOR: Omit<Policy, 'known'> = {
   holdBack: 0.3,
   size: 1.5,
   spots: [0.3, 0.3, 0.45],
+  over: 0.75,
 };
 
 /** share of plays that are lies for an average person (lifetime stats count every lie, caught or not) */
@@ -85,6 +86,18 @@ export function policyOf(
   const lies = Math.min(h?.lies ?? 0, CAP);
   const scale = h && h.lies > 0 ? lies / h.lies : 0;
   const size = Math.max(1, (PRIOR.size * 3 + (h?.lieCards ?? 0) * scale * w) / (3 + lies * w));
+  // keeping real cards back: honest plays that hold some, and lies that keep the real ones for later (the fake-then-real trap)
+  const sandbag = blend(PRIOR.sandbag, 6, [[h?.heldKept ?? 0, h?.heldHonest ?? 0, w]]);
+  // a trap sprung on this bot counts heavily: fooled once, it remembers
+  const holdBack = blend(PRIOR.holdBack, 6, [
+    [h?.liesKept ?? 0, h?.heldLies ?? 0, w],
+    [r?.keptLies ?? 0, r?.keptLies ?? 0, 3],
+  ]);
+  // their claims that took a round past the copies: lies, or real cards springing a trap (saved, and called ones seen here)
+  const over = blend(PRIOR.over, 4, [
+    [h?.overLies ?? 0, h?.overPlays ?? 0, w],
+    [r?.overCaught ?? 0, (r?.overCaught ?? 0) + (r?.overHonest ?? 0), 3],
+  ]);
 
   // bots shuffle their cards, so where a card sits says nothing
   const spots: [number, number, number] = bot
@@ -104,10 +117,27 @@ export function policyOf(
     openPad: clamp(tune(openPad), 0.01, 0.97),
     openNone: clamp(tune(openNone), 0.002, 0.8),
     finish: clamp(tune(finish), 0.03, 0.98),
-    sandbag: PRIOR.sandbag,
-    holdBack: PRIOR.holdBack,
+    sandbag: clamp(sandbag, 0.02, 0.9),
+    holdBack: clamp(holdBack, 0.03, 0.97),
     size: clamp(size, 1, 8),
     spots,
+    over: clamp(over, 0.03, 0.98),
     known: clamp(turns / 40, 0, 1),
   };
+}
+
+/** how a person treats bots' plays, from saved habits: how often they call one, one that hides a fake, and one that doesn't (null until enough is saved) */
+export function botCallsOf(
+  mem: Partial<Pick<BotMemory, 'habits'>>,
+  id: string,
+  level?: Parameters<typeof skillOf>[0],
+): { rate: number; lie: number; truth: number; seen: number } | null {
+  const w = skillOf(level).habits;
+  const h = habitsFor(mem as BotMemory, id, w);
+  if (!h || h.botSeen < 8) return null;
+  const rate = blend(0.12, 10, [[h.botCalls, h.botSeen, w]]);
+  // a person who reads bots well calls their lies far more often than their truths
+  const lie = blend(rate, 6, [[h.botLieCalls, h.botLieSeen, w]]);
+  const truth = blend(rate, 6, [[h.botCalls - h.botLieCalls, h.botSeen - h.botLieSeen, w]]);
+  return { rate, lie, truth, seen: Math.min(h.botSeen, CAP) * w };
 }

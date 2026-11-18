@@ -1,12 +1,21 @@
 import type { GameEvent, Habits } from '../models.js';
 import type { Card, LifetimeStats, Rank, RoomView } from '../types.js';
-import type { PileEntry, Read } from './models.js';
-import { holdChance, unseenOf } from './odds.js';
+import type { PileEntry, Plan, Read } from './models.js';
+import { convolve, holdChance, meanOf, realOdds, unseenOf } from './odds.js';
 
 type RankCounts = Map<Rank, number>;
 
 const bump = (m: RankCounts, rank: Rank, n: number) => m.set(rank, Math.max(0, (m.get(rank) ?? 0) + n));
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** chance of 0, 1, 2… real cards among the cards of a play this bot hasn't seen (seen real ones are counted for sure elsewhere) */
+export function hiddenReal(e: PileEntry): number[] {
+  const seenReal = e.seen.filter((c) => c.rank === e.rank).length;
+  const hidden = Math.max(0, e.count - e.seen.length);
+  const out = new Array<number>(hidden + 1).fill(0);
+  realOdds(e.count, e.fakes).forEach((p, j) => (out[clamp(j - seenReal, 0, hidden)] += p));
+  return out;
+}
 
 /** the partner of a player in 2v2, from the public view */
 export const partnerIn = (v: RoomView, id: string): string | null => v.teams?.find((t) => t.includes(id))?.find((p) => p !== id) ?? null;
@@ -19,14 +28,18 @@ export class BotMemory {
   readonly gone: RankCounts = new Map();
   /** other people's cards that left the game in discarded piles (their ranks unknown, but they're in nobody's hand) */
   othersGone = 0;
-  /** of those, copies of each rank they probably were: the real cards of plays that stood */
-  readonly likelyGone: RankCounts = new Map();
+  /** of those, the chance that 0, 1, 2… real copies of each rank went (index = copies): a play read as honest may have been all fakes */
+  readonly goneReal = new Map<Rank, number[]>();
   /** plays in the current pile */
   pile: PileEntry[] = [];
   /** cards of my next play, matched with its 'play' event */
   pendingMine: Card[] | null = null;
   /** -1..1: how its last moments went (caught or right) */
   mood = 0;
+  /** rounds opened so far this game */
+  rounds = 0;
+  /** what it's up to for the next few rounds; null draws a new one */
+  plan: Plan | null = null;
 
   constructor(
     readonly meId: string,
@@ -68,10 +81,18 @@ export class BotMemory {
         endHonest: 0,
         expected: 0,
         found: 0,
+        overCaught: 0,
+        overHonest: 0,
+        keptLies: 0,
       };
       this.reads.set(id, r);
     }
     return r;
+  }
+
+  /** real copies of a rank that most likely went out with other people's thrown-away piles */
+  goneMean(rank: Rank): number {
+    return meanOf(this.goneReal.get(rank) ?? [1]);
   }
 
   /** copies of a rank I'm sure a player holds, never more than their hand */
@@ -91,9 +112,26 @@ export class BotMemory {
           if (mine) this.pendingMine = null;
           // cards I knew they held of that rank most likely went out first
           else this.counts(e.playerId).set(e.rank, Math.max(0, knownBefore - e.count));
+          if (this.pile.length === 0) this.rounds++;
           const id = view.lastPlay?.playerId === e.playerId ? view.lastPlay.id : null;
           const left = view.players.find((p) => p.id === e.playerId)?.cardCount ?? 0;
-          this.pile.push({ id, playerId: e.playerId, count: e.count, rank: e.rank, mine, opening: this.pile.length === 0, left, knownBefore, realEst: null, seen: [], read: null });
+          this.pile.push({
+            id,
+            playerId: e.playerId,
+            count: e.count,
+            rank: e.rank,
+            mine,
+            opening: this.pile.length === 0,
+            left,
+            knownBefore,
+            realEst: null,
+            seen: [],
+            seenAt: [],
+            read: null,
+            fakes: null,
+            sure: null,
+            trapped: false,
+          });
           const partner = partnerIn(view, e.playerId);
           for (const p of view.players) if (p.id !== e.playerId && p.id !== partner && p.cardCount > 0) this.read(p.id).chances++;
           break;
@@ -114,8 +152,21 @@ export class BotMemory {
             if (e.bluff) r.endCaught = (r.endCaught ?? 0) + 1;
             else r.endHonest = (r.endHonest ?? 0) + (view.config.bluffRule === 'all' ? 1 : 1 / Math.max(1, called.count));
           }
+          // a claim that clashes with the round: lying, or real cards springing a trap on whoever believed the earlier claims?
+          const mine = called?.playerId === e.playerId;
+          const clash = mine && this.clash(called, view.config.decks);
+          // real cards known in it: turned over now, or seen in my peeks
+          const real = mine ? new Set([...shown, ...called.seen].filter((c) => c.rank === called.rank).map((c) => c.id)).size : 0;
+          if (mine && !e.bluff) this.noteTrap(called, real, view.config.decks);
+          if (clash) {
+            const r = this.read(e.playerId);
+            if (e.bluff) r.overCaught = (r.overCaught ?? 0) + 1;
+            // under "pick one" a real card turned over says little about the rest, like any other read
+            else r.overHonest = (r.overHonest ?? 0) + (real >= called.count ? 1 : 1 / Math.max(1, called.count));
+          }
           // how good my read of that play was: called plays are the suspicious ones, so this is what keeps my reads honest
-          if (called?.playerId === e.playerId && called.read && view.reveal?.callerId === e.callerId) {
+          // (not a clash or a sprung trap: those are about the round, and this player isn't more honest for one holding up)
+          if (mine && !clash && !called.trapped && called.read && view.reveal?.callerId === e.callerId) {
             const at = view.reveal.pickedIndex;
             this.checkRead(e.playerId, at === null ? called.read.lie : (called.read.spots[at] ?? called.read.lie), e.bluff);
           }
@@ -130,6 +181,8 @@ export class BotMemory {
           }
           if (e.playerId === this.meId && e.bluff) this.mood = clamp(this.mood + 0.6 * tilt, -1, 1);
           if (e.callerId === this.meId) this.mood = clamp(this.mood + (e.bluff ? 0.2 : -0.25), -1, 1);
+          // caught, or a wrong call: whatever it was up to is known now, so it thinks again
+          if ((e.playerId === this.meId && e.bluff) || (e.callerId === this.meId && !e.bluff)) this.plan = null;
           this.pile = [];
           break;
         }
@@ -139,13 +192,11 @@ export class BotMemory {
         case 'roundEnd':
           // my own cards and any I peeked at leave the game with the pile
           for (const entry of this.pile) for (const c of [...(entry.mine ?? []), ...entry.seen]) bump(this.gone, c.rank, 1);
-          // everyone else's go too: unknown cards, but most likely the real ones I reckoned each play held
+          // everyone else's go too: unknown cards, most likely the real ones I reckoned each play held, kept as a spread
           for (const entry of this.pile) {
             if (entry.mine) continue;
-            const seenReal = entry.seen.filter((c) => c.rank === entry.rank).length;
             this.othersGone += entry.count - entry.seen.length;
-            const likely = Math.max(0, (entry.realEst ?? entry.count * 0.55) - seenReal);
-            this.likelyGone.set(entry.rank, (this.likelyGone.get(entry.rank) ?? 0) + likely);
+            this.goneReal.set(entry.rank, convolve(this.goneReal.get(entry.rank) ?? [1], hiddenReal(entry)));
           }
           this.pile = [];
           break;
@@ -156,6 +207,35 @@ export class BotMemory {
           break;
       }
     }
+  }
+
+  /**
+   * The play can't be true along with the round's earlier claims (so one claim of the round is a lie), though its own claim alone could be:
+   * everyone's claims together go past the copies, or other people's do with the copies only I know of (my hand, my pile cards, my
+   * discards). Such a play is judged by the round, not by how honest its player is.
+   */
+  clash(entry: PileEntry, decks: number): boolean {
+    const copies = 4 * decks;
+    const at = this.pile.indexOf(entry);
+    if (at <= 0 || entry.count > copies) return false;
+    const upTo = this.pile.slice(0, at + 1);
+    if (upTo.reduce((n, en) => n + en.count, 0) > copies) return true;
+    if (entry.sure === null || entry.count + entry.sure > copies) return false;
+    return upTo.reduce((n, en) => (en.mine ? n : n + en.count), 0) + entry.sure > copies;
+  }
+
+  /**
+   * Real cards seen in a play prove a trap only when they can't all be real along with the player's earlier claims this round:
+   * the copies I'm sure of, those real cards and their earlier claims add up to more than exist. Then an earlier claim of theirs was
+   * fake while they held these real cards back; remembered once per play.
+   */
+  noteTrap(entry: PileEntry, real: number, decks: number): void {
+    if (entry.trapped || entry.sure === null || real <= 0) return;
+    const before = this.pile.slice(0, this.pile.indexOf(entry)).reduce((n, en) => (en.playerId === entry.playerId ? n + en.count : n), 0);
+    if (before === 0 || entry.sure + real + before <= 4 * decks) return;
+    entry.trapped = true;
+    const r = this.read(entry.playerId);
+    r.keptLies = (r.keptLies ?? 0) + 1;
   }
 
   /** a turn in a running round: add their chance of holding none of the rank, and whether they passed */

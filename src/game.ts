@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { buildDeck, secureRandom, shuffle, sortHand, type RandomInt } from './cards.js';
-import { emptyHabits, notePass, notePlay } from './habits.js';
+import { emptyHabits, noteBotCall, noteBotPlay, notePass, notePlay } from './habits.js';
 import type { BetResult, GameEvent, Habits, PlayerStats, PlayRecord } from './models.js';
 import { MAX_BLUFF_CALLS_IN_A_ROW, RANKS, type Card, type GameConfig, type Rank, type RevealView } from './types.js';
 
@@ -41,12 +41,18 @@ export class Game {
   private peeksUsed = new Map<string, number>();
   /** the team whose partners both finished first (or that the host's End game crowned) */
   private winningTeam: string[] | null = null;
+  /** seats the server plays; people's habits note how they treat bots' plays */
+  readonly bots: ReadonlySet<string>;
+  /** a bot's last play that people may still call: saved in their habits once it stands, or for whoever calls it */
+  private botWatch: { playId: string; lie: boolean; people: string[] } | null = null;
 
   constructor(
     readonly order: string[],
     readonly config: GameConfig,
     rand: RandomInt = secureRandom,
+    bots: Iterable<string> = [],
   ) {
+    this.bots = new Set(bots);
     if (order.length < 2 || order.length > 5) throw new GameError('Need 2 to 5 players');
     if (config.teams && order.length !== 4) throw new GameError('Teams need exactly 4 players');
     this.teams = config.teams ? [[order[0], order[2]], [order[1], order[3]]] : null;
@@ -80,11 +86,18 @@ export class Game {
 
     const events = this.settleLastPlay();
     if (this.over) return events;
+    // the play before this one stood
+    this.watchStood();
 
-    if (cards.some((c) => c.rank !== claim)) this.stat(playerId).bluffs++;
+    const lie = cards.some((c) => c.rank !== claim);
+    if (lie) this.stat(playerId).bluffs++;
     this.stat(playerId).plays++;
-    // saved with the game for the bots' read on this player; nobody sees it while the game runs
-    notePlay(this.habits(playerId), hand, cards, claim, this.roundRank === null);
+    // saved with the game for the bots' read on this player; nobody sees it while the game runs (the pile is this round's claims so far)
+    notePlay(this.habits(playerId), hand, cards, claim, {
+      opening: this.roundRank === null,
+      before: this.roundRank ? this.pile.length : 0,
+      copies: 4 * this.config.decks,
+    });
     this.hands.set(playerId, hand.filter((c) => !picked.has(c.id)));
     // everyone still in who may challenge this play had a chance to call it
     for (const id of this.order) {
@@ -94,6 +107,11 @@ export class Game {
     this.pileBy.push(...cards.map(() => playerId));
     this.roundRank = claim;
     this.lastPlay = { id: randomUUID(), playerId, cards, rank: claim };
+    // a bot's play that doesn't empty its hand: how people treat it is saved for the bots, once each person has had their chance at it
+    if (this.bots.has(playerId) && hand.length > cards.length) {
+      const people = this.order.filter((id) => !this.bots.has(id) && this.hand(id).length > 0 && this.partnerOf(id) !== playerId && this.bluffCallsLeft(id) > 0);
+      this.botWatch = people.length > 0 ? { playId: this.lastPlay.id, lie, people } : null;
+    }
     this.callStreak.delete(playerId);
     this.passed.clear();
     this.reveal = null;
@@ -158,6 +176,13 @@ export class Game {
 
     // counted only once the call is valid
     this.callStreak.set(callerId, (this.callStreak.get(callerId) ?? 0) + 1);
+    // a person calling a bot's play (not its last cards), saved for the bots; anyone else didn't get their full chance at it
+    const watch = this.botWatch?.playId === playId ? this.botWatch : null;
+    this.botWatch = null;
+    if (watch?.people.includes(callerId)) {
+      noteBotPlay(this.habits(callerId), watch.lie);
+      noteBotCall(this.habits(callerId), watch.lie);
+    }
     const bluff = checked.some((c) => c.rank !== play.rank);
     const loserId = bluff ? play.playerId : callerId;
     const winnerId = bluff ? callerId : play.playerId;
@@ -250,6 +275,7 @@ export class Game {
     this.hands.set(playerId, []);
     this.passed.delete(playerId);
     if (this.lastPlay?.playerId === playerId) this.lastPlay = null;
+    this.unwatch(playerId);
 
     if (this.teams) {
       this.over = true;
@@ -309,6 +335,7 @@ export class Game {
     this.passed.delete(playerId);
     // their last play can't be challenged any more; the round rank stays
     if (this.lastPlay?.playerId === playerId) this.lastPlay = null;
+    this.unwatch(playerId);
 
     // a team without its partner can't go on: stop the game, nobody wins or pays
     if (this.teams) {
@@ -338,6 +365,8 @@ export class Game {
   }
 
   private endRound(): GameEvent[] {
+    // everyone passed: the last play stood
+    this.watchStood();
     const starter = this.lastPlay!.playerId;
     const discarded = this.pile.length;
     const events = this.settleLastPlay();
@@ -383,6 +412,20 @@ export class Game {
     const s = this.stats.get(id);
     if (!s) throw new GameError('You are not in this game');
     return s;
+  }
+
+  /** the watched bot play stood without a call: everyone watching it had their chance */
+  private watchStood(): void {
+    const w = this.botWatch;
+    this.botWatch = null;
+    if (w) for (const id of w.people) noteBotPlay(this.habits(id), w.lie);
+  }
+
+  /** someone left: they're off the watch, and a play nobody can call any more is off it altogether */
+  private unwatch(playerId: string): void {
+    if (!this.botWatch) return;
+    if (this.lastPlay?.id !== this.botWatch.playId) this.botWatch = null;
+    else this.botWatch.people = this.botWatch.people.filter((id) => id !== playerId);
   }
 
   private habits(id: string): Habits {

@@ -986,7 +986,7 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     const reg = await register('habit_hal');
     const userId = reg.body.user.id as string;
     const zero = { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0, plays: 0, chances: 0 };
-    const habits = { ...emptyHabits(), followPlays: 5, followLies: 3, lies: 4, lieCards: 6, slotLast: 2, fakeLast: 2 };
+    const habits = { ...emptyHabits(), followPlays: 5, followLies: 3, lies: 4, lieCards: 6, slotLast: 2, fakeLast: 2, overPlays: 2, overLies: 1, botCalls: 3, heldKept: 1 };
     const record = (status: GameRecord['status'], game: 'bluff' | 'crazy7' = 'bluff'): GameRecord => ({
       roomCode: 'HABT',
       config: { game, decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert' },
@@ -1001,12 +1001,14 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     await store.games.save(record('ended_early'));
     await store.games.save(record('finished'));
     await store.games.save(record('finished', 'crazy7'));
-    expect((await store.users.getAccounts([userId])).get(userId)!.habits).toMatchObject({ followPlays: 10, followLies: 6, lies: 8, lieCards: 12, slotLast: 4, fakeLast: 4 });
+    expect((await store.users.getAccounts([userId])).get(userId)!.habits).toMatchObject({
+      followPlays: 10, followLies: 6, lies: 8, lieCards: 12, slotLast: 4, fakeLast: 4, overPlays: 4, overLies: 2, botCalls: 6, heldKept: 2,
+    });
     // players, friends and admins never see it
     const auth = bearer(reg.body.token);
     for (const res of [await api().get('/api/me').set(auth), await api().get('/api/players/habit_hal').set(auth), await api().get('/api/me/games').set(auth)]) {
       expect(res.status).toBe(200);
-      expect(JSON.stringify(res.body)).not.toMatch(/habits|followLies|lieCards/);
+      expect(JSON.stringify(res.body)).not.toMatch(/habits|followLies|lieCards|overLies|botCalls|heldKept/);
     }
     // an account with no Bluff games yet has none
     const fresh = await register('habit_new');
