@@ -153,10 +153,10 @@ export class Room {
   removeMember(id: string): GameEvent[] {
     const leaving = this.member(id);
     let events: GameEvent[] = [];
-    if (this.phase === 'playing' && this.table?.order.includes(id)) {
-      events = this.table.leave(id);
-      // kept so the saved game still has their name
+    if (this.table?.order.includes(id)) {
+      // kept so the saved game and the game-over screen still have their name
       this.departed.set(id, leaving);
+      if (this.phase === 'playing') events = this.table.leave(id);
     }
     this.members = this.members.filter((m) => m.id !== id);
     this.lastChat.delete(id);
@@ -666,7 +666,7 @@ export class Room {
       // set only at a Saza game's end, cleared back in the lobby
       sazaPick: this.sazaPick,
       // null until the game is over
-      lieRecap: b && !b.config.secretLies ? b.lieRecap() : null,
+      lieRecap: b && !b.config.secretLies ? b.lieRecap((id) => (this.members.find((m) => m.id === id) ?? this.departed.get(id))?.name ?? 'Someone') : null,
     };
   }
 

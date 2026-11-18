@@ -256,19 +256,19 @@ export class Game {
     return [{ kind: 'gameOver', loserId: null }];
   }
 
-  /** game over: the boldest lies nobody caught and how much each player lied; null while the game runs */
-  lieRecap(): LieRecap | null {
+  /** game over: the boldest lies nobody caught and how much each player lied (named by the room); null while the game runs */
+  lieRecap(nameOf: (id: string) => string): LieRecap | null {
     if (!this.over) return null;
     const fakes = (l: { rank: Rank; cards: Card[] }) => l.cards.filter((c) => c.rank !== l.rank).length;
     const away = this.lies.filter((l) => !l.caught);
-    // boldest first; ties keep the order they were played
+    // most fake cards first; the sort is stable, so ties keep the order they were played
     const lies = [...away]
-      .sort((a, b) => fakes(b) - fakes(a) || b.cards.length - a.cards.length)
+      .sort((a, b) => fakes(b) - fakes(a))
       .slice(0, LIE_RECAP_MAX)
       .map((l) => ({ playerId: l.playerId, rank: l.rank, cards: [...l.cards], survivedCall: l.called }));
     const players = this.order.map((id) => {
       const s = this.stat(id);
-      return { playerId: id, plays: s.plays, lies: s.bluffs, caught: s.caught };
+      return { playerId: id, name: nameOf(id), plays: s.plays, lies: s.bluffs, caught: s.caught };
     });
     return { lies, uncaught: away.length, players };
   }

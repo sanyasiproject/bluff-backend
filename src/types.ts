@@ -110,8 +110,8 @@ export interface LieRecap {
   lies: LieReveal[];
   /** every lie that got away, including those not listed */
   uncaught: number;
-  /** each player's plays, lies and lies caught this game, in seat order */
-  players: { playerId: string; plays: number; lies: number; caught: number }[];
+  /** each player's name, plays, lies and lies caught this game, in seat order (named even after leaving the room) */
+  players: { playerId: string; name: string; plays: number; lies: number; caught: number }[];
 }
 
 /** Saza for the loser: the badges the winner picks from (the loser gets one at random first) */
