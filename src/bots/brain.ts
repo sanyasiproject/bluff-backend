@@ -195,6 +195,18 @@ function aim(s: Situation, read: PlayRead): number {
   return open[Math.floor(s.rand() * open.length)] ?? 0;
 }
 
+/** on someone's last cards: any card may be turned over, likelier fakes more often, so real ones can't hide where it usually looks */
+function anyLikely(read: PlayRead, rand: Rand): number {
+  let r = rand() * read.spots.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < read.spots.length; i++) {
+    r -= read.spots[i];
+    if (read.spots[i] > 0 && r <= 0) return i;
+  }
+  // nothing looks fake: any card not already seen real
+  const open = read.weights.map((w, i) => (w > 0 ? i : -1)).filter((i) => i >= 0);
+  return open[Math.floor(rand() * open.length)] ?? 0;
+}
+
 /** a peek is scarce: what one is worth keeping for later, in cards (less as the game runs out or with more of them left) */
 function peekCost(v: RoomView): number {
   const cards = v.players.reduce((n, p) => n + p.cardCount, 0) + v.pileCount;
@@ -238,6 +250,8 @@ export function decideCall(s: Situation, onTurn: boolean, peek: Peek): { cardInd
   if (!play || play.playerId === v.meId || v.bluffCallsLeft === 0 || v.hand.length === 0 || partnerIn(v, v.meId) === play.playerId) return null;
   const skill = skillIn(s);
   const one = v.config.bluffRule === 'one';
+  // their last cards: if the play stands they're out, so it's always called
+  const last = v.players.find((p) => p.id === play.playerId)?.cardCount === 0;
   let read = readPlay(sightOf(s), skill.level);
   const entry = s.mem.entryOf(play.id);
   if (entry) {
@@ -246,10 +260,13 @@ export function decideCall(s: Situation, onTurn: boolean, peek: Peek): { cardInd
     entry.read = { lie: read.lie, spots: read.spots };
   }
   const { gain, loss } = stakes(s, onTurn);
-  let index = aim(s, read);
+  const target = (r: PlayRead) => (last ? anyLikely(r, s.rand) : aim(s, r));
+  let index = target(read);
   let hit = one ? read.spots[index] : read.lie;
 
-  const look = v.peeksLeft > 0 && hit < 0.999 ? (skill.smartPeek ? planPeek(s, read, gain, loss) : whimPeek(s, hit)) : null;
+  // on last cards a good bot peeks at the card it means to turn over; under "show all" the call shows every card anyway
+  const canLook = v.peeksLeft > 0 && (last ? one && read.minFake < play.count : hit < 0.999);
+  const look = !canLook ? null : !skill.smartPeek ? whimPeek(s, hit) : last ? index : planPeek(s, read, gain, loss);
   if (look !== null) {
     const card = peek(look);
     if (card) {
@@ -263,11 +280,12 @@ export function decideCall(s: Situation, onTurn: boolean, peek: Peek): { cardInd
       } else {
         read = seenReal(read, look);
         if (entry) entry.realEst = realIn(read);
-        index = aim(s, read);
+        index = target(read);
         hit = one ? read.spots[index] : read.lie;
       }
     }
   }
+  if (last) return { cardIndex: one ? index : undefined };
   if (hit <= 0.01 || !wantsCall(s, hit, gain, loss, read)) return null;
   return { cardIndex: one ? index : undefined };
 }
@@ -289,7 +307,8 @@ function caughtChance(s: Situation, fakes: number, count: number, finishing: boo
     // big claims and finishing plays draw calls; a big pile makes callers think twice
     let c = rate * (1 + 0.25 * (count - 1)) * (finishing ? 2.2 : 1) * (1 - Math.min(0.5, v.pileCount * 0.03));
     if (skill.provable) c += (1 - c) * 0.85 * (need <= 0 ? 1 : holdChance(unseen, o.cardCount, need));
-    safe *= 1 - clamp(c, 0.02, 0.97) * shown;
+    // other bots always call last cards
+    safe *= 1 - (finishing && o.bot ? 1 : clamp(c, 0.02, 0.97)) * shown;
   }
   return 1 - safe;
 }

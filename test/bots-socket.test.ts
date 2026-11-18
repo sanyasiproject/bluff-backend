@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 import { io as connect, type Socket } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBluffServer } from '../src/server.js';
-import type { Announcement, Card, RoomView } from '../src/types.js';
+import type { Announcement, Card, RevealView, RoomView } from '../src/types.js';
 
 type Client = { socket: Socket; state: RoomView | null; notes: Announcement[] };
 type Res = { ok: boolean; error?: string; code?: string; token?: string };
@@ -172,6 +172,28 @@ describe('bots at the table', () => {
     const me = a.state!.players.find((p) => p.id === a.state!.meId)!;
     expect(me.cardCount === 0 || a.state!.players.filter((p) => p.bot && p.cardCount === 0).length >= 1).toBe(true);
   }, 30_000);
+
+  it('calls a person who puts down every card on their first turn instead of ending the game', async () => {
+    const a = await client();
+    await send(a, 'room:create', { name: 'Dumper' });
+    await send(a, 'room:addBot');
+    await send(a, 'room:config', { decks: 1, bluffRule: 'all' });
+    await until(() => a.state!.players.length === 2 && a.state!.config.bluffRule === 'all');
+    const reveals: RevealView[] = [];
+    a.socket.on('state', (s: RoomView) => {
+      if (s.reveal && !reveals.some((r) => r.playId === s.reveal!.playId)) reveals.push(s.reveal);
+    });
+    await send(a, 'room:start');
+    await until(() => a.state?.phase === 'playing' && a.state.turnId === a.state.meId, 5000);
+    const v = a.state!;
+    const all = v.hand.map((c) => c.id);
+    expect(await send(a, 'game:play', { cardIds: all, rank: v.roundRank ? undefined : v.hand[0].rank })).toEqual({ ok: true });
+    await until(() => reveals.length > 0 || a.state!.phase === 'over', 5000);
+    // the bot called it and the person took the pile back: the game goes on
+    expect(a.state!.phase).toBe('playing');
+    expect(reveals[0]).toMatchObject({ bluff: true, loserId: v.meId, callerId: v.players.find((p) => p.bot)!.id });
+    expect(a.state!.hand.length).toBeGreaterThanOrEqual(all.length);
+  });
 
   it('swaps 2v2 places with a bot at once', async () => {
     const a = await client();

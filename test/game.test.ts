@@ -315,6 +315,20 @@ describe('leaving a game in progress', () => {
     expect(g.losers()).toEqual([]);
   });
 
+  it('is a forfeit while their last cards can still be called', () => {
+    const fake = card('9');
+    const g = setup(['a', 'b'], { a: [fake], b: [card('3'), card('4')] });
+    g.play('a', ids(fake), 'Q');
+    expect(g.goingOut()).toBe('a');
+    // walking out before the call: a loss, and the other player is left to finish
+    expect(g.leave('a')).toEqual([
+      { kind: 'finish', playerId: 'b', place: 1 },
+      { kind: 'gameOver', loserId: null },
+    ]);
+    expect(g.winners()).toEqual(['b']);
+    expect(g.losers()).toEqual(['a']);
+  });
+
   it('in 2v2 makes the leaver\'s team lose', () => {
     const g = setup(['a', 'b', 'c', 'd'], { a: [card('2')], b: [card('3')], c: [card('4')], d: [card('5')] }, { teams: true });
     expect(g.leave('c')).toEqual([{ kind: 'gameOver', loserId: null }]);
@@ -375,6 +389,28 @@ describe('bluff call limit', () => {
     g.pass('b');
     g.play('c', ids(c1));
     expect(g.bluffCallsLeft('c')).toBe(2);
+  });
+
+  it("never locks a call on a player's last cards", () => {
+    const qs = [card('Q', 'S'), card('Q', 'H')];
+    const last = card('9');
+    const g = setup(['a', 'b', 'c'], { a: [...qs, last], b: [card('2'), card('3')], c: [card('5'), card('6')] });
+    // c calls a's real Queens twice (wrongly), so a starts again and c is locked
+    g.play('a', ids(qs[0]), 'Q');
+    g.callBluff('c', g.lastPlay!.id);
+    g.play('a', ids(qs[1]), 'Q');
+    g.callBluff('c', g.lastPlay!.id);
+    expect(g.bluffCallsLeft('c')).toBe(0);
+    // a's last card goes down as a Queen: a isn't out yet, and c may still call it
+    g.play('a', ids(last), 'Q');
+    expect(g.goingOut()).toBe('a');
+    expect(g.places).toEqual([]);
+    expect(g.bluffCallsLeft('c')).toBe(1);
+    expect(g.callBluff('c', g.lastPlay!.id)[0]).toMatchObject({ kind: 'bluff', bluff: true, loserId: 'a' });
+    expect(g.over).toBe(false);
+    expect(g.goingOut()).toBeNull();
+    // locked again until c plays or passes
+    expect(g.bluffCallsLeft('c')).toBe(0);
   });
 });
 

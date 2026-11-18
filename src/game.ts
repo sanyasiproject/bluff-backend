@@ -244,8 +244,8 @@ export class Game {
   /** a player walks out: their cards leave, they lose (and still pay a stake); in 2v2 their team loses */
   leave(playerId: string): GameEvent[] {
     if (this.over) return [];
-    // already finished: leaving changes nothing
-    if (this.hand(playerId).length === 0 || this.kicked.has(playerId) || this.forfeited.has(playerId)) return [];
+    // already finished: leaving changes nothing (last cards still open to a call are not finished)
+    if ((this.hand(playerId).length === 0 && this.goingOut() !== playerId) || this.kicked.has(playerId) || this.forfeited.has(playerId)) return [];
     this.forfeited.add(playerId);
     this.hands.set(playerId, []);
     this.passed.delete(playerId);
@@ -288,8 +288,16 @@ export class Game {
     return this.teamOf(id)?.find((p) => p !== id) ?? null;
   }
 
+  /** calls left in a row; a player's last cards can always be called */
   bluffCallsLeft(playerId: string): number {
-    return Math.max(0, MAX_BLUFF_CALLS_IN_A_ROW - (this.callStreak.get(playerId) ?? 0));
+    const left = Math.max(0, MAX_BLUFF_CALLS_IN_A_ROW - (this.callStreak.get(playerId) ?? 0));
+    return left === 0 && this.goingOut() ? 1 : left;
+  }
+
+  /** whoever emptied their hand with the last play; they aren't out until it settles, so it can still be called */
+  goingOut(): string | null {
+    const id = this.lastPlay?.playerId;
+    return id && !this.over && this.hand(id).length === 0 && !this.places.includes(id) ? id : null;
   }
 
   /** the host removed a player: their cards leave the game and they get no place */

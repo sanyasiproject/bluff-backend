@@ -343,3 +343,91 @@ describe('bots at the table', () => {
     expect(wins.expert / games).toBeGreaterThan(0.6);
   });
 });
+
+describe("a player's last cards", () => {
+  /** the person's whole hand, real cards of their biggest rank first and last, every fake in between */
+  function dump(hand: Card[]) {
+    const { rank, cards } = biggest(hand);
+    const rest = hand.filter((c) => c.rank !== rank);
+    return { rank, play: cards.length >= 2 ? [cards[0], ...rest, ...cards.slice(1)] : [...cards, ...rest] };
+  }
+
+  it('keep the game open when a person puts down every card on the first turn: the bot gets its call', () => {
+    const { room, g, person, seats, sit, feed } = table(1, { bluffRule: 'all' }, seeded(5));
+    g.turnId = person;
+    const { rank, play } = dump(g.hand(person));
+    feed(g.play(person, play.map((c) => c.id), rank));
+    // only the bot holds cards, but the play can still be called
+    expect(room.endIfOnlyBots()).toEqual([]);
+    expect(g.over).toBe(false);
+    expect(chooseTurn(sit(seats[0]), noPeek)).toEqual({ kind: 'call', cardIndex: undefined });
+    expect(g.callBluff(seats[0].id, g.lastPlay!.id, undefined, 0)[0]).toMatchObject({ kind: 'bluff', bluff: true, loserId: person });
+    expect(g.over).toBe(false);
+    expect(g.hand(person)).toHaveLength(26);
+  });
+
+  it('are always called, at every level and under both rules, real or not', () => {
+    for (const botLevel of ['normal', 'hard', 'expert'] as BotLevel[]) {
+      for (const bluffRule of ['one', 'all'] as const) {
+        for (let seed = 1; seed <= 40; seed++) {
+          const rand = seeded(seed * 53);
+          const { g, person, seats, sit, feed } = table(1, { bluffRule, botLevel }, rand);
+          g.turnId = person;
+          const last = g.hand(person).slice(0, 1 + Math.floor(rand() * 4));
+          g.hands.set(person, last);
+          feed(g.play(person, last.map((c) => c.id), biggest(last).rank));
+          expect(decideCall(sit(seats[0]), seed % 2 === 0, noPeek), `${botLevel} ${bluffRule} seed ${seed}`).not.toBeNull();
+        }
+      }
+    }
+  });
+
+  it("can't be dodged under pick one by putting the real cards where bots usually look", () => {
+    let fakes = 0;
+    for (let seed = 1; seed <= 200; seed++) {
+      const rand = seeded(seed * 97);
+      const { g, person, seats, sit, feed } = table(1, { bluffRule: 'one' }, rand);
+      g.turnId = person;
+      const { rank, play } = dump(g.hand(person));
+      feed(g.play(person, play.map((c) => c.id), rank));
+      const call = decideCall(sit(seats[0]), true, noPeek);
+      if (call && play[call.cardIndex!].rank !== rank) fakes++;
+    }
+    // real cards are about 1 in 8 of the dump; a bot that always turned over the first or last card would find no fake at all
+    expect(fakes / 200).toBeGreaterThan(0.75);
+  });
+
+  it('get a peek first under pick one when one is left, so a real card seen is never the one turned over', () => {
+    let fakes = 0;
+    let peeks = 0;
+    for (let seed = 1; seed <= 100; seed++) {
+      const rand = seeded(seed * 41);
+      const { g, person, seats, sit, feed } = table(1, { bluffRule: 'one', peeks: 1 }, rand);
+      g.turnId = person;
+      const { rank, play } = dump(g.hand(person));
+      feed(g.play(person, play.map((c) => c.id), rank));
+      const look: Peek = (i) => {
+        peeks++;
+        return g.peek(seats[0].id, g.lastPlay!.id, i);
+      };
+      const call = decideCall(sit(seats[0]), true, look);
+      if (call && play[call.cardIndex!].rank !== rank) fakes++;
+    }
+    expect(peeks).toBe(100);
+    expect(fakes).toBeGreaterThanOrEqual(95);
+  });
+
+  it('crown a person who goes out for real once the call is settled and only bots are left', () => {
+    const { room, g, person, seats, feed } = table(2, { bluffRule: 'one' }, seeded(9));
+    const real = g.hand(person)[0];
+    g.hands.set(person, [real]);
+    g.turnId = person;
+    feed(g.play(person, [real.id], real.rank));
+    expect(room.endIfOnlyBots()).toEqual([]);
+    // the call is wrong: the person is out 1st, and with only bots left the game ends
+    feed(g.callBluff(seats[0].id, g.lastPlay!.id, 0, 0));
+    expect(g.places).toEqual([person]);
+    expect(room.endIfOnlyBots()).toEqual([{ kind: 'gameOver', loserId: null }]);
+    expect(g.winners()).toEqual([person]);
+  });
+});

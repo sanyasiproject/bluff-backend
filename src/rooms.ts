@@ -202,10 +202,12 @@ export class Room {
     return g && !g.over ? g.close() : [];
   }
 
-  /** nobody but bots holds cards any more, so the result is settled: end the game now (2v2 plays on to find the team) */
+  /** nobody but bots holds cards and the last play is settled: end the game now (2v2 plays on to find the team) */
   endIfOnlyBots(): GameEvent[] {
     const g = this.table;
     if (!g || g.over || g.teams) return [];
+    // last cards still open to a call: the bots get their chance first
+    if (this.game?.goingOut()) return [];
     const people = g.order.filter((id) => !this.isBot(id));
     return people.every((id) => g.hand(id).length === 0) ? g.close() : [];
   }
