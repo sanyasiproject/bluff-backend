@@ -1,3 +1,4 @@
+import { NO_WEAR, shopLookOf } from './services/shop.js';
 import { randomBytes, randomInt } from 'node:crypto';
 import { computeAwards } from './awards.js';
 import { cardName, describeClaim, ordinal, secureRandom } from './cards.js';
@@ -152,6 +153,7 @@ export class Room {
       hasReady: false,
       hasTwists: false,
       saza: null,
+      shop: account?.shop ?? NO_WEAR,
     };
     this.members.push(member);
     if (!this.hostId) this.hostId = member.id;
@@ -690,6 +692,7 @@ export class Room {
         bot: m.bot,
         ready: m.bot || m.id === this.hostId || !m.hasReady || m.ready,
         saza: this.sazaOn ? m.saza : null,
+        shop: shopLookOf(m.shop),
       })),
       watchers: this.members
         .filter((m) => !seatedIds.has(m.id))

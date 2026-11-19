@@ -1,6 +1,6 @@
 import type { Collection, ObjectId } from 'mongodb';
 import type { Habits, PlayerStats } from '../models.js';
-import type { AuditAction, GameConfig, GameKind, LeagueStats, LifetimeStats, Role } from '../types.js';
+import type { AuditAction, GameConfig, GameKind, LeagueStats, LifetimeStats, Role, ShopLookKind } from '../types.js';
 
 /** database and collection names, all overridable from env */
 export interface DbNames {
@@ -59,6 +59,17 @@ export interface UserDoc {
   leagueHidden?: boolean;
   /** ranked standing for the season it was earned in (services/ranked.ts) */
   ranked?: RankedDoc;
+  /** coin shop rentals and the looks worn from them (services/shop.ts) */
+  shop?: ShopDoc;
+}
+
+/** an account's shop rentals; every one runs out */
+export interface ShopDoc {
+  /** goes up on every write, so a buy never undoes another write */
+  rev: number;
+  rentals: { id: string; until: Date }[];
+  /** the rental shown for each look kind; ignored once that rental runs out */
+  wearing: Partial<Record<ShopLookKind, string>>;
 }
 
 /** one IST week of league counters */

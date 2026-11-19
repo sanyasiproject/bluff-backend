@@ -644,7 +644,7 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect(raju).toMatchObject({ username: 'raj_pub', displayName: 'Raj', level: 1, online: null, status: 'none' });
     expect(raju.stats).toMatchObject({ gamesPlayed: 0, wins: 0 });
     // no coins, role, login times or password hash
-    expect(Object.keys(raju).sort()).toEqual(['avatar', 'displayName', 'id', 'joinedAt', 'lastSeen', 'level', 'online', 'rank', 'stats', 'status', 'username']);
+    expect(Object.keys(raju).sort()).toEqual(['aura', 'avatar', 'displayName', 'id', 'joinedAt', 'lastSeen', 'level', 'online', 'rank', 'stats', 'status', 'username']);
     expect(raju.lastSeen).toBeNull();
     expect((await card('pia_pub')).status).toBe('me');
 

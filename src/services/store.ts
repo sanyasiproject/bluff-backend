@@ -8,6 +8,7 @@ import { RankedService } from './ranked.js';
 import { RivalService } from './rivals.js';
 import { PushService, type PushOptions } from './push.js';
 import { SettingsService } from './settings.js';
+import { ShopService } from './shop.js';
 import { UserService, type UserServiceOptions } from './users.js';
 
 /** everything backed by MongoDB; null when the server runs guest-only */
@@ -20,6 +21,7 @@ export interface Store {
   ranked: RankedService;
   friends: FriendService;
   settings: SettingsService;
+  shop: ShopService;
   push: PushService;
   close: () => Promise<void>;
 }
@@ -42,6 +44,7 @@ export async function createStore(uri: string, names: DbNames, opts: UserService
     ranked,
     friends: new FriendService(cols),
     settings,
+    shop: new ShopService(cols),
     push: new PushService(cols, opts.push ?? null),
     close: () => client.close(),
   };

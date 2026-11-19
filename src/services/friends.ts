@@ -1,3 +1,4 @@
+import { shopWearOf } from './shop.js';
 import { MongoServerError, ObjectId, type WithId } from 'mongodb';
 import type { Collections, FriendDoc, UserDoc } from '../db/documents.js';
 import { ApiError } from '../http/errors.js';
@@ -137,7 +138,7 @@ export class FriendService {
   async profileOf(me: ObjectId, username: string): Promise<PublicProfile> {
     const u = await this.cols.users.findOne(
       { username, blocked: { $ne: true } },
-      { projection: { username: 1, displayName: 1, stats: 1, createdAt: 1, avatar: 1, lastSeenAt: 1, lastLoginAt: 1, ranked: 1 } },
+      { projection: { username: 1, displayName: 1, stats: 1, createdAt: 1, avatar: 1, lastSeenAt: 1, lastLoginAt: 1, ranked: 1, shop: 1 } },
     );
     if (!u) throw new ApiError(404, 'No player with that username');
     let status: PublicProfile['status'] = 'me';
@@ -159,6 +160,7 @@ export class FriendService {
       status,
       // this season's division and points; none from another season
       rank: rankBadgeOf(u.ranked),
+      aura: shopWearOf(u).aura?.id ?? null,
     };
   }
 

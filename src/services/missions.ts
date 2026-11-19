@@ -103,7 +103,7 @@ export class MissionService {
   }
 
   /** adds one game's numbers; a mission that reaches its goal is done and pays its coins and XP in the same write */
-  async count(userId: ObjectId, counts: MissionCounts, now = new Date()): Promise<MissionDone[]> {
+  async count(userId: ObjectId, counts: MissionCounts, now = new Date(), coinBoost = 1): Promise<MissionDone[]> {
     const out = await this.change(userId, now, (m) => {
       const done: MissionDone[] = [];
       let moved = false;
@@ -114,7 +114,8 @@ export class MissionService {
         moved = true;
         const progress = Math.min(def.goal, x.progress + n);
         if (progress < def.goal) return { ...x, progress };
-        done.push({ id: def.id, coins: def.coins, xp: def.xp });
+        // a shop coin boost raises the coins paid
+        done.push({ id: def.id, coins: Math.floor(def.coins * coinBoost), xp: def.xp });
         return { ...x, progress, done: true };
       };
       const next: MissionsDoc = { ...m, daily: m.daily.map(bump), weekly: m.weekly.map(bump) };

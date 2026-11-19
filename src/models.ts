@@ -1,4 +1,4 @@
-import type { Award, Card, CoinResult, GameConfig, InviteEvent, LifetimeStats, PlayReveal, Rank, SazaBadge } from './types.js';
+import type { Award, Card, CoinResult, GameConfig, InviteEvent, LifetimeStats, PlayReveal, Rank, SazaBadge, ShopLookKind } from './types.js';
 
 /** one of a player's plays this game with the true cards (server only); open: it never stood or was called (still waiting, or cut off by a walk-out or End game) */
 export interface LoggedPlay extends PlayReveal {
@@ -49,7 +49,12 @@ export interface Member {
   hasTwists: boolean;
   /** Bluff's saza badge in this room: the last player wears it until they win a game here */
   saza: SazaBadge | null;
+  /** shop looks they rent, each with the time it runs out (read at join and when they buy or switch) */
+  shop: ShopWear;
 }
+
+/** shop looks worn, each with when its rental runs out (ms); null: none of that kind */
+export type ShopWear = Record<ShopLookKind, { id: string; until: number } | null>;
 
 /**
  * How a player really plays Bluff, counted from every play the server saw (the true cards, caught or not).
@@ -105,6 +110,8 @@ export interface PlayerLook {
   avatar: string | null;
   back: string;
   table: string;
+  /** missing: leave the shop looks as they are */
+  shop?: ShopWear;
 }
 
 /** the account behind a logged-in member */
@@ -118,6 +125,8 @@ export interface MemberAccount {
   back: string;
   table: string;
   habits: Habits | null;
+  /** missing: none (tests and older callers) */
+  shop?: ShopWear;
 }
 
 /** someone asking to watch a game in progress; the host lets them in or not */
@@ -207,6 +216,7 @@ export interface AccountInfo {
   table: string;
   /** null until they've played a Bluff game with an account */
   habits: Habits | null;
+  shop: ShopWear;
 }
 
 /** balances after a gift between friends */

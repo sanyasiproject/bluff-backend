@@ -25,7 +25,7 @@ vitest 5 (vite 8 as dev peer) + supertest. Accounts are optional: without `MONGO
 | `src/socket.ts` | Thin event handlers (`room:*`, `game:*`, `chat:send`, `friend:invite`), rate limit, coin checks at start, saving finished games |
 | `src/validate.ts` | Every incoming payload is parsed here; throw `GameError` with a message safe to show players |
 | `src/models.ts` | Server-only shapes (Member, GameRecord, hooks) |
-| `src/services/` | `UserService` (accounts, sessions, coins, admin, audit), `GameRecorder` (save game, stakes, bets, daily ladder, stats), `FriendService`, `MissionService` (daily and weekly missions: deal, count, swap, paid in one guarded write), `LeagueService` (weekly friends league), `RivalService` (records between friends) and `RankedService` (rank points, seasons) |
+| `src/services/` | `UserService` (accounts, sessions, coins, admin, audit), `ShopService` (coin shop rentals, boosts, worn looks), `GameRecorder` (save game, stakes, bets, daily ladder, stats), `FriendService`, `MissionService` (daily and weekly missions: deal, count, swap, paid in one guarded write), `LeagueService` (weekly friends league), `RivalService` (records between friends) and `RankedService` (rank points, seasons) |
 | `src/http/` | Express app, middleware, routes: `auth`, `me`, `friends`, `players`, `admin` |
 | `test/` | `game.test.ts` (rules), `bots.test.ts` (engine plays hundreds of games), `socket.test.ts` and `bots-socket.test.ts` (no DB), `api.test.ts` (needs MongoDB); `missions.test.ts` (needs MongoDB) and `secrets.test.ts` for missions and secret cards |
 
@@ -57,6 +57,7 @@ without the keys push is off; an admin can also switch it off in the app).
 - `friend:online` goes to online friends when an account comes back after 15+ seconds away, never to friends in the same room and never in the first 2 minutes after a server start (`OnlineAlertTimes` in `socket.ts`).
 - League, rivals and ranked never count bots, guests or players the host removed. Ranked tables take logged-in people only (no bots, Bluff only); rank points move only in `RankedService.rate`, within the daily cap and above the season's floor.
 - Missions: coins and `stats.bonusXp` are paid in the same guarded update that marks a mission done (`rev`), so nothing pays twice; only games that count for the daily ladder move them. Secret mission cards are dealt to people only, and a player's view carries only their own card until game over (test it when touching `view()`).
+- Coin shop (`services/shop.ts`): every item is a rental (1 or 7 days), never owned. Boosts are read once in `GameRecorder.save` and touch only games that count; XP boosts multiply only the game's own XP. Looks reach rooms through `lookChanged` (with `shop`) and show only while the rental runs (`shopLookOf`). Buys are `rev`-guarded and audited.
 - Saza badges (`Member.saza`) live in the room only: set in `Room.settleSaza` at a Bluff game's end, swapped by the winner with `room:saza`, never saved.
 - New room settings default to **off** and must accept older apps that don't send them (see `parseConfig`). `config.game` picks Bluff or Crazy 7; Crazy 7 ignores Bluff's extras (kept for switching back).
 - Code that works for both games goes through `room.table`; Bluff-only code uses `room.game`, Crazy 7 `room.c7`.

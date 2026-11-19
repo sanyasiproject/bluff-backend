@@ -534,6 +534,8 @@ export interface PublicPlayer {
   ready: boolean;
   /** the saza badge they wear in this room (Bluff's last player, until they win here); null when none or Saza is off */
   saza: SazaBadge | null;
+  /** shop looks they rent (aura, win burst, entry flash); missing from older servers */
+  shop?: ShopLook;
 }
 
 /** how one player's coins changed when a game ended */
@@ -557,6 +559,10 @@ export interface CoinResult {
   missionsDone: { id: string; coins: number; xp: number }[];
   /** bonus XP from this game's secret mission card (0 when not done or the game didn't count) */
   secretXp: number;
+  /** extra XP from a shop XP boost, already in stats.bonusXp (missing from older servers) */
+  boostXp?: number;
+  /** extra coins from a shop coin boost on the daily ladder and missions, already in coins (missing from older servers) */
+  boostCoins?: number;
   /** a rated game's rank points before and after, the division now, and what held the change back: the daily cap, the floor, or paying back losses they held off earlier; null otherwise */
   rank: { before: number; after: number; division: RankDivisionId; held: 'cap' | 'floor' | 'debt' | null } | null;
 }
@@ -1010,7 +1016,7 @@ export interface AdminUser extends PublicUser {
   blocked: boolean;
 }
 
-export type AuditAction = 'coins' | 'make_admin' | 'update' | 'password' | 'gift' | 'settings';
+export type AuditAction = 'coins' | 'make_admin' | 'update' | 'password' | 'gift' | 'settings' | 'shop';
 
 /** sent on every connection (and to a guest who is turned away), so the app never depends on one HTTP check */
 export interface ServerInfo {
@@ -1112,6 +1118,8 @@ export interface PublicProfile {
   status: 'me' | 'friend' | 'sent' | 'incoming' | 'none';
   /** this season's division and rank points; null before a ranked game this season */
   rank: { division: RankDivisionId; points: number } | null;
+  /** their shop aura while it runs; null when none (missing from older servers) */
+  aura?: string | null;
 }
 
 export interface FriendsResponse {
@@ -1144,4 +1152,69 @@ export interface Announcement {
   id: number;
   kind: AnnounceKind;
   text: string;
+}
+
+// ---------- coin shop: every item is rented for a day or a week, never owned ----------
+
+/** xp: more XP per game · coins: more coins from the daily ladder and missions · aura: animated seat box, card backs and profile card · win: a burst everyone sees when you win · entry: a flash when you join a table */
+export type ShopKind = 'xp' | 'coins' | 'aura' | 'win' | 'entry';
+
+/** the shop slots a player shows to others: one of each, from their active rentals */
+export type ShopLookKind = 'aura' | 'win' | 'entry';
+
+export interface ShopItem {
+  id: string;
+  kind: ShopKind;
+  emoji: string;
+  name: string;
+  desc: string;
+  price: number;
+  /** how long one buy lasts; buying it again while it runs adds this much more */
+  days: 1 | 7;
+  /** xp and coins: the multiplier (1.5 = +50%) */
+  mult?: number;
+}
+
+export const SHOP_ITEMS: readonly ShopItem[] = [
+  { id: 'xp-d15', kind: 'xp', emoji: '⚡', name: 'XP Spark', desc: '1.5x XP from games for a day', price: 500, days: 1, mult: 1.5 },
+  { id: 'xp-d2', kind: 'xp', emoji: '🔥', name: 'XP Blaze', desc: '2x XP from games for a day', price: 1_200, days: 1, mult: 2 },
+  { id: 'xp-d3', kind: 'xp', emoji: '💎', name: 'XP Diamond', desc: '3x XP from games for a day', price: 3_000, days: 1, mult: 3 },
+  { id: 'xp-w15', kind: 'xp', emoji: '⚡', name: 'XP Spark week', desc: '1.5x XP from games for 7 days', price: 2_500, days: 7, mult: 1.5 },
+  { id: 'xp-w2', kind: 'xp', emoji: '🔥', name: 'XP Blaze week', desc: '2x XP from games for 7 days', price: 6_000, days: 7, mult: 2 },
+  { id: 'coins-w25', kind: 'coins', emoji: '🪙', name: 'Coin Magnet', desc: '+25% coins from the daily games ladder and missions for 7 days', price: 2_000, days: 7, mult: 1.25 },
+  { id: 'aura-lightning', kind: 'aura', emoji: '⚡', name: 'Lightning', desc: 'Electric bolts crackle round your seat, cards and profile', price: 3_000, days: 7 },
+  { id: 'aura-aurora', kind: 'aura', emoji: '🌌', name: 'Aurora', desc: 'Northern lights flow inside your seat, cards and profile', price: 2_500, days: 7 },
+  { id: 'aura-fire', kind: 'aura', emoji: '🔥', name: 'Inferno', desc: 'Flames lick round your seat, cards and profile', price: 3_000, days: 7 },
+  { id: 'aura-galaxy', kind: 'aura', emoji: '✨', name: 'Galaxy', desc: 'Stars drift through your seat, cards and profile', price: 3_500, days: 7 },
+  { id: 'aura-gold', kind: 'aura', emoji: '👑', name: 'Royal Gold', desc: 'A gold shine sweeps over your seat, cards and profile', price: 5_000, days: 7 },
+  { id: 'win-fireworks', kind: 'win', emoji: '🎆', name: 'Fireworks', desc: 'Fireworks burst for everyone when you win', price: 1_500, days: 7 },
+  { id: 'win-goldrain', kind: 'win', emoji: '💰', name: 'Gold rain', desc: 'Coins rain down for everyone when you win', price: 2_000, days: 7 },
+  { id: 'win-thunder', kind: 'win', emoji: '🌩️', name: 'Thunder', desc: 'Lightning strikes the table when you win', price: 2_000, days: 7 },
+  { id: 'entry-spotlight', kind: 'entry', emoji: '🔦', name: 'Spotlight', desc: 'A spotlight and your name when you join a table', price: 1_000, days: 7 },
+  { id: 'entry-thunder', kind: 'entry', emoji: '⚡', name: 'Thunder entry', desc: 'A lightning flash and your name when you join a table', price: 1_500, days: 7 },
+];
+
+export const shopItemOf = (id: string | null | undefined) => SHOP_ITEMS.find((i) => i.id === id) ?? null;
+
+/** a running rental */
+export interface ShopRental {
+  id: string;
+  /** ISO time it runs out */
+  until: string;
+}
+
+/** GET /api/me/shop and every shop change */
+export interface ShopResponse {
+  coins: number;
+  /** rentals still running, soonest to end first */
+  active: ShopRental[];
+  /** what others see, from the active rentals; null when none is on */
+  wearing: Record<ShopLookKind, string | null>;
+}
+
+/** shop looks one player shows to others at a table (null: none on) */
+export interface ShopLook {
+  aura: string | null;
+  win: string | null;
+  entry: string | null;
 }

@@ -1,3 +1,4 @@
+import { shopWearOf } from './shop.js';
 import { MongoServerError, ObjectId, type Filter, type WithId } from 'mongodb';
 import { hashPassword, verifyPassword } from '../auth/passwords.js';
 import { hashToken, newToken } from '../auth/tokens.js';
@@ -168,7 +169,7 @@ export class UserService {
   async getAccounts(userIds: string[]): Promise<Map<string, AccountInfo>> {
     const ids = userIds.filter((id) => /^[a-f0-9]{24}$/i.test(id)).map((id) => new ObjectId(id));
     const users = await this.cols.users
-      .find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1, avatar: 1, cardBack: 1, tableTheme: 1, habits: 1 } })
+      .find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1, avatar: 1, cardBack: 1, tableTheme: 1, habits: 1, shop: 1 } })
       .toArray();
     return new Map(
       users.map((u) => [
@@ -178,6 +179,7 @@ export class UserService {
           table: tableThemeChoice(u) ?? DEFAULT_TABLE_THEME,
           // server-side only: the bots' read on how this player really plays
           habits: habitsFrom(u.habits),
+          shop: shopWearOf(u),
         },
       ]),
     );

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { PlayerLook } from '../../models.js';
 import type { Store } from '../../services/store.js';
+import { SHOP_LOOK_KINDS, shopWearOf } from '../../services/shop.js';
 import { toPublicUser } from '../../services/users.js';
 import {
   DEFAULT_CARD_BACK,
@@ -10,6 +11,8 @@ import {
   type ProfileOverview,
   type PublicUser,
   type RivalsResponse,
+  type ShopLookKind,
+  type ShopResponse,
 } from '../../types.js';
 import { asPayload, parseQueryInt } from '../../validate.js';
 import { ApiError } from '../errors.js';
@@ -126,6 +129,42 @@ export function meRoutes(store: Store, onLookChanged: (userId: string, look: Pla
       const user = await store.users.setTableTheme(currentUser(res)._id, table);
       lookChanged(user);
       res.json({ user });
+    }),
+  );
+
+  // the coin shop: what's running and what's worn
+  r.get(
+    '/shop',
+    ah(async (_req, res) => {
+      const body: ShopResponse = await store.shop.get(currentUser(res)._id);
+      res.json(body);
+    }),
+  );
+
+  // rent an item for its day or week (again: adds the time); a look is worn at once and shows in their room
+  r.post(
+    '/shop/buy',
+    ah(async (req, res) => {
+      const id = asPayload(req.body).id;
+      if (typeof id !== 'string' || id.length > 40) throw new ApiError(400, 'That item is not in the shop');
+      const { shop, user } = await store.shop.buy(currentUser(res)._id, id);
+      const pub = toPublicUser(user);
+      onLookChanged(pub.id, { avatar: pub.avatar, back: pub.cardBack ?? DEFAULT_CARD_BACK, table: pub.tableTheme ?? DEFAULT_TABLE_THEME, shop: shopWearOf(user) });
+      res.json({ shop, user: pub });
+    }),
+  );
+
+  // show another of their running looks of a kind, or none (id null)
+  r.post(
+    '/shop/wear',
+    ah(async (req, res) => {
+      const { kind, id } = asPayload(req.body);
+      if (typeof kind !== 'string' || !(SHOP_LOOK_KINDS as readonly string[]).includes(kind)) throw new ApiError(400, 'Pick aura, win or entry');
+      if (id !== null && (typeof id !== 'string' || id.length > 40)) throw new ApiError(400, 'Pick one of your shop items');
+      const { shop, user } = await store.shop.wear(currentUser(res)._id, kind as ShopLookKind, id);
+      const pub = toPublicUser(user);
+      onLookChanged(pub.id, { avatar: pub.avatar, back: pub.cardBack ?? DEFAULT_CARD_BACK, table: pub.tableTheme ?? DEFAULT_TABLE_THEME, shop: shopWearOf(user) });
+      res.json({ shop, user: pub });
     }),
   );
 

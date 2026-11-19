@@ -293,6 +293,7 @@ export function registerHandlers(
       back: fresh?.back ?? DEFAULT_CARD_BACK,
       table: fresh?.table ?? DEFAULT_TABLE_THEME,
       habits: fresh?.habits ?? null,
+      shop: fresh?.shop,
     };
   };
 
@@ -866,6 +867,7 @@ export function registerHandlers(
       member.avatar = look.avatar;
       member.back = look.back;
       member.table = look.table;
+      if (look.shop) member.shop = look.shop;
       broadcast(room);
     },
   };

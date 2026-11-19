@@ -7,6 +7,7 @@ import {
   DAILY_GAME_REWARDS,
   levelOf,
   MIN_REWARD_GAME_SEC,
+  missionOf,
   SECRET_XP,
   xpOf,
   type CoinResult,
@@ -16,6 +17,7 @@ import {
 import type { LeagueService } from './league.js';
 import type { MissionCounts, MissionDone, MissionService } from './missions.js';
 import type { RankedService } from './ranked.js';
+import { boostOf } from './shop.js';
 import { statsOf } from './users.js';
 
 /** a friendship's key: both user ids sorted and joined, as in services/friends.ts */
@@ -68,10 +70,16 @@ export class GameRecorder {
       stats: p.stats,
     }));
 
+    // shop boosts running for each account, read once when the game ends; they only touch games that count
+    const boosts = counts ? await this.boostsOf(players) : new Map<string, { xp: number; coins: number }>();
+    const boostOfP = (p: GamePlayerDoc) => (p.userId ? boosts.get(p.userId.toHexString()) : undefined) ?? { xp: 1, coins: 1 };
+    const boostCoins = new Map<string, number>();
+    const addBoostCoins = (memberId: string, n: number) => n > 0 && boostCoins.set(memberId, (boostCoins.get(memberId) ?? 0) + n);
+
     // coins only move when the game really finished; a stopped game costs nobody anything
     const pot = finished ? await this.settleStake(players, record.config.stake) : 0;
     if (finished) await this.settleBets(players, record.bets);
-    if (counts) await this.payDailyGameRewards(players);
+    if (counts) await this.payDailyGameRewards(players, (p) => boostOfP(p).coins, addBoostCoins);
 
     await this.cols.games.insertOne({
       _id: new ObjectId(),
@@ -99,12 +107,17 @@ export class GameRecorder {
     // a secret mission card done pays bonus XP, only in a game that counts for a logged-in player who wasn't removed
     const secretDone = new Set(record.players.filter((p) => p.secret?.done).map((p) => p.memberId));
     const secretXpOf = (p: GamePlayerDoc & { memberId: string }) => (counts && p.userId && !p.kicked && secretDone.has(p.memberId) ? SECRET_XP : 0);
+    // a shop XP boost adds to this game's own XP (not missions or secret cards), in a game that counts
+    const boostXpOf = (p: GamePlayerDoc & { memberId: string }) =>
+      counts && p.userId && !p.kicked ? Math.round(xpOf(asLifetime(p)) * (boostOfP(p).xp - 1)) : 0;
 
-    if (finished) await this.addLifetimeStats(players, record.config.game === 'crazy7', secretXpOf);
+    if (finished) await this.addLifetimeStats(players, record.config.game === 'crazy7', (p) => secretXpOf(p) + boostXpOf(p));
     // how each person really plays, for the bots; a stopped game's plays count too
     if (record.config.game !== 'crazy7') await this.addHabits(players);
     // missions move only with games that count, like the daily ladder; finished ones are paid as they're saved
-    const missionsDone = counts ? await this.countMissions(players, record.config.game === 'crazy7', secretDone) : new Map<string, MissionDone[]>();
+    const missionsDone = counts
+      ? await this.countMissions(players, record.config.game === 'crazy7', secretDone, (p) => boostOfP(p).coins, addBoostCoins)
+      : new Map<string, MissionDone[]>();
     // the weekly friends league counts games of 2+ logged-in people that count; never coins
     const people = players.filter((p) => p.userId && !p.kicked);
     if (counts && people.length >= 2) {
@@ -148,6 +161,8 @@ export class GameRecorder {
         // both already added to coins and stats.bonusXp above
         missionsDone: u ? (missionsDone.get(p.memberId) ?? []) : [],
         secretXp: u ? secretXpOf(p) : 0,
+        boostXp: u ? boostXpOf(p) : 0,
+        boostCoins: u ? (boostCoins.get(p.memberId) ?? 0) : 0,
         rank: u ? (ranks.get(p.memberId) ?? null) : null,
       };
     });
@@ -208,8 +223,21 @@ export class GameRecorder {
     }
   }
 
-  /** adds one to each player's games today (IST); reaching a DAILY_GAME_REWARDS step pays its coins, win or lose */
-  private async payDailyGameRewards(players: GamePlayerDoc[]): Promise<void> {
+  /** each logged-in player's running shop boosts (1 when none) */
+  private async boostsOf(players: GamePlayerDoc[]): Promise<Map<string, { xp: number; coins: number }>> {
+    const ids = players.flatMap((p) => (p.userId && !p.kicked ? [p.userId] : []));
+    if (ids.length === 0) return new Map();
+    const now = new Date();
+    const users = await this.cols.users.find({ _id: { $in: ids } }, { projection: { shop: 1 } }).toArray();
+    return new Map(users.map((u) => [u._id.toHexString(), { xp: boostOf(u, 'xp', now), coins: boostOf(u, 'coins', now) }]));
+  }
+
+  /** adds one to each player's games today (IST); reaching a DAILY_GAME_REWARDS step pays its coins (more with a coin boost), win or lose */
+  private async payDailyGameRewards<P extends GamePlayerDoc & { memberId: string }>(
+    players: P[],
+    coinBoostOf: (p: P) => number,
+    onBoost: (memberId: string, extra: number) => void,
+  ): Promise<void> {
     const today = istDay();
     for (const p of players) {
       if (!p.userId || p.kicked) continue;
@@ -226,10 +254,12 @@ export class GameRecorder {
         ],
         { returnDocument: 'after', projection: { gamesToday: 1 } },
       );
-      const reward = DAILY_GAME_REWARDS.find((r) => r.games === user?.gamesToday)?.coins ?? 0;
+      const base = DAILY_GAME_REWARDS.find((r) => r.games === user?.gamesToday)?.coins ?? 0;
+      const reward = Math.floor(base * coinBoostOf(p));
       if (reward > 0) {
         await this.cols.users.updateOne({ _id: p.userId }, { $inc: { coins: reward } });
         p.bonus = reward;
+        onBoost(p.memberId, reward - base);
       }
     }
   }
@@ -267,6 +297,8 @@ export class GameRecorder {
     players: (GamePlayerDoc & { memberId: string })[],
     crazy7: boolean,
     secretDone: Set<string>,
+    coinBoostOf: (p: GamePlayerDoc & { memberId: string }) => number,
+    onBoost: (memberId: string, extra: number) => void,
   ): Promise<Map<string, MissionDone[]>> {
     const counted = players.filter((p) => p.userId && !p.kicked);
     // a failed friends lookup only loses this game's friends missions
@@ -291,7 +323,11 @@ export class GameRecorder {
         secrets: secretDone.has(p.memberId) ? 1 : 0,
       };
       try {
-        done.set(p.memberId, await this.missions.count(p.userId!, tally));
+        const boost = coinBoostOf(p);
+        const finishedNow = await this.missions.count(p.userId!, tally, undefined, boost);
+        done.set(p.memberId, finishedNow);
+        // the boost's share of the coins paid
+        onBoost(p.memberId, finishedNow.reduce((sum, d) => sum + d.coins - (missionOf(d.id)?.coins ?? d.coins), 0));
       } catch (err) {
         // a missions hiccup never costs the game's other results
         console.error('[missions] could not count a game:', (err as Error).message);
