@@ -202,11 +202,13 @@ describe.skipIf(!MONGO)('coin shop (MongoDB)', () => {
       { memberId: 'b', userId: b.id, loser: true, stats: { ...zero, ...stats } },
     ]);
     const gameXp = xpOf({ gamesPlayed: 1, wins: 1, losses: 0, bluffs: 3, bluffsCaught: 1, goodCalls: 2, wrongCalls: 0, cardsPickedUp: 0, plays: 0, chances: 0, crazy7Games: 0, bonusXp: 0 });
-    expect(res.get('a')!.boostXp).toBe(gameXp * 2);
+    // XP Diamond is 2x: one extra game's worth
+    expect(res.get('a')!.boostXp).toBe(Math.round(gameXp * (shopItemOf('xp-d3')!.mult! - 1)));
+    expect(shopItemOf('xp-d3')!.mult).toBe(2);
     expect(res.get('b')!.boostXp).toBe(0);
     // mission XP is paid as usual on top, not boosted
     const winXp = missionOf('d-win1')!.xp;
-    expect((await doc(a.oid)).stats.bonusXp).toBe(gameXp * 2 + winXp);
+    expect((await doc(a.oid)).stats.bonusXp).toBe(gameXp + winXp);
     // a short game earns its plain XP and no boost
     const short = await play([{ memberId: 'a', userId: a.id }, { memberId: 'b', userId: b.id }], 20);
     expect(short.get('a')!.boostXp).toBe(0);

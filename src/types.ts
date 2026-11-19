@@ -1176,11 +1176,11 @@ export interface ShopItem {
 }
 
 export const SHOP_ITEMS: readonly ShopItem[] = [
-  { id: 'xp-d15', kind: 'xp', emoji: '⚡', name: 'XP Spark', desc: '1.5x XP from games for a day', price: 500, days: 1, mult: 1.5 },
-  { id: 'xp-d2', kind: 'xp', emoji: '🔥', name: 'XP Blaze', desc: '2x XP from games for a day', price: 1_200, days: 1, mult: 2 },
-  { id: 'xp-d3', kind: 'xp', emoji: '💎', name: 'XP Diamond', desc: '3x XP from games for a day', price: 3_000, days: 1, mult: 3 },
-  { id: 'xp-w15', kind: 'xp', emoji: '⚡', name: 'XP Spark week', desc: '1.5x XP from games for 7 days', price: 2_500, days: 7, mult: 1.5 },
-  { id: 'xp-w2', kind: 'xp', emoji: '🔥', name: 'XP Blaze week', desc: '2x XP from games for 7 days', price: 6_000, days: 7, mult: 2 },
+  { id: 'xp-d15', kind: 'xp', emoji: '⚡', name: 'XP Spark', desc: '1.25x XP from games for a day', price: 500, days: 1, mult: 1.25 },
+  { id: 'xp-d2', kind: 'xp', emoji: '🔥', name: 'XP Blaze', desc: '1.5x XP from games for a day', price: 1_200, days: 1, mult: 1.5 },
+  { id: 'xp-d3', kind: 'xp', emoji: '💎', name: 'XP Diamond', desc: '2x XP from games for a day', price: 3_000, days: 1, mult: 2 },
+  { id: 'xp-w15', kind: 'xp', emoji: '⚡', name: 'XP Spark week', desc: '1.25x XP from games for 7 days', price: 2_500, days: 7, mult: 1.25 },
+  { id: 'xp-w2', kind: 'xp', emoji: '🔥', name: 'XP Blaze week', desc: '1.5x XP from games for 7 days', price: 6_000, days: 7, mult: 1.5 },
   { id: 'coins-w25', kind: 'coins', emoji: '🪙', name: 'Coin Magnet', desc: '+25% coins from the daily games ladder and missions for 7 days', price: 2_000, days: 7, mult: 1.25 },
   { id: 'aura-lightning', kind: 'aura', emoji: '⚡', name: 'Lightning', desc: 'Electric bolts crackle round your seat, cards and profile', price: 3_000, days: 7 },
   { id: 'aura-aurora', kind: 'aura', emoji: '🌌', name: 'Aurora', desc: 'Northern lights flow inside your seat, cards and profile', price: 2_500, days: 7 },
