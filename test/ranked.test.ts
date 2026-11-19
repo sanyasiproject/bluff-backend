@@ -64,9 +64,10 @@ describe('rank points from a rated game', () => {
     expect(s.doc.today).toBe(150);
     // at the cap a win moves nothing, a loss still counts
     expect(nextStanding(s.doc, 1, b, a, true, DAY).result).toMatchObject({ after: 430, held: 'cap' });
+    // a loss costs 70% of what the same win gives: -100 in skill is -70 points
     s = nextStanding(s.doc, 1, b, { mu: 22.5, sigma: 5.9 }, false, DAY);
-    expect(s.result).toEqual({ before: 430, after: 330, division: 'silver', held: null });
-    expect(s.doc.today).toBe(50);
+    expect(s.result).toEqual({ before: 430, after: 360, division: 'silver', held: null });
+    expect(s.doc.today).toBe(80);
     // losses are capped too
     s = nextStanding(standing({ points: 1000, floor: 700, today: -120 }), 1, b, { mu: 23, sigma: 5.9 }, false, DAY);
     expect(s.result).toMatchObject({ after: 970, held: 'cap' });
@@ -91,23 +92,36 @@ describe('rank points from a rated game', () => {
     expect(s.result.division).toBe('silver');
     // the floor stays where it was after a drop within the division
     s = nextStanding(standing({ points: 1250, floor: 1200 }), 1, b, { mu: 24, sigma: 5.9 }, false, DAY);
-    expect(s.doc).toMatchObject({ points: 1210, floor: 1200 });
+    expect(s.doc).toMatchObject({ points: 1222, floor: 1200 });
   });
 
-  it('pays back losses the floor held off before a win adds points, so taking turns to win lifts nobody', () => {
+  it('pays back losses the floor held off before a win adds points; wins count for more than losses', () => {
     const lost = nextStanding(standing(), 1, DEFAULT_RATING, { mu: 22.5, sigma: 5.9 }, false, DAY);
     expect(lost.result).toEqual({ before: 0, after: 0, division: 'bronze', held: 'floor' });
-    expect(lost.doc.debt).toBe(100);
-    // the next win of 100 only pays it back
+    expect(lost.doc.debt).toBe(70);
+    // the next win of 100 pays back the 70 first, then 30 counts
     const won = nextStanding(lost.doc, 1, { mu: 22.5, sigma: 5.9 }, { mu: 25, sigma: 5.8 }, true, DAY);
-    expect(won.result).toEqual({ before: 0, after: 0, division: 'bronze', held: 'debt' });
-    expect(won.doc).toMatchObject({ debt: 0, today: 0 });
-    // after that, wins count again
+    expect(won.result).toEqual({ before: 0, after: 30, division: 'bronze', held: 'debt' });
+    expect(won.doc).toMatchObject({ debt: 0, today: 30 });
+    // after that, wins count in full
     const again = nextStanding(won.doc, 1, { mu: 25, sigma: 5.8 }, { mu: 26, sigma: 5.7 }, true, DAY);
-    expect(again.result).toMatchObject({ after: 40, held: null });
+    expect(again.result).toMatchObject({ after: 70, held: null });
     // a loss the daily cap held off is owed too
     const capped = nextStanding(standing({ points: 1000, floor: 700, today: -120 }), 1, DEFAULT_RATING, { mu: 23, sigma: 5.9 }, false, DAY);
-    expect(capped.doc).toMatchObject({ points: 970, debt: 50 });
+    expect(capped.doc).toMatchObject({ points: 970, debt: 26 });
+  });
+
+  it('a Rank Shield stops a loss that would cost points, and only then', () => {
+    const [b] = move(0);
+    const s = nextStanding(standing({ points: 500, floor: 300 }), 1, b, { mu: 23, sigma: 5.9 }, false, DAY, true);
+    expect(s.shielded).toBe(true);
+    expect(s.result).toEqual({ before: 500, after: 500, division: 'silver', held: 'shield' });
+    // nothing is owed for it, the skill still drops
+    expect(s.doc).toMatchObject({ points: 500, debt: 0, today: 0, mu: 23, games: 1 });
+    // a win, or a loss the floor already stops, keeps the shield
+    expect(nextStanding(standing({ points: 500, floor: 300 }), 1, b, { mu: 26, sigma: 5.9 }, true, DAY, true).shielded).toBe(false);
+    const floor = nextStanding(standing({ points: 300, floor: 300 }), 1, b, { mu: 23, sigma: 5.9 }, false, DAY, true);
+    expect([floor.shielded, floor.result.held]).toEqual([false, 'floor']);
   });
 
   it('shows a standing only in its own season', () => {
@@ -366,14 +380,16 @@ describe.skipIf(!MONGO)('ranked (MongoDB)', () => {
     await setRank(jo, { points: 1000, floor: 700, day: istDay(THU) });
     let res = await store.ranked.rate(seats(ia, jo), THU);
     expect(res.get(ia.username)).toEqual({ before: 0, after: 105, division: 'bronze', held: null });
-    expect(res.get(jo.username)).toEqual({ before: 1000, after: 895, division: 'gold', held: null });
+    // the loser drops 70% of the winner's gain
+    expect(res.get(jo.username)).toEqual({ before: 1000, after: 927, division: 'gold', held: null });
     res = await store.ranked.rate(seats(ia, jo), THU);
     expect(res.get(ia.username)).toMatchObject({ after: RANK_DAILY_CAP, held: 'cap' });
-    expect(res.get(jo.username)).toMatchObject({ after: 1000 - RANK_DAILY_CAP, held: 'cap' });
+    // smaller losses reach the cap a game later
+    expect(res.get(jo.username)).toMatchObject({ before: 927, held: null });
     const mu = (await rankDoc(ia))!.mu;
     res = await store.ranked.rate(seats(ia, jo), THU);
     expect(res.get(ia.username)).toMatchObject({ before: 150, after: 150, held: 'cap' });
-    expect(res.get(jo.username)).toMatchObject({ before: 850, after: 850, held: 'cap' });
+    expect(res.get(jo.username)).toMatchObject({ after: 1000 - RANK_DAILY_CAP, held: 'cap' });
     expect((await rankDoc(ia))!.mu).toBeGreaterThan(mu);
     expect(rankViewOf(await rankDoc(ia), store.settings.rankedSeason, THU)).toMatchObject({ points: 150, today: 150, games: 3, wins: 3 });
     expect(rankViewOf(await rankDoc(jo), store.settings.rankedSeason, THU)).toMatchObject({ points: 850, today: -150, games: 3, wins: 0 });

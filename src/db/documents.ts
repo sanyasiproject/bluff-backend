@@ -70,6 +70,8 @@ export interface ShopDoc {
   rentals: { id: string; until: Date }[];
   /** the rental shown for each look kind; ignored once that rental runs out */
   wearing: Partial<Record<ShopLookKind, string>>;
+  /** Rank Shields held (older documents: none) */
+  shields?: number;
 }
 
 /** one IST week of league counters */

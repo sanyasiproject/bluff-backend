@@ -1,8 +1,8 @@
-import { ObjectId, type Filter } from 'mongodb';
+import { ObjectId, type Filter, type UpdateFilter } from 'mongodb';
 import { istDay } from '../days.js';
 import type { Actor, Collections, RankedDoc, UserDoc } from '../db/documents.js';
 import { DEFAULT_RATING, rate, type Rating } from '../rating.js';
-import { divisionOf, RANK_DAILY_CAP, type CoinResult, type PublicProfile, type RankView } from '../types.js';
+import { divisionOf, RANK_DAILY_CAP, RANK_LOSS_SHARE, type CoinResult, type PublicProfile, type RankView } from '../types.js';
 import { ApiError } from '../http/errors.js';
 import { rankedSeasonNow, type SettingsService } from './settings.js';
 
@@ -65,21 +65,28 @@ export function nextStanding(
   after: Rating,
   won: boolean,
   day: string,
-): { doc: RankedDoc; result: RankResult } {
+  /** they hold a Rank Shield: a loss that would cost points costs none and uses it up */
+  shield = false,
+): { doc: RankedDoc; result: RankResult; shielded: boolean } {
   const points0 = prev?.points ?? 0;
   const floor0 = prev?.floor ?? 0;
   const debt0 = prev?.debt ?? 0;
   const sofar = prev && prev.day === day ? prev.today : 0;
-  const raw = Math.round(POINTS_PER_MU * (after.mu - before.mu));
+  const skill = Math.round(POINTS_PER_MU * (after.mu - before.mu));
+  // a loss costs less than the same win gives, so wins count for more
+  const raw = skill < 0 ? Math.round(skill * RANK_LOSS_SHARE) : skill;
   // a gain first pays back losses the floor or the cap held off, so taking turns to win can't lift both players
   const payback = raw > 0 ? Math.min(debt0, raw) : 0;
   const wanted = raw - payback;
   // today's total stays within the cap either way, and a win never turns into a loss
   const allowed = Math.min(Math.max(wanted, Math.min(0, -RANK_DAILY_CAP - sofar)), Math.max(0, RANK_DAILY_CAP - sofar));
-  const points = Math.max(floor0, points0 + allowed);
+  const capped = Math.max(floor0, points0 + allowed);
+  // a shield stops a loss that would really cost points; nothing is owed for it
+  const shielded = shield && capped < points0;
+  const points = shielded ? points0 : capped;
   const change = points - points0;
-  // the part of a loss that was held off is owed
-  const debt = debt0 - payback + (raw < 0 ? change - raw : 0);
+  // the part of a loss that was held off is owed (not when a shield took it)
+  const debt = debt0 - payback + (raw < 0 && !shielded ? change - raw : 0);
   const doc: RankedDoc = {
     season,
     mu: after.mu,
@@ -94,8 +101,8 @@ export function nextStanding(
     debt,
   };
   // the floor is what stopped it when it bit last; otherwise the daily cap, if it trimmed anything; otherwise a payback
-  const held = points !== points0 + allowed ? 'floor' : allowed !== wanted ? 'cap' : payback > 0 ? 'debt' : null;
-  return { doc, result: { before: points0, after: points, division: divisionOf(points).id, held } };
+  const held = shielded ? 'shield' : points !== points0 + allowed ? 'floor' : allowed !== wanted ? 'cap' : payback > 0 ? 'debt' : null;
+  return { doc, result: { before: points0, after: points, division: divisionOf(points).id, held }, shielded };
 }
 
 /** ranked play: a hidden skill rating per season, shown as rank points with divisions, floors and a daily cap */
@@ -116,14 +123,15 @@ export class RankedService {
     const ranks = groups.length === 2 && teams ? [1, 2] : ranksOf(seats);
     const day = istDay(now);
     const season = this.settings.rankedSeason;
-    const users = await this.cols.users.find({ _id: { $in: seats.map((s) => s.userId) } }, { projection: { ranked: 1 } }).toArray();
+    const users = await this.cols.users.find({ _id: { $in: seats.map((s) => s.userId) } }, { projection: { ranked: 1, 'shop.shields': 1 } }).toArray();
     const stored = new Map(users.map((u) => [u._id.toHexString(), u.ranked]));
+    const shieldsOf = new Map(users.map((u) => [u._id.toHexString(), u.shop?.shields ?? 0]));
     // everyone's skill going into the game
     const before = seats.map((s) => ratingOf(ofSeason(stored.get(s.userId.toHexString()), season)));
     for (const [i, seat] of seats.entries()) {
       const key = seat.userId.toHexString();
       if (!stored.has(key)) continue;
-      const result = await this.save(seat, i, before, groups, ranks, stored.get(key), day, season);
+      const result = await this.save(seat, i, before, groups, ranks, stored.get(key), shieldsOf.get(key) ?? 0, day, season);
       if (result) out.set(seat.memberId, result);
     }
     return out;
@@ -156,10 +164,12 @@ export class RankedService {
     groups: number[][],
     ranks: number[],
     first: RankedDoc | undefined,
+    firstShields: number,
     day: string,
     season: number,
   ): Promise<RankResult | null> {
     let stored = first;
+    let shields = firstShields;
     const g = groups.findIndex((group) => group.includes(i));
     for (let tries = 0; tries < MAX_TRIES; tries++) {
       // a new season started since this game was read: it belongs to the old one, which is over
@@ -168,14 +178,18 @@ export class RankedService {
       // my rating as it is now; everyone else's as it was going into this game
       const mine = ratingOf(prev);
       const after = rate(groups.map((group) => group.map((j) => (j === i ? mine : before[j]))), ranks)[g][groups[g].indexOf(i)];
-      const { doc, result } = nextStanding(prev, season, mine, after, seat.won, day);
+      const { doc, result, shielded } = nextStanding(prev, season, mine, after, seat.won, day, shields > 0);
       const guard: Filter<UserDoc> = stored
         ? { _id: seat.userId, 'ranked.season': stored.season, 'ranked.games': stored.games }
         : { _id: seat.userId, ranked: { $exists: false } };
-      if ((await this.cols.users.updateOne(guard, { $set: { ranked: doc } })).matchedCount === 1) return result;
-      const user = await this.cols.users.findOne({ _id: seat.userId }, { projection: { ranked: 1 } });
+      // a shield is used up in the same write, and only if it's still there
+      if (shielded) guard['shop.shields'] = { $gte: 1 };
+      const update: UpdateFilter<UserDoc> = shielded ? { $set: { ranked: doc }, $inc: { 'shop.shields': -1, 'shop.rev': 1 } } : { $set: { ranked: doc } };
+      if ((await this.cols.users.updateOne(guard, update)).matchedCount === 1) return result;
+      const user = await this.cols.users.findOne({ _id: seat.userId }, { projection: { ranked: 1, 'shop.shields': 1 } });
       if (!user) return null;
       stored = user.ranked;
+      shields = user.shop?.shields ?? 0;
     }
     console.error('[ranked] gave up saving a rank after', MAX_TRIES, 'tries');
     return null;

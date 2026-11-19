@@ -563,8 +563,8 @@ export interface CoinResult {
   boostXp?: number;
   /** extra coins from a shop coin boost on the daily ladder and missions, already in coins (missing from older servers) */
   boostCoins?: number;
-  /** a rated game's rank points before and after, the division now, and what held the change back: the daily cap, the floor, or paying back losses they held off earlier; null otherwise */
-  rank: { before: number; after: number; division: RankDivisionId; held: 'cap' | 'floor' | 'debt' | null } | null;
+  /** a rated game's rank points before and after, the division now, and what held the change back: the daily cap, the floor, paying back losses they held off earlier, or a Rank Shield used up; null otherwise */
+  rank: { before: number; after: number; division: RankDivisionId; held: 'cap' | 'floor' | 'debt' | 'shield' | null } | null;
 }
 
 export interface LastPlayView {
@@ -915,6 +915,9 @@ export const divisionOf = (points: number) => [...RANK_DIVISIONS].reverse().find
 /** rank points a player can win or lose in one IST day, so one night can't make or break a season */
 export const RANK_DAILY_CAP = 150;
 
+/** a ranked loss costs this share of the points the same win would give, so wins count for more */
+export const RANK_LOSS_SHARE = 0.7;
+
 /** my ranked standing this season */
 export interface RankView {
   season: number;
@@ -1156,8 +1159,8 @@ export interface Announcement {
 
 // ---------- coin shop: every item is rented for a day or a week, never owned ----------
 
-/** xp: more XP per game · coins: more coins from the daily ladder and missions · aura: animated seat box, card backs and profile card · win: a burst everyone sees when you win · entry: a flash when you join a table */
-export type ShopKind = 'xp' | 'coins' | 'aura' | 'win' | 'entry';
+/** xp: more XP per game · coins: more coins from the daily ladder and missions · aura: animated seat box, card backs and profile card · win: a burst everyone sees when you win · entry: a flash when you join a table · shield: a one-use card that stops a ranked loss */
+export type ShopKind = 'xp' | 'coins' | 'aura' | 'win' | 'entry' | 'shield';
 
 /** the shop slots a player shows to others: one of each, from their active rentals */
 export type ShopLookKind = 'aura' | 'win' | 'entry';
@@ -1169,8 +1172,8 @@ export interface ShopItem {
   name: string;
   desc: string;
   price: number;
-  /** how long one buy lasts; buying it again while it runs adds this much more */
-  days: 1 | 7;
+  /** how long one buy lasts; buying it again while it runs adds this much more. 0: a one-use card, not a rental */
+  days: 0 | 1 | 7;
   /** xp and coins: the multiplier (1.5 = +50%) */
   mult?: number;
 }
@@ -1182,6 +1185,7 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
   { id: 'xp-w15', kind: 'xp', emoji: '⚡', name: 'XP Spark week', desc: '1.25x XP from games for 7 days', price: 2_500, days: 7, mult: 1.25 },
   { id: 'xp-w2', kind: 'xp', emoji: '🔥', name: 'XP Blaze week', desc: '1.5x XP from games for 7 days', price: 6_000, days: 7, mult: 1.5 },
   { id: 'coins-w25', kind: 'coins', emoji: '🪙', name: 'Coin Magnet', desc: '+25% coins from the daily games ladder and missions for 7 days', price: 2_000, days: 7, mult: 1.25 },
+  { id: 'shield', kind: 'shield', emoji: '🛡️', name: 'Rank Shield', desc: 'Your next ranked loss costs no rank points. Used up on that loss', price: 300, days: 0 },
   { id: 'aura-lightning', kind: 'aura', emoji: '⚡', name: 'Lightning', desc: 'Electric bolts crackle round your seat, cards and profile', price: 3_000, days: 7 },
   { id: 'aura-aurora', kind: 'aura', emoji: '🌌', name: 'Aurora', desc: 'Northern lights flow inside your seat, cards and profile', price: 2_500, days: 7 },
   { id: 'aura-fire', kind: 'aura', emoji: '🔥', name: 'Inferno', desc: 'Flames lick round your seat, cards and profile', price: 3_000, days: 7 },
@@ -1195,6 +1199,9 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
 ];
 
 export const shopItemOf = (id: string | null | undefined) => SHOP_ITEMS.find((i) => i.id === id) ?? null;
+
+/** Rank Shields one account can hold */
+export const MAX_SHIELDS = 5;
 
 /** a running rental */
 export interface ShopRental {
@@ -1210,6 +1217,8 @@ export interface ShopResponse {
   active: ShopRental[];
   /** what others see, from the active rentals; null when none is on */
   wearing: Record<ShopLookKind, string | null>;
+  /** Rank Shields held, each used up by one ranked loss (missing from older servers) */
+  shields?: number;
 }
 
 /** shop looks one player shows to others at a table (null: none on) */

@@ -1,7 +1,7 @@
 import { ObjectId, type Filter, type UpdateFilter, type WithId } from 'mongodb';
 import type { Collections, ShopDoc, UserDoc } from '../db/documents.js';
 import type { ShopWear } from '../models.js';
-import { SHOP_ITEMS, shopItemOf, type ShopItem, type ShopLook, type ShopLookKind, type ShopResponse } from '../types.js';
+import { MAX_SHIELDS, SHOP_ITEMS, shopItemOf, type ShopItem, type ShopLook, type ShopLookKind, type ShopResponse } from '../types.js';
 import { ApiError } from '../http/errors.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -49,6 +49,7 @@ export function shopResponseOf(u: WithId<UserDoc>, now = new Date()): ShopRespon
       .sort((a, b) => a.until.getTime() - b.until.getTime())
       .map((r) => ({ id: r.id, until: r.until.toISOString() })),
     wearing: { aura: wear.aura?.id ?? null, win: wear.win?.id ?? null, entry: wear.entry?.id ?? null },
+    shields: u.shop?.shields ?? 0,
   };
 }
 
@@ -71,19 +72,27 @@ export class ShopService {
       if (!user) throw new ApiError(404, 'User not found');
       if (user.coins < item.price) throw new ApiError(400, `You need 🪙 ${item.price - user.coins} more for ${item.name}`);
       const active = activeRentals(user.shop, now);
+      const rev = user.shop?.rev ?? 0;
+      const shields = user.shop?.shields ?? 0;
+      if (item.kind === 'shield' && shields >= MAX_SHIELDS) throw new ApiError(400, `You can hold ${MAX_SHIELDS} Rank Shields. Lose a ranked game to use one`);
       if (item.kind === 'xp' || item.kind === 'coins') {
         const other = active.find((r) => r.id !== item.id && shopItemOf(r.id)?.kind === item.kind);
         if (other) throw new ApiError(400, `${shopItemOf(other.id)!.name} is still running. Buy it again to add time, or wait till it ends`);
       }
-      const current = active.find((r) => r.id === item.id);
-      const from = current ? current.until.getTime() : now.getTime();
-      const until = new Date(from + item.days * DAY_MS);
-      if (until.getTime() - now.getTime() > MAX_AHEAD_DAYS * DAY_MS) throw new ApiError(400, `You can rent ${item.name} up to ${MAX_AHEAD_DAYS} days ahead`);
-      const rev = user.shop?.rev ?? 0;
+      let rentals = active;
+      if (item.kind !== 'shield') {
+        const current = active.find((r) => r.id === item.id);
+        const from = current ? current.until.getTime() : now.getTime();
+        const until = new Date(from + item.days * DAY_MS);
+        if (until.getTime() - now.getTime() > MAX_AHEAD_DAYS * DAY_MS) throw new ApiError(400, `You can rent ${item.name} up to ${MAX_AHEAD_DAYS} days ahead`);
+        rentals = [...active.filter((r) => r.id !== item.id), { id: item.id, until }];
+      }
       const shop: ShopDoc = {
         rev: rev + 1,
-        rentals: [...active.filter((r) => r.id !== item.id), { id: item.id, until }],
+        rentals,
         wearing: { ...(user.shop?.wearing ?? {}), ...(isLook(item.kind) ? { [item.kind]: item.id } : {}) },
+        // a shield is a card you hold, not a rental
+        shields: shields + (item.kind === 'shield' ? 1 : 0),
       };
       // only when nobody wrote since the read, and the coins are still there
       const guard: Filter<UserDoc> = { _id: userId, coins: { $gte: item.price }, ...(user.shop ? { 'shop.rev': rev } : { shop: { $exists: false } }) };
@@ -98,7 +107,7 @@ export class ShopService {
         via: 'player',
         amount: -item.price,
         balanceAfter: saved.coins,
-        detail: `Shop: ${item.name} (${item.days === 1 ? '1 day' : '7 days'})`,
+        detail: `Shop: ${item.name}${item.days === 0 ? '' : item.days === 1 ? ' (1 day)' : ' (7 days)'}`,
         createdAt: now,
       });
       return { shop: shopResponseOf(saved, now), user: saved, item };

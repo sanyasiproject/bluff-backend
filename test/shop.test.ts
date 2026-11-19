@@ -235,6 +235,28 @@ describe.skipIf(!MONGO)('coin shop (MongoDB)', () => {
     expect(res.get('b')!.bonus).toBe(100);
   });
 
+  it('sells Rank Shields as cards you hold, up to 5, and a ranked loss uses one up', async () => {
+    const a = await account(5_000);
+    const b = await account(5_000);
+    for (let i = 1; i <= 5; i++) expect((await buy(a.token, 'shield')).body.shop.shields).toBe(i);
+    const full = await buy(a.token, 'shield');
+    expect(full.status).toBe(400);
+    expect((await doc(a.oid)).coins).toBe(5_000 - 5 * 300);
+    // a shield is not a rental
+    expect((await doc(a.oid)).shop!.rentals).toEqual([]);
+    const season = store.settings.rankedSeason;
+    await users.updateOne({ _id: a.oid }, { $set: { ranked: { season, mu: 25, sigma: 6, points: 500, floor: 300, games: 4, wins: 2, day: istDay(), today: 0 } } });
+    const res = await store.ranked.rate([
+      { memberId: 'b', userId: b.oid, won: true, place: 1 },
+      { memberId: 'a', userId: a.oid, won: false, place: null },
+    ]);
+    expect(res.get('a')).toMatchObject({ before: 500, after: 500, held: 'shield' });
+    const after = await doc(a.oid);
+    expect([after.shop!.shields, after.ranked!.points, after.ranked!.debt]).toEqual([4, 500, 0]);
+    // the winner still gains
+    expect(res.get('b')!.after).toBeGreaterThan(0);
+  });
+
   it('lists every item with a price and a length', () => {
     for (const id of ['xp-d15', 'xp-d2', 'xp-d3', 'xp-w15', 'xp-w2', 'coins-w25']) expect(shopItemOf(id)!.mult).toBeGreaterThan(1);
   });
