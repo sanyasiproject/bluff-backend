@@ -337,7 +337,7 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect(kia.body.user.cardBack).toBe(null);
     expect(kia.body.user.tableTheme).toBe(null);
     expect((await api().post('/api/me/table').set(kiaAuth).send({ table: 'felt' })).body.error).toBe('Pick one of the tables');
-    expect((await api().post('/api/me/table').set(kiaAuth).send({ table: 'royal' })).body.error).toBe('Reach level 3 for that table');
+    expect((await api().post('/api/me/table').set(kiaAuth).send({ table: 'royal' })).body.error).toBe('Reach level 2 for that table');
     expect((await api().post('/api/me/back').set(kiaAuth).send({ back: 'nope' })).body.error).toBe('Pick one of the card backs');
     expect((await api().post('/api/me/back').set(kiaAuth).send({ back: 42 })).body.error).toBe('Pick one of the card backs');
     expect((await api().post('/api/me/back').set(kiaAuth).send({ back: 'ocean' })).body.error).toBe('Reach level 2 for that card back');
