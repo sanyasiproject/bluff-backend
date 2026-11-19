@@ -12,6 +12,9 @@ import {
   sazaOf,
   STAKES,
   THROWS,
+  VOICE_MAX_BYTES,
+  VOICE_MAX_MS,
+  VOICE_TYPES,
   type BotLevel,
   type ChatKind,
   type GameConfig,
@@ -62,12 +65,14 @@ export function parseConfig(p: Payload): GameConfig {
   const saza = p.saza === undefined ? false : typeof p.saza === 'boolean' ? p.saza : null;
   const secretLies = p.secretLies === undefined ? false : typeof p.secretLies === 'boolean' ? p.secretLies : null;
   const ranked = p.ranked === undefined ? false : typeof p.ranked === 'boolean' ? p.ranked : null;
+  // voice notes are on unless the host turns them off
+  const voice = p.voice === undefined ? true : typeof p.voice === 'boolean' ? p.voice : null;
   if (!decks || !bluffRule || stake === null || peeks === null || bets === null || teams === null) throw new GameError('Invalid settings');
-  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null || ranked === null) {
+  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null || ranked === null || voice === null) {
     throw new GameError('Invalid settings');
   }
   // Bluff's extras are kept while Crazy 7 is picked (it ignores them), so switching back keeps them; bets need coins at stake
-  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked };
+  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked, voice };
 }
 
 // only the browsers' own push services: the server never posts to any other address a client sends
@@ -167,6 +172,19 @@ export function parseThrow(p: Payload): { to: string; index: number } {
   const index = p.index;
   if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= THROWS.length) throw new GameError('Invalid emoji');
   return { to: parseMemberId(p.to), index };
+}
+
+/** a recorded voice note: raw audio bytes, an audio type and its length; anything else is refused */
+export function parseVoice(p: Payload): { audio: Buffer; mime: string; ms: number } {
+  const raw = p.audio;
+  const audio = Buffer.isBuffer(raw) ? raw : raw instanceof ArrayBuffer ? Buffer.from(raw) : raw instanceof Uint8Array ? Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength) : null;
+  if (!audio || audio.length === 0) throw new GameError('Invalid voice note');
+  if (audio.length > VOICE_MAX_BYTES) throw new GameError('That voice note is too long');
+  const mime = typeof p.mime === 'string' && p.mime.length <= 80 && /^[a-z0-9/.+-]+(;\s*codecs="?[a-z0-9.,+ -]+"?)?$/i.test(p.mime) ? p.mime : null;
+  if (!mime || !(VOICE_TYPES as readonly string[]).includes(mime.split(';')[0].trim().toLowerCase())) throw new GameError('This voice note format is not supported');
+  const ms = p.ms;
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0 || ms > VOICE_MAX_MS + 1_000) throw new GameError('Invalid voice note');
+  return { audio, mime, ms: Math.round(Math.min(ms, VOICE_MAX_MS)) };
 }
 
 export function parseGift(value: unknown): number {

@@ -13,6 +13,7 @@ import {
   SAZA_BADGES,
   sazaOf,
   stakeLevelOf,
+  VOICE_GAP_MS,
   type AnnounceKind,
   type Announcement,
   type ChatEvent,
@@ -65,7 +66,7 @@ export const DEFAULT_ROOM_LIMITS: RoomLimits = { createsPerIp: 10, liveRoomsPerI
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false };
+  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false, voice: true };
   /** game over with Saza on: the loser's new badge, which the winner may swap until the room goes back to the lobby */
   sazaPick: { loserId: string; winnerId: string } | null = null;
   /** a Bluff game */
@@ -93,6 +94,8 @@ export class Room {
   creatorIp = '';
   private announceSeq = 0;
   private lastChat = new Map<string, number>();
+  /** by account, kept after leaving, so leaving and joining again doesn't skip the wait */
+  private lastVoice = new Map<string, number>();
 
   constructor(readonly code: string) {}
 
@@ -631,6 +634,16 @@ export class Room {
     if (now - (this.lastChat.get(by) ?? 0) < CHAT_GAP_MS) throw new GameError('Slow down');
     this.lastChat.set(by, now);
     return { from: by, to, index };
+  }
+
+  /** checks a voice note may go out now: logged-in people only, while the host allows them, one every VOICE_GAP_MS */
+  voice(by: string, now = Date.now()): void {
+    const member = this.member(by);
+    if (!this.config.voice) throw new GameError('The host turned voice notes off');
+    if (!member.userId) throw new GameError('Log in to send voice notes');
+    const wait = VOICE_GAP_MS - (now - (this.lastVoice.get(member.userId) ?? -Infinity));
+    if (wait > 0) throw new GameError(`Wait ${Math.ceil(wait / 1000)} s for your next voice note`);
+    this.lastVoice.set(member.userId, now);
   }
 
   view(meId: string): RoomView {

@@ -93,6 +93,8 @@ export interface GameConfig {
   secretLies: boolean;
   /** Bluff: a rated table, logged-in people only and no bots (older apps don't send it: off) */
   ranked: boolean;
+  /** both games: logged-in people may send voice notes to the table (older apps don't send it: on) */
+  voice: boolean;
 }
 
 /** one lie nobody caught, turned face-up when the game ends */
@@ -239,6 +241,24 @@ export interface ChatEvent {
   index: number;
   /** 'pile': a reaction dropped on the last play (long-press the pile); otherwise it floats up the screen */
   on?: 'pile';
+}
+
+/** a voice note: the longest clip, the most bytes one may be, and how long a player waits before the next one */
+export const VOICE_MAX_MS = 7_000;
+export const VOICE_MAX_BYTES = 90 * 1024;
+export const VOICE_GAP_MS = 10_000;
+/** audio formats a voice note may come in (the part before any ";codecs=") */
+export const VOICE_TYPES = ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/aac', 'audio/mpeg'] as const;
+
+/** a voice note passed on to everyone else in the room as it comes in; the server never keeps it */
+export interface VoiceEvent {
+  /** member id of the sender */
+  from: string;
+  audio: ArrayBuffer;
+  /** the recording's type, e.g. "audio/webm;codecs=opus" */
+  mime: string;
+  /** length as the sender's phone measured it */
+  ms: number;
 }
 
 /** emoji a player throws at someone in the room; everyone sees it fly across. New ones go at the end: the index is what's sent */

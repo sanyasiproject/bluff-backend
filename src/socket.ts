@@ -18,6 +18,7 @@ import {
   type InviteEvent,
   type ServerInfo,
   stakeLevelOf,
+  type VoiceEvent,
 } from './types.js';
 import {
   asPayload,
@@ -39,10 +40,13 @@ import {
   parseThrow,
   parseToken,
   parseUserId,
+  parseVoice,
   type Payload,
 } from './validate.js';
 
 const RATE_WINDOW_MS = 10_000;
+/** the most a guest connection may send at once: every guest event is far smaller */
+const GUEST_MAX_PACKET = 16 * 1024;
 const RATE_MAX_EVENTS = 40;
 const SWEEP_EVERY_MS = 30_000;
 /** open connections allowed per network (IP) by default; friends on one Wi-Fi share an address */
@@ -354,6 +358,14 @@ export function registerHandlers(
     const user = socket.data.user as SocketUser | undefined;
     const ip = socket.data.ip as string;
     connections.set(ip, (connections.get(ip) ?? 0) + 1);
+    // only logged-in players send voice notes: a guest connection sending anything big is cut off before it's read
+    if (!user) {
+      socket.conn.on('packet', (packet: { data?: unknown }) => {
+        const d = packet.data;
+        const size = typeof d === 'string' ? d.length : d instanceof ArrayBuffer || ArrayBuffer.isView(d) ? d.byteLength : 0;
+        if (size > GUEST_MAX_PACKET) socket.disconnect(true);
+      });
+    }
     if (user) {
       const wasOnline = presence.isOnline(user.id);
       presence.add(user.id, socket.id);
@@ -763,6 +775,15 @@ export function registerHandlers(
       const { room, member } = current();
       const { to, index } = parseThrow(p);
       io.to(room.code).emit('throw', room.throwAt(member.id, to, index));
+    });
+
+    // a voice note goes straight on to everyone else in the room and is never kept
+    on('voice:send', (p) => {
+      const { room, member } = current();
+      const { audio, mime, ms } = parseVoice(p);
+      room.voice(member.id);
+      const note: Omit<VoiceEvent, 'audio'> & { audio: Buffer } = { from: member.id, audio, mime, ms };
+      socket.to(room.code).emit('voice', note);
     });
 
     // coins for a friend, picked in the friends list (userId) or in this room (memberId)

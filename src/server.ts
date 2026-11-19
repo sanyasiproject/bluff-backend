@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
+import * as ioParser from 'socket.io-parser';
 import { isAllowedOrigin } from './config.js';
 import { GameError } from './game.js';
 import { createApi } from './http/app.js';
@@ -23,6 +24,13 @@ export interface ServerDeps {
   botSpeed?: number;
   /** when friends hear that someone came online; defaults suit production */
   onlineAlerts?: Partial<OnlineAlertTimes>;
+}
+
+/** the standard decoder, allowing a single binary attachment per message */
+class OneAttachmentDecoder extends ioParser.Decoder {
+  constructor() {
+    super({ maxAttachments: 1 });
+  }
 }
 
 export function createBluffServer(deps: ServerDeps = {}) {
@@ -50,7 +58,10 @@ export function createBluffServer(deps: ServerDeps = {}) {
     cors: { origin: (origin, cb) => cb(null, isAllowedOrigin(origin)) },
     // CORS does not cover WebSocket upgrades, so check the origin here too
     allowRequest: (req, cb) => cb(null, isAllowedOrigin(req.headers.origin)),
-    maxHttpBufferSize: 16 * 1024,
+    // room for one voice note (VOICE_MAX_BYTES, a third bigger as base64 on polling); everything else is far smaller
+    maxHttpBufferSize: 128 * 1024,
+    // one binary part per message (a voice note), so a client can't make the server hold several half-sent ones
+    parser: { ...ioParser, Decoder: OneAttachmentDecoder },
   });
 
   notifyFriends = (userId) => {
