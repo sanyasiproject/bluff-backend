@@ -319,6 +319,11 @@ export const TABLE_THEMES = [
   { id: 'maroon', name: 'Maroon velvet', emoji: '🍷', level: 15 },
   { id: 'emerald', name: 'Emerald gold', emoji: '✨', level: 20 },
   { id: 'galaxy', name: 'Galaxy', emoji: '🌌', level: 30 },
+  { id: 'saffron', name: 'Saffron', emoji: '🧡', level: 4 },
+  { id: 'lagoon', name: 'Lagoon', emoji: '🏝️', level: 9 },
+  { id: 'diwali', name: 'Diwali lights', emoji: '🪔', level: 24 },
+  { id: 'monsoon', name: 'Monsoon', emoji: '🌧️', level: 35 },
+  { id: 'champion', name: 'Champion', emoji: '🏆', level: 50 },
 ] as const;
 
 /** the table of guests, bots and players who haven't picked one */
@@ -337,6 +342,11 @@ export const CARD_BACKS = [
   { id: 'mandala', name: 'Mandala', emoji: '🪷', level: 18 },
   { id: 'diamond', name: 'Diamond', emoji: '💎', level: 25 },
   { id: 'legend', name: 'Legend', emoji: '🏆', level: 40 },
+  { id: 'rangoli', name: 'Rangoli', emoji: '🎨', level: 4 },
+  { id: 'peacock', name: 'Peacock', emoji: '🦚', level: 10 },
+  { id: 'kite', name: 'Kite festival', emoji: '🪁', level: 15 },
+  { id: 'cosmic', name: 'Cosmic', emoji: '🌠', level: 32 },
+  { id: 'maharaja', name: 'Maharaja', emoji: '🐘', level: 50 },
 ] as const;
 
 /** the back of guests, bots and players who haven't picked one */
@@ -376,6 +386,16 @@ export const AVATAR_FACES = [
   { id: 'fire', emoji: '🔥', level: 25 },
   { id: 'diamond', emoji: '💎', level: 25 },
   { id: 'crown', emoji: '👑', level: 40 },
+  { id: 'owl', emoji: '🦉', level: 2 },
+  { id: 'octopus', emoji: '🐙', level: 4 },
+  { id: 'sloth', emoji: '🦥', level: 6 },
+  { id: 'peacock', emoji: '🦚', level: 10 },
+  { id: 'elephant', emoji: '🐘', level: 14 },
+  { id: 'shark', emoji: '🦈', level: 16 },
+  { id: 'genie', emoji: '🧞', level: 22 },
+  { id: 'mermaid', emoji: '🧜', level: 28 },
+  { id: 'astronaut', emoji: '🧑‍🚀', level: 32 },
+  { id: 'trex', emoji: '🦖', level: 45 },
 ] as const;
 
 /** character avatars: girls and boys, drawn in the app (lib/characters.ts); some are doing something (waving, on the phone). New ones go at the end */
@@ -408,6 +428,12 @@ export const AVATAR_CHARACTERS = [
   { id: 'raj', kind: 'boy', level: 12 },
   { id: 'ishita', kind: 'girl', level: 12 },
   { id: 'veer', kind: 'boy', level: 12 },
+  { id: 'dev', kind: 'boy', level: 15 },
+  { id: 'kiara', kind: 'girl', level: 15 },
+  { id: 'aditya', kind: 'boy', level: 20 },
+  { id: 'myra', kind: 'girl', level: 20 },
+  { id: 'ishaan', kind: 'boy', level: 30 },
+  { id: 'sana', kind: 'girl', level: 30 },
 ] as const;
 
 /** avatar backgrounds; the colours live in the app (lib/avatars.ts) */
@@ -423,6 +449,9 @@ export const AVATAR_BACKGROUNDS = [
   { id: 'gold', level: 10 },
   { id: 'galaxy', level: 20 },
   { id: 'rainbow', level: 30 },
+  { id: 'mint', level: 2 },
+  { id: 'peacock', level: 14 },
+  { id: 'aurora', level: 40 },
 ] as const;
 
 /** an emoji face or a character */
