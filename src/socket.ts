@@ -2,6 +2,7 @@ import type { Server, Socket } from 'socket.io';
 import { BotDriver } from './bots/driver.js';
 import { Crazy7Auto } from './crazy7/auto.js';
 import { Crazy7Bots } from './crazy7/driver.js';
+import { rankPlural } from './cards.js';
 import { GameError } from './game.js';
 import type { AccountInfo, GameEvent, GameRecord, Member, MemberAccount, PlayerLook, SocketHooks, SocketUser, WatchRequest } from './models.js';
 import { Presence } from './presence.js';
@@ -233,7 +234,10 @@ export function registerHandlers(
     // Crazy 7's first turn may already have picked a card for that player
     const opening = room.c7?.opening ?? [];
     c7bots.observe(room, opening);
-    publish(room, [room.note('round', `${label}. ${first} goes first${pot}`), ...room.announce(opening)]);
+    // the Kismat card is read out with the deal, so nobody misses it
+    const kismat = room.game?.kismat;
+    const wild = kismat ? [room.note('round', `🍀 Kismat card: ${rankPlural(kismat)} are wild this game`)] : [];
+    publish(room, [room.note('round', `${label}. ${first} goes first${pot}`), ...wild, ...room.announce(opening)]);
   };
 
   /** before a free deal with bots: each person's latest lifetime numbers and habits, so the bots size them up from their last games too */
@@ -338,6 +342,8 @@ export function registerHandlers(
     socket.data.ip = ip;
     // apps with the lobby's Ready button say so; older ones never hold up a start
     socket.data.hasReady = (socket.handshake.auth as { ready?: unknown } | undefined)?.ready === true;
+    // apps that show the Kismat card and Seedhi claims say so too
+    socket.data.hasTwists = (socket.handshake.auth as { twists?: unknown } | undefined)?.twists === true;
     next();
   });
 
@@ -409,6 +415,7 @@ export function registerHandlers(
       member.socketId = socket.id;
       member.lastSeen = Date.now();
       member.hasReady = socket.data.hasReady === true;
+      member.hasTwists = socket.data.hasTwists === true;
       socket.join(room.code);
       seat = next;
     };

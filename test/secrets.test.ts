@@ -208,7 +208,7 @@ describe('secret cards: Bluff plays that count', () => {
     const g = bluff({ a: [two, card('K')], b: [nine, card('J')] });
     g.play('a', ids(two), 'Q');
     // the last play can still be called, so it's open
-    expect(g.playLogOf('a')).toEqual([{ rank: 'Q', cards: [two], called: false, caught: false, open: true }]);
+    expect(g.playLogOf('a')).toEqual([{ rank: 'Q', cards: [two], called: false, caught: false, open: true, lie: true }]);
     expect(g.playLogOf('b')).toEqual([]);
     // a copy: changing it changes nothing in the game
     g.playLogOf('a')[0].cards.push(nine);

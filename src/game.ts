@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { buildDeck, secureRandom, shuffle, sortHand, type RandomInt } from './cards.js';
 import { emptyHabits, noteBotCall, noteBotPlay, notePass, notePlay } from './habits.js';
 import type { BetResult, GameEvent, Habits, LoggedPlay, PlayerStats, PlayRecord } from './models.js';
-import { MAX_BLUFF_CALLS_IN_A_ROW, RANKS, type Card, type GameConfig, type LieRecap, type PlayerPlays, type Rank, type RevealView } from './types.js';
+import { backsClaim, claimsAllowed, MAX_BLUFF_CALLS_IN_A_ROW, RANKS, type Card, type GameConfig, type LieRecap, type PlayerPlays, type Rank, type RevealView } from './types.js';
 
 /** how many uncaught lies the game-over reveal lists */
 const LIE_RECAP_MAX = 6;
@@ -17,7 +17,12 @@ export class Game {
   pile: Card[] = [];
   /** who played each card of the pile, in the same order */
   pileBy: string[] = [];
+  /** the rank the next play follows: the round's, or with Seedhi the last claim */
   roundRank: Rank | null = null;
+  /** the Kismat card: this game's wild rank, drawn at the deal; null when the twist is off */
+  readonly kismat: Rank | null;
+  /** this round's claims so far: rank and how many cards */
+  private roundClaims: { rank: Rank; n: number }[] = [];
   lastPlay: PlayRecord | null = null;
   passed = new Set<string>();
   turnId: string | null;
@@ -70,6 +75,18 @@ export class Game {
     shuffle(buildDeck(config.decks), rand).forEach((card, i) => this.hand(order[i % order.length]).push(card));
     for (const id of order) sortHand(this.hand(id));
     this.turnId = order[rand(order.length)];
+    // drawn after everything else, so games without the twist deal exactly as before
+    this.kismat = config.kismat ? RANKS[rand(RANKS.length)] : null;
+  }
+
+  /** the card backs up the claim: that rank, or the Kismat card */
+  backs(card: Card, claim: Rank): boolean {
+    return backsClaim(card, claim, this.kismat);
+  }
+
+  /** copies in the game that could back up a claim of this rank (the Kismat cards count too) */
+  copiesFor(claim: Rank): number {
+    return 4 * this.config.decks * (this.kismat && this.kismat !== claim ? 2 : 1);
   }
 
   hand(id: string): Card[] {
@@ -87,8 +104,12 @@ export class Game {
     // kept in the order the player tapped them; others see and pick from that same order
     const cards = cardIds.map((id) => hand.find((c) => c.id === id)).filter((c): c is Card => c !== undefined);
     if (cards.length !== cardIds.length) throw new GameError('You do not have those cards');
-    if (this.roundRank && rank && rank !== this.roundRank) throw new GameError(`This round is ${this.roundRank}`);
-    const claim = this.roundRank ?? rank;
+    const allowed = claimsAllowed(this.roundRank, this.config.seedhi);
+    if (this.roundRank && rank && !allowed.includes(rank)) {
+      throw new GameError(this.config.seedhi ? `Claim ${allowed.join(', ')} this time` : `This round is ${this.roundRank}`);
+    }
+    // following without a rank (older apps): the same rank
+    const claim = rank ?? this.roundRank;
     if (!claim || !RANKS.includes(claim)) throw new GameError('Choose a rank to start the round');
 
     const events = this.settleLastPlay();
@@ -96,15 +117,23 @@ export class Game {
     // the play before this one stood
     this.watchStood();
 
-    const lie = cards.some((c) => c.rank !== claim);
+    const lie = cards.some((c) => !this.backs(c, claim));
     if (lie) this.stat(playerId).bluffs++;
     this.stat(playerId).plays++;
-    // saved with the game for the bots' read on this player; nobody sees it while the game runs (the pile is this round's claims so far)
-    notePlay(this.habits(playerId), hand, cards, claim, {
-      opening: this.roundRank === null,
-      before: this.roundRank ? this.pile.length : 0,
-      copies: 4 * this.config.decks,
-    });
+    // saved with the game for the bots' read on this player; nobody sees it while the game runs (cards claimed as this rank this round so far).
+    // Not from Seedhi games: there a pass or a "push" doesn't mean what it means in the classic game
+    if (!this.config.seedhi) notePlay(
+      this.habits(playerId),
+      hand,
+      cards,
+      claim,
+      {
+        opening: this.roundRank === null,
+        before: this.roundClaims.filter((c) => c.rank === claim).reduce((sum, c) => sum + c.n, 0),
+        copies: this.copiesFor(claim),
+      },
+      this.kismat,
+    );
     this.hands.set(playerId, hand.filter((c) => !picked.has(c.id)));
     // everyone still in who may challenge this play had a chance to call it
     for (const id of this.order) {
@@ -113,6 +142,7 @@ export class Game {
     this.pile.push(...cards);
     this.pileBy.push(...cards.map(() => playerId));
     this.roundRank = claim;
+    this.roundClaims.push({ rank: claim, n: cards.length });
     this.lastPlay = { id: randomUUID(), playerId, cards, rank: claim };
     this.playLog.push({ playId: this.lastPlay.id, playerId, rank: claim, cards, called: false, caught: false, settled: false });
     // a bot's play that doesn't empty its hand: how people treat it is saved for the bots, once each person has had their chance at it
@@ -132,7 +162,7 @@ export class Game {
     this.assertTurn(playerId);
     const play = this.lastPlay;
     if (!play) throw new GameError(this.roundRank ? 'Put down cards to keep the round going' : 'You start this round, play some cards');
-    notePass(this.habits(playerId), this.hand(playerId), play.rank);
+    if (!this.config.seedhi) notePass(this.habits(playerId), this.hand(playerId), play.rank, this.kismat);
     this.passed.add(playerId);
     this.callStreak.delete(playerId);
     const events: GameEvent[] = [{ kind: 'pass', playerId }];
@@ -191,7 +221,7 @@ export class Game {
       noteBotPlay(this.habits(callerId), watch.lie);
       noteBotCall(this.habits(callerId), watch.lie);
     }
-    const bluff = checked.some((c) => c.rank !== play.rank);
+    const bluff = checked.some((c) => !this.backs(c, play.rank));
     const logged = this.playLog.find((l) => l.playId === playId);
     if (logged) {
       logged.called = true;
@@ -230,6 +260,7 @@ export class Game {
     events.push(...this.settleLastPlay());
     this.lastPlay = null;
     this.roundRank = null;
+    this.roundClaims = [];
     this.passed.clear();
     if (this.over) return events;
     this.turnId = this.hand(winnerId).length > 0 ? winnerId : this.nextActive(winnerId);
@@ -263,7 +294,7 @@ export class Game {
   /** game over: the boldest lies nobody caught and how much each player lied (named by the room); null while the game runs */
   lieRecap(nameOf: (id: string) => string): LieRecap | null {
     if (!this.over) return null;
-    const fakes = (l: { rank: Rank; cards: Card[] }) => l.cards.filter((c) => c.rank !== l.rank).length;
+    const fakes = (l: { rank: Rank; cards: Card[] }) => l.cards.filter((c) => !this.backs(c, l.rank)).length;
     const away = this.playLog.filter((l) => fakes(l) > 0 && !l.caught);
     // most fake cards first; the sort is stable, so ties keep the order they were played
     const lies = [...away]
@@ -290,7 +321,7 @@ export class Game {
   playLogOf(playerId: string): LoggedPlay[] {
     return this.playLog
       .filter((l) => l.playerId === playerId)
-      .map((l) => ({ rank: l.rank, cards: [...l.cards], called: l.called, caught: l.caught, open: !l.settled }));
+      .map((l) => ({ rank: l.rank, cards: [...l.cards], called: l.called, caught: l.caught, open: !l.settled, lie: l.cards.some((c) => !this.backs(c, l.rank)) }));
   }
 
   /** who caught whom lying this game, for the saved game */
@@ -432,6 +463,7 @@ export class Game {
     this.pileBy = [];
     this.lastPlay = null;
     this.roundRank = null;
+    this.roundClaims = [];
     this.passed.clear();
     if (this.over) return events;
     this.turnId = this.hand(starter).length > 0 ? starter : this.nextActive(starter);

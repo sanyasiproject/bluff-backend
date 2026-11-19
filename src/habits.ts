@@ -1,5 +1,5 @@
 import type { Habits } from './models.js';
-import type { Card, Rank } from './types.js';
+import { backsClaim, type Card, type Rank } from './types.js';
 
 export const HABIT_KEYS = [
   'openPlays',
@@ -55,11 +55,11 @@ export interface PlaySpot {
 }
 
 /** one play, with the true cards: hand is the hand before the play, cards in tap order */
-export function notePlay(h: Habits, hand: Card[], cards: Card[], claim: Rank, { opening, before, copies }: PlaySpot): void {
+export function notePlay(h: Habits, hand: Card[], cards: Card[], claim: Rank, { opening, before, copies }: PlaySpot, kismat: Rank | null = null): void {
   const n = cards.length;
-  const real = cards.filter((c) => c.rank === claim).length;
+  const real = cards.filter((c) => backsClaim(c, claim, kismat)).length;
   const fakes = n - real;
-  const held = hand.filter((c) => c.rank === claim).length;
+  const held = hand.filter((c) => backsClaim(c, claim, kismat)).length;
   // holding the rank: honest but keeping some back, or faking while the real ones wait for later
   if (fakes === 0 && held >= 2) {
     h.heldHonest++;
@@ -92,14 +92,14 @@ export function notePlay(h: Habits, hand: Card[], cards: Card[], claim: Rank, { 
     if (fakes > 0) h.finishLies++;
   }
   // a small hand that can't go out honestly: do they fake the rest to finish?
-  if (hand.length <= END_HAND && !canFinishHonestly(hand, opening ? null : claim)) {
+  if (hand.length <= END_HAND && !canFinishHonestly(hand, opening ? null : claim, kismat)) {
     h.endTurns++;
     if (n === hand.length) h.endFakes++;
   }
   // only plays with real and fake cards together say where someone hides fakes
   if (n < 2 || fakes === 0 || real === 0) return;
   cards.forEach((c, i) => {
-    const fake = c.rank !== claim ? 1 : 0;
+    const fake = backsClaim(c, claim, kismat) ? 0 : 1;
     if (i === 0) {
       h.slotFirst++;
       h.fakeFirst += fake;
@@ -126,17 +126,18 @@ export function noteBotCall(h: Habits, lie: boolean): void {
 }
 
 /** a pass while a round is on: holding its rank or not */
-export function notePass(h: Habits, hand: Card[], rank: Rank): void {
-  if (hand.some((c) => c.rank === rank)) h.passHeld++;
+export function notePass(h: Habits, hand: Card[], rank: Rank, kismat: Rank | null = null): void {
+  if (hand.some((c) => backsClaim(c, rank, kismat))) h.passHeld++;
   else h.passNone++;
-  if (hand.length <= END_HAND && !canFinishHonestly(hand, rank)) h.endTurns++;
+  if (hand.length <= END_HAND && !canFinishHonestly(hand, rank, kismat)) h.endTurns++;
 }
 
 /** hands this small count for "fakes the rest to finish" */
 const END_HAND = 3;
 
 /** the whole hand can go down as the truth: all of the round's rank, or (opening, rank null) all one rank */
-function canFinishHonestly(hand: Card[], rank: Rank | null): boolean {
-  const r = rank ?? hand[0]?.rank;
-  return hand.length > 0 && hand.every((c) => c.rank === r);
+function canFinishHonestly(hand: Card[], rank: Rank | null, kismat: Rank | null): boolean {
+  // opening: any one rank, with the Kismat cards backing it up
+  const r = rank ?? hand.find((c) => c.rank !== kismat)?.rank ?? hand[0]?.rank;
+  return hand.length > 0 && r !== undefined && hand.every((c) => backsClaim(c, r, kismat));
 }

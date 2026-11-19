@@ -2,6 +2,21 @@
 export const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'] as const;
 export type Rank = (typeof RANKS)[number];
 
+/** a card backs up a claim when it is the claimed rank, or the game's Kismat rank (wild) */
+export const backsClaim = (card: { rank: Rank }, claim: Rank, kismat: Rank | null): boolean => card.rank === claim || (kismat !== null && card.rank === kismat);
+
+/** Seedhi: after a claim, the next may be one rank below, the same, or one above (A and K wrap round) */
+export function seedhiClaims(last: Rank): Rank[] {
+  const i = RANKS.indexOf(last);
+  return [RANKS[(i + RANKS.length - 1) % RANKS.length], last, RANKS[(i + 1) % RANKS.length]];
+}
+
+/** ranks the next play may claim: any to open a round; then the round's rank, or with Seedhi the last claim's neighbours */
+export function claimsAllowed(roundRank: Rank | null, seedhi: boolean): readonly Rank[] {
+  if (roundRank === null) return RANKS;
+  return seedhi ? seedhiClaims(roundRank) : [roundRank];
+}
+
 export const SUITS = ['S', 'H', 'D', 'C'] as const;
 export type Suit = (typeof SUITS)[number];
 
@@ -95,6 +110,10 @@ export interface GameConfig {
   ranked: boolean;
   /** both games: logged-in people may send voice notes to the table (older apps don't send it: on) */
   voice: boolean;
+  /** Bluff: a random rank is drawn at the deal and its cards are wild, backing up any claim (older apps don't send it: off) */
+  kismat: boolean;
+  /** Bluff: after the opener each claim is the same rank, one below or one above the last claim (older apps don't send it: off) */
+  seedhi: boolean;
 }
 
 /** one lie nobody caught, turned face-up when the game ends */
@@ -530,7 +549,10 @@ export interface RoomView {
   /** people in the room without a seat in the current game */
   watchers: WatcherView[];
   turnId: string | null;
+  /** the rank the next play follows: the round's rank, or with Seedhi the last claim; null when a round is about to open */
   roundRank: Rank | null;
+  /** Bluff with the Kismat card on: this game's wild rank, shown to everyone; null otherwise */
+  kismat: Rank | null;
   pileCount: number;
   /** Bluff: who played each of the top cards of the pile (up to 7, bottom to top), so they show in that player's back */
   pileTopBy: string[];

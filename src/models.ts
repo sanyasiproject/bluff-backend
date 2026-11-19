@@ -3,6 +3,8 @@ import type { Award, Card, CoinResult, GameConfig, InviteEvent, LifetimeStats, P
 /** one of a player's plays this game with the true cards (server only); open: it never stood or was called (still waiting, or cut off by a walk-out or End game) */
 export interface LoggedPlay extends PlayReveal {
   open: boolean;
+  /** hid at least one card that doesn't back up the claim (the Kismat card does) */
+  lie: boolean;
 }
 
 // Server-only shapes, never sent to clients as-is
@@ -43,6 +45,8 @@ export interface Member {
   ready: boolean;
   /** their app has the Ready button; people on older apps always count as ready */
   hasReady: boolean;
+  /** their app knows the Bluff twists (Kismat card, Seedhi); a twist game waits for older apps to update */
+  hasTwists: boolean;
   /** Bluff's saza badge in this room: the last player wears it until they win a game here */
   saza: SazaBadge | null;
 }

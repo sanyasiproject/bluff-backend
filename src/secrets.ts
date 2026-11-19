@@ -2,8 +2,8 @@ import { secureRandom, shuffle, type RandomInt } from './cards.js';
 import type { LoggedPlay, PlayerStats } from './models.js';
 import { SECRET_MISSIONS, secretMissionOf, type GameKind, type SecretView } from './types.js';
 
-/** the play hid at least one card of another rank */
-const hasFake = (p: LoggedPlay) => p.cards.some((c) => c.rank !== p.rank);
+/** the play hid at least one card that doesn't back up its claim */
+const hasFake = (p: LoggedPlay) => p.lie;
 
 /** a lie that got past everyone: it stood or survived a call, and can't be called any more */
 const gotAway = (p: LoggedPlay) => hasFake(p) && !p.caught && !p.open;

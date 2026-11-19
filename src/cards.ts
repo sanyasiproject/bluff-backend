@@ -57,6 +57,9 @@ export function describeClaim(count: number, rank: Rank): string {
 const SUIT_NAMES: Record<Suit, string> = { S: 'Spades', H: 'Hearts', D: 'Diamonds', C: 'Clubs' };
 
 /** "Seven of Spades" */
+/** "Sevens", for spoken lines */
+export const rankPlural = (rank: Rank): string => RANK_NAMES[rank][1];
+
 export function cardName(card: Card): string {
   return `${RANK_NAMES[card.rank][0]} of ${SUIT_NAMES[card.suit]}`;
 }

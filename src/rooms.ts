@@ -66,7 +66,7 @@ export const DEFAULT_ROOM_LIMITS: RoomLimits = { createsPerIp: 10, liveRoomsPerI
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false, voice: true };
+  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false, voice: true, kismat: false, seedhi: false };
   /** game over with Saza on: the loser's new badge, which the winner may swap until the room goes back to the lobby */
   sazaPick: { loserId: string; winnerId: string } | null = null;
   /** a Bluff game */
@@ -150,6 +150,7 @@ export class Room {
       habits: account?.habits ?? null,
       ready: false,
       hasReady: false,
+      hasTwists: false,
       saza: null,
     };
     this.members.push(member);
@@ -359,8 +360,13 @@ export class Room {
     // Saza switched off: every badge comes off
     if (!config.saza) for (const m of this.members) m.saza = null;
     const stakeLowered = this.capStake();
-    // a new stake, a different game, or ranked on or off: everyone agrees again before the host can start
-    const changed = this.config.stake !== before.stake || this.config.game !== before.game || this.config.ranked !== before.ranked;
+    // a new stake, a different game, ranked or a twist on or off: everyone agrees again before the host can start
+    const changed =
+      this.config.stake !== before.stake ||
+      this.config.game !== before.game ||
+      this.config.ranked !== before.ranked ||
+      this.config.kismat !== before.kismat ||
+      this.config.seedhi !== before.seedhi;
     const readyAgain = changed && this.members.some((m) => m.ready && m.id !== this.hostId);
     if (changed) for (const m of this.members) m.ready = false;
     return { stakeLowered, readyAgain };
@@ -448,6 +454,11 @@ export class Room {
       if (this.players().some((m) => m.bot)) throw new GameError('Ranked tables are for people only. Remove the bots first');
       const guests = this.players().filter((m) => !m.bot && !m.userId);
       if (guests.length > 0) throw new GameError(`Ranked games need everyone logged in: ${guests.map((m) => m.name).join(', ')}`);
+    }
+    // older apps can't show the Kismat card or make Seedhi claims
+    if (this.config.game !== 'crazy7' && (this.config.kismat || this.config.seedhi)) {
+      const old = this.players().filter((m) => !m.bot && !m.hasTwists);
+      if (old.length > 0) throw new GameError(`${old.map((m) => m.name).join(', ')} must update the app (reload it) to play with twists`);
     }
     const waiting = this.waitingFor();
     if (waiting.length > 0) throw new GameError(`Waiting for ${waiting.map((m) => m.name).join(', ')} to be ready`);
@@ -693,6 +704,7 @@ export class Room {
         })),
       turnId: g?.turnId ?? null,
       roundRank: b?.roundRank ?? null,
+      kismat: b?.kismat ?? null,
       pileCount: g?.pile.length ?? 0,
       pileTopBy: b ? b.pileBy.slice(-7) : [],
       lastPlay: lp ? { id: lp.id, playerId: lp.playerId, count: lp.cards.length, rank: lp.rank } : null,

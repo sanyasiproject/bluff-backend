@@ -1,4 +1,4 @@
-import type { Card, Rank } from '../types.js';
+import { backsClaim, type Card, type Rank } from '../types.js';
 
 /** the cards a bot can't see, and how many of them are the rank in question */
 export interface Unseen {
@@ -6,14 +6,18 @@ export interface Unseen {
   copies: number;
 }
 
-/** what one bot can't see of a rank: deck size minus its own cards (hand and pile) and the discards it knows of */
-export function unseenOf(rank: Rank, decks: number, mine: Card[], gone: Map<Rank, number>): Unseen {
+/** copies in the game that could back up a claim of this rank (the Kismat cards count too), like Game.copiesFor */
+export const copiesFor = (rank: Rank, decks: number, kismat: Rank | null) => 4 * decks * (!!kismat && kismat !== rank ? 2 : 1);
+
+/** what one bot can't see of a rank: deck size minus its own cards (hand and pile) and the discards it knows of; Kismat cards count as copies */
+export function unseenOf(rank: Rank, decks: number, mine: Card[], gone: Map<Rank, number>, kismat: Rank | null = null): Unseen {
   let goneAll = 0;
   for (const n of gone.values()) goneAll += n;
-  const own = mine.filter((c) => c.rank === rank).length;
+  const own = mine.filter((c) => backsClaim(c, rank, kismat)).length;
+  const wildGone = kismat && kismat !== rank ? (gone.get(kismat) ?? 0) : 0;
   return {
     cards: Math.max(1, 52 * decks - mine.length - goneAll),
-    copies: Math.max(0, 4 * decks - own - (gone.get(rank) ?? 0)),
+    copies: Math.max(0, copiesFor(rank, decks, kismat) - own - (gone.get(rank) ?? 0) - wildGone),
   };
 }
 

@@ -67,12 +67,14 @@ export function parseConfig(p: Payload): GameConfig {
   const ranked = p.ranked === undefined ? false : typeof p.ranked === 'boolean' ? p.ranked : null;
   // voice notes are on unless the host turns them off
   const voice = p.voice === undefined ? true : typeof p.voice === 'boolean' ? p.voice : null;
+  const kismat = p.kismat === undefined ? false : typeof p.kismat === 'boolean' ? p.kismat : null;
+  const seedhi = p.seedhi === undefined ? false : typeof p.seedhi === 'boolean' ? p.seedhi : null;
   if (!decks || !bluffRule || stake === null || peeks === null || bets === null || teams === null) throw new GameError('Invalid settings');
-  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null || ranked === null || voice === null) {
+  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null || ranked === null || voice === null || kismat === null || seedhi === null) {
     throw new GameError('Invalid settings');
   }
   // Bluff's extras are kept while Crazy 7 is picked (it ignores them), so switching back keeps them; bets need coins at stake
-  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked, voice };
+  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked, voice, kismat, seedhi };
 }
 
 // only the browsers' own push services: the server never posts to any other address a client sends

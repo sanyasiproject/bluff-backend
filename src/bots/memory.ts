@@ -1,7 +1,7 @@
 import type { GameEvent, Habits } from '../models.js';
-import type { Card, LifetimeStats, Rank, RoomView } from '../types.js';
+import { backsClaim, claimsAllowed, type Card, type LifetimeStats, type Rank, type RoomView } from '../types.js';
 import type { PileEntry, Plan, Read } from './models.js';
-import { convolve, holdChance, meanOf, realOdds, unseenOf } from './odds.js';
+import { convolve, copiesFor, holdChance, meanOf, realOdds, unseenOf, type Unseen } from './odds.js';
 
 type RankCounts = Map<Rank, number>;
 
@@ -9,8 +9,8 @@ const bump = (m: RankCounts, rank: Rank, n: number) => m.set(rank, Math.max(0, (
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /** chance of 0, 1, 2… real cards among the cards of a play this bot hasn't seen (seen real ones are counted for sure elsewhere) */
-export function hiddenReal(e: PileEntry): number[] {
-  const seenReal = e.seen.filter((c) => c.rank === e.rank).length;
+export function hiddenReal(e: PileEntry, kismat: Rank | null): number[] {
+  const seenReal = e.seen.filter((c) => backsClaim(c, e.rank, kismat)).length;
   const hidden = Math.max(0, e.count - e.seen.length);
   const out = new Array<number>(hidden + 1).fill(0);
   realOdds(e.count, e.fakes).forEach((p, j) => (out[clamp(j - seenReal, 0, hidden)] += p));
@@ -90,9 +90,15 @@ export class BotMemory {
     return r;
   }
 
+  /** real copies of a rank that most likely went out with other people's thrown-away piles (index = copies); real Kismat claims count too */
+  goneOf(rank: Rank, kismat: Rank | null): number[] {
+    const own = this.goneReal.get(rank) ?? [1];
+    return !!kismat && kismat !== rank ? convolve(own, this.goneReal.get(kismat) ?? [1]) : own;
+  }
+
   /** real copies of a rank that most likely went out with other people's thrown-away piles */
-  goneMean(rank: Rank): number {
-    return meanOf(this.goneReal.get(rank) ?? [1]);
+  goneMean(rank: Rank, kismat: Rank | null): number {
+    return meanOf(this.goneOf(rank, kismat));
   }
 
   /** copies of a rank I'm sure a player holds, never more than their hand */
@@ -105,13 +111,18 @@ export class BotMemory {
     for (const e of events) {
       switch (e.kind) {
         case 'play': {
-          // following a round: how likely they were to have none of the rank
-          if (this.pile.length > 0 && e.playerId !== this.meId) this.followed(view, e.playerId, e.rank, e.count, false);
+          // following a round: how likely they were to have none of the ranks they could claim
+          if (this.pile.length > 0 && e.playerId !== this.meId) this.followed(view, e.playerId, this.allowed(view), e.count, false);
           const mine = e.playerId === this.meId ? this.pendingMine : null;
-          const knownBefore = mine ? 0 : (this.counts(e.playerId).get(e.rank) ?? 0);
+          const wild = view.kismat && view.kismat !== e.rank ? view.kismat : null;
+          const natural = this.counts(e.playerId).get(e.rank) ?? 0;
+          const knownBefore = mine ? 0 : natural + (wild ? (this.counts(e.playerId).get(wild) ?? 0) : 0);
           if (mine) this.pendingMine = null;
-          // cards I knew they held of that rank most likely went out first
-          else this.counts(e.playerId).set(e.rank, Math.max(0, knownBefore - e.count));
+          else {
+            // cards I knew they held of that rank most likely went out first, then Kismat cards
+            this.counts(e.playerId).set(e.rank, Math.max(0, natural - e.count));
+            if (wild && e.count > natural) bump(this.counts(e.playerId), wild, natural - e.count);
+          }
           if (this.pile.length === 0) this.rounds++;
           const id = view.lastPlay?.playerId === e.playerId ? view.lastPlay.id : null;
           const left = view.players.find((p) => p.id === e.playerId)?.cardCount ?? 0;
@@ -154,10 +165,10 @@ export class BotMemory {
           }
           // a claim that clashes with the round: lying, or real cards springing a trap on whoever believed the earlier claims?
           const mine = called?.playerId === e.playerId;
-          const clash = mine && this.clash(called, view.config.decks);
+          const clash = mine && this.clash(called, view.config.decks, view.kismat);
           // real cards known in it: turned over now, or seen in my peeks
-          const real = mine ? new Set([...shown, ...called.seen].filter((c) => c.rank === called.rank).map((c) => c.id)).size : 0;
-          if (mine && !e.bluff) this.noteTrap(called, real, view.config.decks);
+          const real = mine ? new Set([...shown, ...called.seen].filter((c) => backsClaim(c, called.rank, view.kismat)).map((c) => c.id)).size : 0;
+          if (mine && !e.bluff) this.noteTrap(called, real, view.config.decks, view.kismat);
           if (clash) {
             const r = this.read(e.playerId);
             if (e.bluff) r.overCaught = (r.overCaught ?? 0) + 1;
@@ -187,7 +198,7 @@ export class BotMemory {
           break;
         }
         case 'pass':
-          if (this.pile.length > 0 && e.playerId !== this.meId) this.followed(view, e.playerId, this.pile[0].rank, 0, true);
+          if (this.pile.length > 0 && e.playerId !== this.meId) this.followed(view, e.playerId, this.allowed(view), 0, true);
           break;
         case 'roundEnd':
           // my own cards and any I peeked at leave the game with the pile
@@ -196,7 +207,7 @@ export class BotMemory {
           for (const entry of this.pile) {
             if (entry.mine) continue;
             this.othersGone += entry.count - entry.seen.length;
-            this.goneReal.set(entry.rank, convolve(this.goneReal.get(entry.rank) ?? [1], hiddenReal(entry)));
+            this.goneReal.set(entry.rank, convolve(this.goneReal.get(entry.rank) ?? [1], hiddenReal(entry, view.kismat)));
           }
           this.pile = [];
           break;
@@ -214,11 +225,12 @@ export class BotMemory {
    * everyone's claims together go past the copies, or other people's do with the copies only I know of (my hand, my pile cards, my
    * discards). Such a play is judged by the round, not by how honest its player is.
    */
-  clash(entry: PileEntry, decks: number): boolean {
-    const copies = 4 * decks;
+  clash(entry: PileEntry, decks: number, kismat: Rank | null): boolean {
+    const copies = copiesFor(entry.rank, decks, kismat);
     const at = this.pile.indexOf(entry);
     if (at <= 0 || entry.count > copies) return false;
-    const upTo = this.pile.slice(0, at + 1);
+    // with Seedhi only the round's claims of the same rank add up
+    const upTo = this.pile.slice(0, at + 1).filter((en) => en.rank === entry.rank);
     if (upTo.reduce((n, en) => n + en.count, 0) > copies) return true;
     if (entry.sure === null || entry.count + entry.sure > copies) return false;
     return upTo.reduce((n, en) => (en.mine ? n : n + en.count), 0) + entry.sure > copies;
@@ -229,21 +241,26 @@ export class BotMemory {
    * the copies I'm sure of, those real cards and their earlier claims add up to more than exist. Then an earlier claim of theirs was
    * fake while they held these real cards back; remembered once per play.
    */
-  noteTrap(entry: PileEntry, real: number, decks: number): void {
+  noteTrap(entry: PileEntry, real: number, decks: number, kismat: Rank | null): void {
     if (entry.trapped || entry.sure === null || real <= 0) return;
-    const before = this.pile.slice(0, this.pile.indexOf(entry)).reduce((n, en) => (en.playerId === entry.playerId ? n + en.count : n), 0);
-    if (before === 0 || entry.sure + real + before <= 4 * decks) return;
+    const before = this.pile.slice(0, this.pile.indexOf(entry)).reduce((n, en) => (en.playerId === entry.playerId && en.rank === entry.rank ? n + en.count : n), 0);
+    if (before === 0 || entry.sure + real + before <= copiesFor(entry.rank, decks, kismat)) return;
     entry.trapped = true;
     const r = this.read(entry.playerId);
     r.keptLies = (r.keptLies ?? 0) + 1;
   }
 
-  /** a turn in a running round: add their chance of holding none of the rank, and whether they passed */
-  private followed(view: RoomView, id: string, rank: Rank, played: number, passed: boolean): void {
+  /** ranks the turn being seen could claim: the round's, or with Seedhi the last claim's neighbours */
+  private allowed(view: RoomView): readonly Rank[] {
+    return claimsAllowed(this.pile[this.pile.length - 1].rank, view.config.seedhi);
+  }
+
+  /** a turn in a running round: add their chance of holding none of the ranks they could claim, and whether they passed */
+  private followed(view: RoomView, id: string, ranks: readonly Rank[], played: number, passed: boolean): void {
     const hand = (view.players.find((p) => p.id === id)?.cardCount ?? 0) + played;
     if (hand === 0) return;
     const r = this.read(id);
-    r.lack += 1 - holdChance(this.unseen(view, rank), hand, 1);
+    r.lack += 1 - holdChance(this.unseenAny(view, ranks), hand, 1);
     if (passed) r.passes++;
   }
 
@@ -261,7 +278,7 @@ export class BotMemory {
     else r.followHonest += held;
     rv.cards.forEach((c, i) => {
       if (!c) return;
-      const fake = c.rank !== rv.rank ? 1 : 0;
+      const fake = backsClaim(c, rv.rank, view.kismat) ? 0 : 1;
       if (i === 0) {
         r.firstTried++;
         r.firstFound += fake;
@@ -284,10 +301,25 @@ export class BotMemory {
   }
 
   /** what this bot can't see of a rank: everything but its hand, its partner's, its pile cards and known discards */
-  unseen(view: RoomView, rank: Rank) {
+  unseen(view: RoomView, rank: Rank): Unseen {
+    return unseenOf(rank, view.config.decks, this.mine(view), this.gone, view.kismat);
+  }
+
+  /** what this bot can't see of any of these ranks (and the Kismat rank): the copies of each added up */
+  private unseenAny(view: RoomView, ranks: readonly Rank[]): Unseen {
+    if (ranks.length === 1) return this.unseen(view, ranks[0]);
+    const mine = this.mine(view);
+    const all = new Set<Rank>(view.kismat ? [...ranks, view.kismat] : ranks);
+    let copies = 0;
+    for (const rank of all) copies += unseenOf(rank, view.config.decks, mine, this.gone).copies;
+    return { cards: unseenOf(ranks[0], view.config.decks, mine, this.gone).cards, copies };
+  }
+
+  /** cards this bot knows aren't in anyone else's hand: its hand, its partner's and its pile cards */
+  private mine(view: RoomView): Card[] {
     const mine = [...view.hand, ...(view.partnerHand ?? [])];
     for (const entry of this.pile) mine.push(...(entry.mine ?? []));
-    return unseenOf(rank, view.config.decks, mine, this.gone);
+    return mine;
   }
 
   private counts(id: string): RankCounts {
