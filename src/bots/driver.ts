@@ -60,6 +60,8 @@ export class BotDriver {
   private chatTimers = new Map<Room, Set<Timer>>();
   /** when each room's last play came down, and how long people get to call it */
   private playedAt = new Map<Room, { id: string; at: number; window: number }>();
+  /** turn timer: a bot brain per person that watches the game and plays their turn when it runs out (no peeks, no chat) */
+  private standins = new Map<Room, Map<string, Seat>>();
 
   constructor(
     private readonly hooks: BotHooks,
@@ -97,6 +99,7 @@ export class BotDriver {
 
   /** every bot at the table learns from what just happened */
   observe(room: Room, events: GameEvent[]): void {
+    this.observeStandins(room, events);
     const seats = this.tables.get(room);
     if (!seats || !room.game || events.length === 0) return;
     const lp = room.game.lastPlay;
@@ -114,6 +117,8 @@ export class BotDriver {
 
   /** after any change: plan what each bot does next */
   wake(room: Room): void {
+    // people's stand-ins start watching from the deal
+    if (room.config.turnTimer && room.game && !room.game.over) for (const seat of this.standinsOf(room).values()) this.memoryOf(room, seat);
     const seats = this.tables.get(room);
     if (!seats) return;
     if (!this.isOpen(room)) return this.forget(room);
@@ -159,6 +164,7 @@ export class BotDriver {
   forget(room: Room): void {
     for (const seat of this.tables.get(room)?.values() ?? []) this.cancel(seat);
     for (const t of this.chatTimers.get(room) ?? []) clearTimeout(t);
+    this.standins.delete(room);
     this.tables.delete(room);
     this.chatTimers.delete(room);
     this.playedAt.delete(room);
@@ -198,23 +204,62 @@ export class BotDriver {
 
   /** runs a move through the game rules; false if the rules refused it */
   private apply(room: Room, seat: Seat, g: Game, move: BotMove): boolean {
+    const events = this.run(seat, g, move);
+    if (events) this.hooks.onMove(room, events);
+    return events !== null;
+  }
+
+  /** the move's events, or null if the rules refused it */
+  private run(seat: Seat, g: Game, move: BotMove): GameEvent[] | null {
     try {
-      let events: GameEvent[];
-      if (move.kind === 'call') {
-        events = g.callBluff(seat.id, g.lastPlay!.id, move.cardIndex, 0);
-      } else if (move.kind === 'pass') {
-        events = g.pass(seat.id);
-      } else {
-        const hand = g.hand(seat.id);
-        seat.mem!.pendingMine = move.cardIds.map((id) => hand.find((c) => c.id === id)).filter((c): c is Card => c !== undefined);
-        events = g.play(seat.id, move.cardIds, move.rank);
-      }
-      this.hooks.onMove(room, events);
-      return true;
+      if (move.kind === 'call') return g.callBluff(seat.id, g.lastPlay!.id, move.cardIndex, 0);
+      if (move.kind === 'pass') return g.pass(seat.id);
+      const hand = g.hand(seat.id);
+      if (seat.mem) seat.mem.pendingMine = move.cardIds.map((id) => hand.find((c) => c.id === id)).filter((c): c is Card => c !== undefined);
+      return g.play(seat.id, move.cardIds, move.rank);
     } catch (err) {
       if (seat.mem) seat.mem.pendingMine = null;
       if (!(err instanceof GameError)) console.error('[bots] move failed:', err);
-      return false;
+      return null;
+    }
+  }
+
+  /** a person's turn timer ran out: the bot brain picks their move like a bot's (never peeks); [] if nothing worked */
+  playFor(room: Room, id: string): GameEvent[] {
+    const g = room.game;
+    if (!g || g.over || g.turnId !== id) return [];
+    const seat = this.standinsOf(room).get(id);
+    if (!seat) return [];
+    let move: BotMove;
+    try {
+      move = chooseTurn(this.situation(room, seat), () => null);
+    } catch (err) {
+      console.error('[bots] stand-in decision failed:', (err as Error).message);
+      move = this.fallback(g, id);
+    }
+    return this.run(seat, g, move) ?? this.run(seat, g, this.fallback(g, id)) ?? [];
+  }
+
+  /** one stand-in per person seated in this game */
+  private standinsOf(room: Room): Map<string, Seat> {
+    let seats = this.standins.get(room);
+    if (!seats) {
+      seats = new Map();
+      this.standins.set(room, seats);
+    }
+    for (const id of room.game?.order ?? []) {
+      if (room.isBot(id) || seats.has(id)) continue;
+      const me = makePersonality(pickStyle([], this.rand), this.rand);
+      seats.set(id, { id, me, today: me, reads: new Map(), mem: null, game: null, turnTimer: null, turnKey: null, callTimer: null, considered: null });
+    }
+    return seats;
+  }
+
+  /** stand-ins remember the game like the bots do */
+  private observeStandins(room: Room, events: GameEvent[]): void {
+    if (!room.config.turnTimer || !room.game) return;
+    for (const seat of this.standinsOf(room).values()) {
+      if (room.game.order.includes(seat.id)) this.memoryOf(room, seat).observe(events, room.view(seat.id), seat.today.tilt);
     }
   }
 

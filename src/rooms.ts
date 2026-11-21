@@ -6,6 +6,7 @@ import { Crazy7Game } from './crazy7/game.js';
 import { Game, GameError } from './game.js';
 import type { GameEvent, GameRecord, Member, MemberAccount, TableGame, WatchRequest } from './models.js';
 import { dealSecrets, secretView } from './secrets.js';
+import { ReplayRecorder } from './replay.js';
 import {
   BOT_LEVEL_NAMES,
   botStakeCap,
@@ -27,6 +28,7 @@ import {
   type SazaBadge,
   type SecretView,
   type ThrowEvent,
+  TURN_TIMER,
 } from './types.js';
 
 /** why a stake is too high for the bots at the table, for players to read */
@@ -66,13 +68,15 @@ export const DEFAULT_ROOM_LIMITS: RoomLimits = { createsPerIp: 10, liveRoomsPerI
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false, voice: true, kismat: false, seedhi: false };
+  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false, voice: true, kismat: false, seedhi: false, turnTimer: false, turnSec: 30 };
   /** game over with Saza on: the loser's new badge, which the winner may swap until the room goes back to the lobby */
   sazaPick: { loserId: string; winnerId: string } | null = null;
   /** a Bluff game */
   game: Game | null = null;
   /** a Crazy 7 game */
   c7: Crazy7Game | null = null;
+  /** the running game's steps for its replay; null in the lobby */
+  replay: ReplayRecorder | null = null;
   startedAt: Date | null = null;
   /** coin changes of the last finished game, filled once it's saved */
   coinResults: CoinResult[] | null = null;
@@ -99,8 +103,22 @@ export class Room {
   private live = new Set<string>();
   /** of those, who has their mic on (the rest only listen) */
   private mics = new Set<string>();
+  /** turn timer: the running turn's clock (TurnClock sets it); null when off or no person's turn */
+  turnClock: { key: string; playerId: string; endsAt: number } | null = null;
+  /** turn timer: timed-out turns in a row, by member id */
+  turnMisses = new Map<string, number>();
 
   constructor(readonly code: string) {}
+
+  /** turn timer on and they let TURN_TIMER.missesToAway turns in a row run out */
+  isAway(id: string): boolean {
+    return this.config.turnTimer && (this.turnMisses.get(id) ?? 0) >= TURN_TIMER.missesToAway;
+  }
+
+  /** they made a move themselves: no longer away */
+  markActive(id: string): void {
+    this.turnMisses.delete(id);
+  }
 
   /** whichever game is on */
   get table(): TableGame | null {
@@ -158,6 +176,7 @@ export class Room {
       shop: account?.shop ?? NO_WEAR,
       // logged-in people start a season at Bronze 0
       rank: account ? (account.rank ?? { division: 'bronze', points: 0 }) : null,
+      streak: account?.streak ?? 0,
     };
     this.members.push(member);
     if (!this.hostId) this.hostId = member.id;
@@ -531,11 +550,15 @@ export class Room {
     this.swapAsks.clear();
     this.coinResults = null;
     this.departed.clear();
+    // every game starts with nobody away
+    this.turnMisses.clear();
+    this.turnClock = null;
     if (this.config.game === 'crazy7') {
       this.game = null;
       // stepwise: the automatic picks and passes come one at a time (Crazy7Auto), so people can follow them
       this.c7 = new Crazy7Game(this.players().map((m) => m.id), this.config, secureRandom, true, true);
       this.dealSecretCards();
+      this.startReplay();
       return;
     }
     this.c7 = null;
@@ -543,6 +566,22 @@ export class Room {
     const order = this.config.teams ? (this.slotIds().filter((id) => id !== null) as string[]) : this.players().map((m) => m.id);
     this.game = new Game(order, this.config, secureRandom, order.filter((id) => this.isBot(id)));
     this.dealSecretCards();
+    this.startReplay();
+  }
+
+  /** a new step list for this game; Bluff's real cards are kept only when lies aren't secret */
+  private startReplay(): void {
+    const g = this.table!;
+    const name = (id: string) => this.members.find((m) => m.id === id)?.name ?? 'Someone';
+    const players = g.order.map((id) => ({ id, name: name(id), bot: this.isBot(id) }));
+    this.replay = new ReplayRecorder(this.c7 ? 'crazy7' : 'bluff', players, !this.c7 && !this.config.secretLies);
+    this.replay.start(g, this.game, this.c7);
+  }
+
+  /** one move for the replay: the lines the table heard and the table right after */
+  recordStep(lines: string[], events: GameEvent[]): void {
+    const g = this.table;
+    if (g && this.replay) this.replay.record(g, this.game, this.c7, lines, events);
   }
 
   /** every person at the new table gets a secret mission card for this game; bots get none, and no card the table's settings rule out */
@@ -599,6 +638,7 @@ export class Room {
       bets: status === 'finished' ? [...g.bets] : [],
       // who caught whom lying, for the rivals records (Bluff only)
       catches: this.game ? this.game.catchList() : [],
+      replay: this.replay?.toReplay() ?? null,
     };
   }
 
@@ -615,6 +655,7 @@ export class Room {
     }
     this.game = null;
     this.c7 = null;
+    this.replay = null;
     this.coinResults = null;
     this.sazaPick = null;
     this.departed.clear();
@@ -742,6 +783,8 @@ export class Room {
         live: this.isLive(m.id),
         mic: this.micOn(m.id),
         rank: m.bot ? null : m.rank,
+        away: this.isAway(m.id),
+        streak: m.bot ? 0 : m.streak,
       })),
       watchers: this.members
         .filter((m) => !seatedIds.has(m.id))
@@ -755,6 +798,7 @@ export class Room {
           byChoice: m.watchByChoice,
         })),
       turnId: g?.turnId ?? null,
+      turnMsLeft: this.turnClock && this.turnClock.playerId === g?.turnId ? Math.max(0, this.turnClock.endsAt - Date.now()) : null,
       roundRank: b?.roundRank ?? null,
       kismat: b?.kismat ?? null,
       pileCount: g?.pile.length ?? 0,

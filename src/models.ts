@@ -1,4 +1,4 @@
-import type { Award, Card, CoinResult, GameConfig, InviteEvent, LifetimeStats, PlayReveal, Rank, RankDivisionId, SazaBadge, ShopLookKind } from './types.js';
+import type { Award, Card, CoinResult, GameConfig, GameReplay, InviteEvent, LifetimeStats, PlayReveal, Rank, RankDivisionId, SazaBadge, ShopLookKind } from './types.js';
 
 /** one of a player's plays this game with the true cards (server only); open: it never stood or was called (still waiting, or cut off by a walk-out or End game) */
 export interface LoggedPlay extends PlayReveal {
@@ -53,6 +53,8 @@ export interface Member {
   shop: ShopWear;
   /** this season's division and points, read at join and updated after each ranked game; null for guests and bots */
   rank: RankBadge | null;
+  /** games won in a row, read at join and updated after each game; 0 for guests and bots */
+  streak: number;
 }
 
 /** a division and rank points, as shown on seats and lobby rows */
@@ -137,6 +139,8 @@ export interface MemberAccount {
   shop?: ShopWear;
   /** missing: Bronze 0 for a logged-in player (tests and older callers) */
   rank?: RankBadge | null;
+  /** games won in a row; missing: 0 */
+  streak?: number;
 }
 
 /** someone asking to watch a game in progress; the host lets them in or not */
@@ -196,6 +200,8 @@ export interface GameRecord {
   bets: BetResult[];
   /** Bluff: how many times each player caught another lying, by member id */
   catches: { by: string; of: string; n: number }[];
+  /** step-by-step replay; null when nothing was recorded */
+  replay?: GameReplay | null;
 }
 
 /** optional server features wired in by server.ts (accounts, coins, friends) */
@@ -232,6 +238,8 @@ export interface AccountInfo {
   habits: Habits | null;
   shop: ShopWear;
   rank: RankBadge;
+  /** games won in a row */
+  streak: number;
 }
 
 /** balances after a gift between friends */

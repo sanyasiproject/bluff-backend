@@ -8,6 +8,8 @@ import {
   DEFAULT_TABLE_THEME,
   type LeagueResponse,
   type MissionsResponse,
+  type PassClaimResponse,
+  type PassResponse,
   type ProfileOverview,
   type PublicUser,
   type RivalsResponse,
@@ -34,6 +36,14 @@ export function meRoutes(store: Store, onLookChanged: (userId: string, look: Pla
       const user = await store.ranked.rollover(daily.user);
       const friendRequests = await store.friends.incomingCount(user._id);
       res.json({ user: toPublicUser(user), bonus: daily.bonus, friendRequests });
+    }),
+  );
+
+  // the daily spin wheel: one free spin per IST day
+  r.post(
+    '/spin',
+    ah(async (_req, res) => {
+      res.json(await store.spin.spin(currentUser(res)._id));
     }),
   );
 
@@ -94,6 +104,26 @@ export function meRoutes(store: Store, onLookChanged: (userId: string, look: Pla
       const id = asPayload(req.body).id;
       if (typeof id !== 'string' || id.length > 40) throw new ApiError(400, "That isn't one of your missions");
       const body: MissionsResponse = await store.missions.swap(currentUser(res)._id, id);
+      res.json(body);
+    }),
+  );
+
+  // the season pass for the ranked season now on: XP, tiers reached and claimed
+  r.get(
+    '/pass',
+    ah(async (_req, res) => {
+      const body: PassResponse = await store.pass.get(currentUser(res)._id);
+      res.json(body);
+    }),
+  );
+
+  // claim one reached tier's reward (never automatic); a tier pays once
+  r.post(
+    '/pass/claim',
+    ah(async (req, res) => {
+      const tier = asPayload(req.body).tier;
+      if (typeof tier !== 'number' || !Number.isInteger(tier)) throw new ApiError(400, 'That tier is not on the pass');
+      const body: PassClaimResponse = await store.pass.claim(currentUser(res)._id, tier);
       res.json(body);
     }),
   );
@@ -194,6 +224,17 @@ export function meRoutes(store: Store, onLookChanged: (userId: string, look: Pla
     ah(async (req, res) => {
       const limit = parseQueryInt(req.query.limit, 20, 50) || 20;
       res.json({ games: await store.games.recentFor(currentUser(res)._id, limit) });
+    }),
+  );
+
+  // a game I played, move by move; 404 for others' games and older games without a replay
+  r.get(
+    '/games/:id/replay',
+    ah(async (req, res) => {
+      const me = currentUser(res);
+      const replay = await store.games.replayFor(String(req.params.id), me._id, me.role === 'admin');
+      if (!replay) throw new ApiError(404, 'No replay for this game');
+      res.json(replay);
     }),
   );
 

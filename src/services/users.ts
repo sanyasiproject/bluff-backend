@@ -16,6 +16,7 @@ import {
   HISTORY_PAGE_SIZE,
   levelOf,
   LOGIN_BONUS,
+  loginRewardOf,
   NAME_CHANGE_DAYS,
   parseAvatar,
   type AdminUser,
@@ -94,8 +95,17 @@ export function toPublicUser(u: WithId<UserDoc>): PublicUser {
     // this season's standing (Bronze 0 before any ranked game) and earlier seasons
     rank: rankViewOf(u.ranked, undefined, undefined, seasonsPlayed(u)),
     nameChangeAt: nextNameChangeOf(u),
+    loginStreak: loginStreakOf(u),
+    spunToday: u.lastSpinDay === istDay(),
   };
 }
+
+/** yesterday in India (YYYY-MM-DD) */
+const yesterday = () => istDay(new Date(Date.now() - 86_400_000));
+
+/** the login streak still running: last bonus today or yesterday, else 0 */
+export const loginStreakOf = (u: Pick<UserDoc, 'loginStreak' | 'lastLoginBonusDay'>): number =>
+  u.lastLoginBonusDay === istDay() || u.lastLoginBonusDay === yesterday() ? (u.loginStreak ?? 1) : 0;
 
 export function toAdminUser(u: WithId<UserDoc>): AdminUser {
   return { ...toPublicUser(u), lastLoginAt: u.lastLoginAt?.toISOString() ?? null, blocked: u.blocked ?? false };
@@ -141,6 +151,7 @@ export class UserService {
       createdAt: new Date(),
       lastLoginAt: new Date(),
       lastLoginBonusDay: istDay(),
+      loginStreak: 1,
     };
     let insertedId: ObjectId;
     try {
@@ -167,22 +178,25 @@ export class UserService {
     return { token: await this.createSession(user._id), user: toPublicUser(daily.user), bonus: daily.bonus };
   }
 
-  /** +LOGIN_BONUS once per IST day; the date check is in the update itself, so it can't pay twice */
+  /** the day's login reward once per IST day, growing with the login streak; the date check is in the update itself, so it can't pay twice */
   async claimLoginBonus(user: WithId<UserDoc>): Promise<{ user: WithId<UserDoc>; bonus: number }> {
     const today = istDay();
     if (user.lastLoginBonusDay === today) return { user, bonus: 0 };
+    // yesterday too: the streak goes on; a missed day starts it again
+    const streak = user.lastLoginBonusDay === yesterday() ? (user.loginStreak ?? 0) + 1 : 1;
+    const bonus = loginRewardOf(streak);
     const updated = await this.cols.users.findOneAndUpdate(
       { _id: user._id, lastLoginBonusDay: { $ne: today } },
-      { $inc: { coins: LOGIN_BONUS }, $set: { lastLoginBonusDay: today } },
+      { $inc: { coins: bonus }, $set: { lastLoginBonusDay: today, loginStreak: streak } },
       { returnDocument: 'after' },
     );
-    return updated ? { user: updated, bonus: LOGIN_BONUS } : { user, bonus: 0 };
+    return updated ? { user: updated, bonus } : { user, bonus: 0 };
   }
 
   async getAccounts(userIds: string[]): Promise<Map<string, AccountInfo>> {
     const ids = userIds.filter((id) => /^[a-f0-9]{24}$/i.test(id)).map((id) => new ObjectId(id));
     const users = await this.cols.users
-      .find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1, avatar: 1, cardBack: 1, tableTheme: 1, habits: 1, shop: 1, ranked: 1 } })
+      .find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1, avatar: 1, cardBack: 1, tableTheme: 1, habits: 1, shop: 1, ranked: 1, winStreak: 1 } })
       .toArray();
     return new Map(
       users.map((u) => [
@@ -195,6 +209,7 @@ export class UserService {
           shop: shopWearOf(u),
           // this season's division, for seats and lobby rows
           rank: rankBadgeOf(u.ranked),
+          streak: u.winStreak ?? 0,
         },
       ]),
     );

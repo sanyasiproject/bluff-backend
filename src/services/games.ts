@@ -7,16 +7,19 @@ import {
   DAILY_GAME_REWARDS,
   levelOf,
   MIN_REWARD_GAME_SEC,
+  PASS_XP,
   missionOf,
   SECRET_XP,
   xpOf,
   type CoinResult,
   type GameSummary,
+  type ReplayResponse,
   type LifetimeStats,
 } from '../types.js';
 import type { LeagueService } from './league.js';
 import type { MissionCounts, MissionDone, MissionService } from './missions.js';
 import type { RankedService } from './ranked.js';
+import type { SeasonPassService } from './seasonPass.js';
 import { boostOf } from './shop.js';
 import { statsOf } from './users.js';
 
@@ -46,6 +49,7 @@ export class GameRecorder {
     private readonly missions: MissionService,
     private readonly league: LeagueService,
     private readonly ranked: RankedService,
+    private readonly pass?: SeasonPassService,
   ) {}
 
   async save(record: GameRecord): Promise<CoinResult[]> {
@@ -102,6 +106,8 @@ export class GameRecorder {
         detail: a.detail,
         names: a.playerIds.map((id) => nameOf.get(id) ?? 'Someone'),
       })),
+      // the step-by-step replay, when the room recorded one
+      ...(record.replay && record.replay.steps.length > 0 ? { replay: record.replay } : {}),
     });
 
     // a secret mission card done pays bonus XP, only in a game that counts for a logged-in player who wasn't removed
@@ -112,6 +118,7 @@ export class GameRecorder {
       counts && p.userId && !p.kicked ? Math.round(xpOf(asLifetime(p)) * (boostOfP(p).xp - 1)) : 0;
 
     if (finished) await this.addLifetimeStats(players, record.config.game === 'crazy7', (p) => secretXpOf(p) + boostXpOf(p));
+    if (finished) await this.updateWinStreaks(players);
     // how each person really plays, for the bots; a stopped game's plays count too
     if (record.config.game !== 'crazy7') await this.addHabits(players);
     // missions move only with games that count, like the daily ladder; finished ones are paid as they're saved
@@ -137,11 +144,26 @@ export class GameRecorder {
             })
         : new Map<string, NonNullable<CoinResult['rank']>>();
 
+    // season pass XP: games that count, wins and missions finished, for logged-in people who weren't removed
+    const passXp = new Map<string, number>();
+    if (counts && this.pass) {
+      for (const p of people) {
+        const xp = PASS_XP.game + (p.won ? PASS_XP.win : 0) + PASS_XP.mission * (missionsDone.get(p.memberId)?.length ?? 0);
+        try {
+          await this.pass.addXp(p.userId!, xp);
+          passXp.set(p.memberId, xp);
+        } catch (err) {
+          // a pass hiccup never costs the game's other results
+          console.error('[pass] could not add XP:', (err as Error).message);
+        }
+      }
+    }
+
     const today = istDay();
     const accounts = await this.cols.users
       .find(
         { _id: { $in: players.flatMap((p) => (p.userId ? [p.userId] : [])) } },
-        { projection: { coins: 1, stats: 1, gamesToday: 1, gamesTodayDay: 1 } },
+        { projection: { coins: 1, stats: 1, gamesToday: 1, gamesTodayDay: 1, winStreak: 1 } },
       )
       .toArray();
     const byId = new Map(accounts.map((u) => [u._id.toHexString(), u]));
@@ -164,6 +186,8 @@ export class GameRecorder {
         boostXp: u ? boostXpOf(p) : 0,
         boostCoins: u ? (boostCoins.get(p.memberId) ?? 0) : 0,
         rank: u ? (ranks.get(p.memberId) ?? null) : null,
+        winStreak: finished && u && !p.kicked ? (u.winStreak ?? 0) : null,
+        passXp: u ? (passXp.get(p.memberId) ?? 0) : 0,
       };
     });
   }
@@ -262,6 +286,16 @@ export class GameRecorder {
         onBoost(p.memberId, reward - base);
       }
     }
+  }
+
+  /** a finished game: a win adds one to the win streak, anything else starts it again (logged-in players who weren't removed) */
+  private async updateWinStreaks(players: GamePlayerDoc[]): Promise<void> {
+    const updates: AnyBulkWriteOperation<UserDoc>[] = players
+      .filter((p) => p.userId && !p.kicked)
+      .map((p) => ({
+        updateOne: { filter: { _id: p.userId! }, update: p.won ? { $inc: { winStreak: 1 } } : { $set: { winStreak: 0 } } },
+      }));
+    if (updates.length > 0) await this.cols.users.bulkWrite(updates);
   }
 
   /** bonusXpOf: XP from the player's secret mission card this game */
@@ -377,8 +411,22 @@ export class GameRecorder {
     if (updates.length > 0) await this.cols.users.bulkWrite(updates);
   }
 
+  /** a saved game's replay for someone who played in it (or an admin); null when it isn't theirs or has none */
+  async replayFor(gameId: string, userId: ObjectId, admin: boolean): Promise<ReplayResponse | null> {
+    if (!ObjectId.isValid(gameId) || !/^[0-9a-f]{24}$/i.test(gameId)) return null;
+    const filter = admin ? { _id: new ObjectId(gameId) } : { _id: new ObjectId(gameId), 'players.userId': userId };
+    const g = await this.cols.games.findOne(filter, { projection: { status: 1, startedAt: 1, endedAt: 1, replay: 1 } });
+    if (!g?.replay) return null;
+    return { id: g._id.toHexString(), status: g.status, startedAt: g.startedAt.toISOString(), endedAt: g.endedAt.toISOString(), ...g.replay };
+  }
+
   async recentFor(userId: ObjectId, limit: number): Promise<GameSummary[]> {
-    const games = await this.cols.games.find({ 'players.userId': userId }).sort({ endedAt: -1 }).limit(limit).toArray();
+    // the replay's steps stay in the database; the list only says one exists
+    const games = await this.cols.games
+      .find({ 'players.userId': userId }, { projection: { 'replay.steps': 0 } })
+      .sort({ endedAt: -1 })
+      .limit(limit)
+      .toArray();
     return games.map((g: GameDoc) => {
       const me = g.players.find((p) => p.userId?.equals(userId));
       return {
@@ -402,6 +450,7 @@ export class GameRecorder {
           : null,
         myAwards: me ? g.awards.filter((a) => a.names.includes(me.name)).map((a) => ({ emoji: a.emoji, title: a.title })) : [],
         players: g.players.map((p) => ({ name: p.name, place: p.place, loser: p.loser, guest: p.guest, kicked: p.kicked ?? false, bot: p.bot ?? false })),
+        hasReplay: !!g.replay,
       };
     });
   }

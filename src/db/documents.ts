@@ -1,6 +1,6 @@
 import type { Collection, ObjectId } from 'mongodb';
 import type { Habits, PlayerStats } from '../models.js';
-import type { AuditAction, GameConfig, GameKind, LeagueStats, LifetimeStats, Role, SeasonResult, ShopLookKind } from '../types.js';
+import type { AuditAction, GameConfig, GameKind, GameReplay, LeagueStats, LifetimeStats, Role, SeasonResult, ShopLookKind } from '../types.js';
 
 /** database and collection names, all overridable from env */
 export interface DbNames {
@@ -15,6 +15,8 @@ export interface DbNames {
   push?: string;
   /** one document per ranked season; ranked_seasons by default */
   seasons?: string;
+  /** private messages between friends; messages by default */
+  messages?: string;
 }
 
 export interface UserDoc {
@@ -33,6 +35,12 @@ export interface UserDoc {
   lastSeenAt?: Date;
   /** IST day (YYYY-MM-DD) the daily login bonus was last given */
   lastLoginBonusDay?: string;
+  /** days in a row the daily login bonus was given, ending on lastLoginBonusDay (login streak) */
+  loginStreak?: number;
+  /** IST day of the last daily spin */
+  lastSpinDay?: string;
+  /** finished games won in a row (any game); a finished game not won sets it back to 0 */
+  winStreak?: number;
   /** IST day that gamesToday counts */
   gamesTodayDay?: string;
   /** finished games counted towards the daily game rewards on gamesTodayDay */
@@ -67,6 +75,17 @@ export interface UserDoc {
   rankHistory?: SeasonResult[];
   /** coin shop rentals and the looks worn from them (services/shop.ts) */
   shop?: ShopDoc;
+  /** season pass progress for one ranked season (services/seasonPass.ts); another season counts as none */
+  pass?: PassDoc;
+}
+
+/** an account's season pass for one ranked season */
+export interface PassDoc {
+  season: number;
+  /** pass XP earned this season */
+  xp: number;
+  /** tiers claimed, each at most once */
+  claimed: number[];
 }
 
 /** an account's shop rentals; every one runs out */
@@ -187,6 +206,8 @@ export interface GameDoc {
   awards: { emoji: string; title: string; names: string[]; detail: string }[];
   /** who caught whom lying, between logged-in players (games saved since rivals came in) */
   catches?: CatchDoc[];
+  /** step-by-step replay (games saved since replays came in) */
+  replay?: GameReplay;
 }
 
 export interface AuditDoc {
@@ -255,6 +276,19 @@ export interface Collections {
   settings: Collection<SettingsDoc>;
   push: Collection<PushSubscriptionDoc>;
   seasons: Collection<SeasonDoc>;
+  messages: Collection<MessageDoc>;
+}
+
+/** one private message between two friends; the newest DM_KEEP per pair are kept */
+export interface MessageDoc {
+  _id: ObjectId;
+  /** both user ids sorted and joined, as in FriendDoc */
+  pair: string;
+  from: ObjectId;
+  to: ObjectId;
+  text: string;
+  at: Date;
+  read: boolean;
 }
 
 /** one ranked season: when it starts and ends, and who asked for it */

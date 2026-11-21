@@ -1,6 +1,7 @@
 import type { Server, Socket } from 'socket.io';
 import { BotDriver } from './bots/driver.js';
 import { Crazy7Auto } from './crazy7/auto.js';
+import { TurnClock } from './turnClock.js';
 import { Crazy7Bots } from './crazy7/driver.js';
 import { rankPlural } from './cards.js';
 import { GameError } from './game.js';
@@ -107,6 +108,8 @@ export function registerHandlers(
   const wentOffline = new Map<string, number>();
   // every player gets their own view so hands stay private; bots then plan their next move
   const broadcast = (room: Room) => {
+    // the turn clock first, so every view carries this turn's time left
+    clock.wake(room);
     for (const m of room.members) if (m.socketId) io.to(m.socketId).emit('state', room.view(m.id));
     bots.wake(room);
     c7bots.wake(room);
@@ -132,6 +135,7 @@ export function registerHandlers(
           if (m && r.level !== null) m.level = r.level;
           // seats and lobby rows show the new rank straight away
           if (m && r.rank) m.rank = { division: r.rank.division, points: r.rank.after };
+          if (m && typeof r.winStreak === 'number') m.streak = r.winStreak;
         }
         if (room.table === game) room.coinResults = results;
         broadcast(room);
@@ -145,7 +149,10 @@ export function registerHandlers(
     const over = all.some((e) => e.kind === 'gameOver');
     bots.observe(room, all);
     c7bots.observe(room, all);
-    publish(room, [...notes, ...room.announce(all), ...(over ? room.settleSaza() : [])]);
+    const said = [...notes, ...room.announce(all), ...(over ? room.settleSaza() : [])];
+    // the replay keeps each move with what the table heard
+    if (all.length > 0 || said.length > 0) room.recordStep(said.map((a) => a.text), all);
+    publish(room, said);
     if (over) saveGame(room, room.snapshot(room.table?.aborted ? 'ended_early' : 'finished'));
   };
 
@@ -153,11 +160,13 @@ export function registerHandlers(
   const afterExit = (room: Room, events: GameEvent[], notes: Announcement[]) => {
     if (room.hasPeople) return afterMove(room, events, notes);
     const all = [...events, ...room.endGameNow()];
+    room.recordStep([...notes, ...room.announce(all)].map((a) => a.text), all);
     if (all.some((e) => e.kind === 'gameOver')) saveGame(room, room.snapshot('finished'));
     room.clearBots();
     bots.forget(room);
     c7bots.forget(room);
     c7auto.forget(room);
+    clock.forget(room);
     rooms.dropIfEmpty(room);
   };
 
@@ -169,6 +178,15 @@ export function registerHandlers(
     },
     (room) => rooms.isOpen(room),
     botSpeed,
+  );
+
+  // turn timer: a safe move for a person whose time ran out
+  const clock = new TurnClock(
+    (room, events, notes) => afterMove(room, events, notes),
+    (room) => rooms.isOpen(room),
+    botSpeed,
+    // the same brain the bots use plays the turn
+    (room, id) => (room.c7 ? c7bots.playFor(room, id) : bots.playFor(room, id)),
   );
 
   // Crazy 7's automatic picks and passes, one at a time at a pace people can follow
@@ -241,7 +259,9 @@ export function registerHandlers(
     // the Kismat card is read out with the deal, so nobody misses it
     const kismat = room.game?.kismat;
     const wild = kismat ? [room.note('round', `🍀 Kismat card: ${rankPlural(kismat)} are wild this game`)] : [];
-    publish(room, [room.note('round', `${label}. ${first} goes first${pot}`), ...wild, ...room.announce(opening)]);
+    const said = [room.note('round', `${label}. ${first} goes first${pot}`), ...wild, ...room.announce(opening)];
+    room.replay?.addStartLines(said.map((a) => a.text));
+    publish(room, said);
   };
 
   /** before a free deal with bots: each person's latest lifetime numbers and habits, so the bots size them up from their last games too */
@@ -300,6 +320,7 @@ export function registerHandlers(
       habits: fresh?.habits ?? null,
       shop: fresh?.shop,
       rank: fresh?.rank,
+      streak: fresh?.streak,
     };
   };
 
@@ -621,6 +642,7 @@ export function registerHandlers(
     on('room:lobby', () => {
       const { room, member } = current();
       const wasPlaying = room.phase === 'playing';
+      if (wasPlaying) room.recordStep([`${member.name} stopped the game`], []);
       // snapshot before the game is cleared; a stopped game moves no coins
       const record = wasPlaying ? room.snapshot('ended_early') : null;
       saveGame(room, record);
@@ -746,16 +768,19 @@ export function registerHandlers(
 
     on('game:play', (p) => {
       const { room, member } = current();
+      room.markActive(member.id);
       afterMove(room, room.requireGame().play(member.id, parseCardIds(p.cardIds), parseRank(p.rank)));
     });
 
     on('game:pass', () => {
       const { room, member } = current();
+      room.markActive(member.id);
       afterMove(room, room.requireGame().pass(member.id));
     });
 
     on('game:bluff', (p) => {
       const { room, member } = current();
+      room.markActive(member.id);
       const game = room.requireGame();
       const bet = room.checkBet(member, parseBet(p.bet));
       afterMove(room, game.callBluff(member.id, parsePlayId(p.playId), parseCardIndex(p.cardIndex), bet));
@@ -764,16 +789,19 @@ export function registerHandlers(
     // Crazy 7: one card on the pile, pick from the deck, end the turn, or say last card
     on('c7:play', (p) => {
       const { room, member } = current();
+      room.markActive(member.id);
       afterMove(room, room.requireCrazy7().play(member.id, parseCardId(p.cardId)));
     });
 
     on('c7:pick', () => {
       const { room, member } = current();
+      room.markActive(member.id);
       afterMove(room, room.requireCrazy7().pick(member.id));
     });
 
     on('c7:pass', () => {
       const { room, member } = current();
+      room.markActive(member.id);
       afterMove(room, room.requireCrazy7().pass(member.id));
     });
 
@@ -882,6 +910,7 @@ export function registerHandlers(
     bots.prune();
     c7bots.prune();
     c7auto.prune();
+    clock.prune();
   }, SWEEP_EVERY_MS);
   timer.unref();
   return {
@@ -890,6 +919,7 @@ export function registerHandlers(
       bots.stop();
       c7bots.stop();
       c7auto.stop();
+      clock.stop();
     },
     /** a player changed their avatar, card back or table: their seat in any room shows it at once */
     lookChanged: (userId: string, look: PlayerLook) => {

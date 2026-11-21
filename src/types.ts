@@ -37,6 +37,38 @@ export const MAX_BLUFF_CALLS_IN_A_ROW = 2;
 
 /** daily rewards, counted per India (IST) calendar day */
 export const LOGIN_BONUS = 200;
+/** login streak: the daily login reward by streak day (day 1 = LOGIN_BONUS); after day 7 the week starts again, the streak count keeps going */
+export const LOGIN_STREAK_REWARDS = [LOGIN_BONUS, 250, 300, 400, 500, 650, 1_000] as const;
+/** the login reward for a streak of this many days in a row (1 = first day) */
+export const loginRewardOf = (streak: number): number => LOGIN_STREAK_REWARDS[(Math.max(1, streak) - 1) % LOGIN_STREAK_REWARDS.length];
+
+/** the daily spin wheel's slices, in wheel order (one free spin per IST day); the server picks the slice */
+export const SPIN_PRIZES: readonly { kind: 'coins' | 'xp'; amount: number }[] = [
+  { kind: 'coins', amount: 100 },
+  { kind: 'xp', amount: 50 },
+  { kind: 'coins', amount: 250 },
+  { kind: 'coins', amount: 500 },
+  { kind: 'xp', amount: 100 },
+  { kind: 'coins', amount: 1_000 },
+  { kind: 'coins', amount: 2_500 },
+  { kind: 'coins', amount: 10_000 },
+];
+
+/** what one daily spin gave */
+export interface SpinResponse {
+  /** slice of SPIN_PRIZES the wheel stops on */
+  index: number;
+  prize: { kind: 'coins' | 'xp'; amount: number };
+  user: PublicUser;
+}
+
+/** turn timer (a room setting): default seconds each turn shows; after missesToAway timed-out turns in a row a player is away and gets awaySec */
+export const TURN_TIMER = { turnSec: 30, awaySec: 8, missesToAway: 2 } as const;
+/** turn lengths the host can pick */
+export const TURN_SECONDS = [15, 30, 45] as const;
+export type TurnSeconds = (typeof TURN_SECONDS)[number];
+/** a win streak shows on seats and lobby rows from this many wins in a row */
+export const WIN_STREAK_SHOWN = 3;
 /** daily game rewards (IST day): reaching this many finished games today pays these coins once */
 export const DAILY_GAME_REWARDS: readonly { games: number; coins: number }[] = [
   { games: 1, coins: 100 },
@@ -114,6 +146,10 @@ export interface GameConfig {
   kismat: boolean;
   /** Bluff: after the opener each claim is the same rank, one below or one above the last claim (older apps don't send it: off) */
   seedhi: boolean;
+  /** both games: each turn has TURN_TIMER.turnSec; when it runs out the server plays a safe move (older apps don't send it: off) */
+  turnTimer: boolean;
+  /** turn timer: seconds a turn shows, one of TURN_SECONDS (older apps don't send it: 30) */
+  turnSec: TurnSeconds;
 }
 
 /** one lie nobody caught, turned face-up when the game ends */
@@ -538,6 +574,10 @@ export interface PublicPlayer {
   mic?: boolean;
   /** this season's division and points (logged-in people; refreshed after each ranked game); null for guests and bots */
   rank?: { division: RankDivisionId; points: number } | null;
+  /** turn timer on and they let 2 turns in a row run out: their turns get the short away timer until they move again (missing from older servers) */
+  away?: boolean;
+  /** games won in a row (logged-in people; refreshed after each game); 0 for guests and bots (missing from older servers) */
+  streak?: number;
 }
 
 /** how one player's coins changed when a game ended */
@@ -570,6 +610,10 @@ export interface CoinResult {
    * (floor), paying back losses held off earlier, a Rank Shield used up, or the division kept by its 50-point protection (grace); null otherwise
    */
   rank: { before: number; after: number; division: RankDivisionId; held: 'cap' | 'floor' | 'debt' | 'shield' | 'grace' | null } | null;
+  /** games won in a row after this game; null for guests and games that didn't finish (missing from older servers) */
+  winStreak?: number | null;
+  /** season pass XP this game gave (games that count, wins and missions finished); missing from older servers */
+  passXp?: number;
 }
 
 export interface LastPlayView {
@@ -604,6 +648,8 @@ export interface RoomView {
   /** people in the room without a seat in the current game */
   watchers: WatcherView[];
   turnId: string | null;
+  /** turn timer: ms left on this turn's clock when the view was made; null when the timer is off or nobody's clock runs (missing from older servers) */
+  turnMsLeft?: number | null;
   /** the rank the next play follows: the round's rank, or with Seedhi the last claim; null when a round is about to open */
   roundRank: Rank | null;
   /** Bluff with the Kismat card on: this game's wild rank, shown to everyone; null otherwise */
@@ -1067,6 +1113,10 @@ export interface PublicUser {
   tutorials: GameKind[];
   /** this season's ranked standing; everyone starts at Bronze (older servers send null before a ranked game) */
   rank: RankView | null;
+  /** days in a row this player opened the app (login streak); 0 before the first (missing from older servers) */
+  loginStreak?: number;
+  /** used today's free spin (missing from older servers) */
+  spunToday?: boolean;
 }
 
 export interface AuthResponse {
@@ -1104,6 +1154,8 @@ export interface GameSummary {
   my: MyGameStats | null;
   myAwards: { emoji: string; title: string }[];
   players: { name: string; place: number | null; loser: boolean; guest: boolean; kicked: boolean; bot: boolean }[];
+  /** a step-by-step replay was saved (missing on older servers) */
+  hasReplay?: boolean;
 }
 
 /** extra numbers for the player's own profile page */
@@ -1340,4 +1392,186 @@ export interface ShopLook {
   aura: string | null;
   win: string | null;
   entry: string | null;
+}
+
+// ---------- game replay: a finished game step by step (GET /api/me/games/:id/replay) ----------
+
+/** steps kept per game; later moves overwrite the last step so the end still shows */
+export const REPLAY_MAX_STEPS = 800;
+
+/** one seat in a replay, in table order */
+export interface ReplayPlayer {
+  id: string;
+  name: string;
+  bot: boolean;
+}
+
+/** Bluff: the play on top of the pile (cards only when the room showed lies) */
+export interface ReplayClaim {
+  playerId: string;
+  count: number;
+  rank: Rank;
+  /** the real cards; missing when the room kept lies secret */
+  cards?: Card[];
+}
+
+/** one moment of the game: the start, then one per move */
+export interface ReplayStep {
+  /** what the table heard for this move */
+  lines: string[];
+  turnId: string | null;
+  /** cards each player holds, in `players` order */
+  counts: number[];
+  pile: number;
+  /** Bluff: the last claim still on the pile */
+  claim?: ReplayClaim | null;
+  /** Bluff: a bluff call in this step */
+  call?: { callerId: string; playerId: string; caught: boolean } | null;
+  /** Crazy 7: the face-up card */
+  top?: Card | null;
+}
+
+/** a saved game's replay */
+export interface GameReplay {
+  game: GameKind;
+  players: ReplayPlayer[];
+  steps: ReplayStep[];
+  /** Bluff plays carry their real cards */
+  cards: boolean;
+  /** some middle moves were not kept (very long game) */
+  truncated?: boolean;
+  /** Bluff: the Kismat rank, wild this game (it backs any claim) */
+  wild?: Rank | null;
+}
+
+/** GET /api/me/games/:id/replay */
+export interface ReplayResponse extends GameReplay {
+  id: string;
+  status: 'finished' | 'ended_early';
+  startedAt: string;
+  endedAt: string;
+}
+
+// ---------- private messages between friends ----------
+
+/** longest message, after trimming */
+export const DM_MAX_LENGTH = 300;
+/** messages per history page */
+export const DM_PAGE_SIZE = 50;
+
+/** one private message; also the socket event `dm`, sent to both people's open apps */
+export interface DirectMessage {
+  id: string;
+  from: string;
+  to: string;
+  text: string;
+  /** ISO time sent */
+  at: string;
+  read: boolean;
+}
+
+/** GET /api/friends/:id/messages: oldest first */
+export interface DmHistoryResponse {
+  messages: DirectMessage[];
+  /** older messages are left to load */
+  more: boolean;
+}
+
+/** GET /api/friends/unread: messages I haven't read, from current friends */
+export interface DmUnreadResponse {
+  total: number;
+  /** friend id → count; friends with none are left out */
+  byFriend: Record<string, number>;
+}
+
+/** socket event `dm:read`, sent to both people: reader read everything the other sent them */
+export interface DmReadEvent {
+  reader: string;
+  other: string;
+}
+
+// ---------- season pass: a free reward track for the ranked season now on, claimed tier by tier ----------
+
+/** pass XP from one game that counts (both games), a win on top, and each daily or weekly mission it finished */
+export const PASS_XP = { game: 20, win: 20, mission: 30 } as const;
+/** pass XP for each tier */
+export const PASS_TIER_XP = 100;
+/** coins given instead of a Rank Shield tier when the player already holds MAX_SHIELDS */
+export const PASS_SHIELD_COINS = 750;
+
+/** one tier's reward: coins, bonus level XP, or one Rank Shield (amount 1) */
+export interface PassReward {
+  kind: 'coins' | 'xp' | 'shield';
+  amount: number;
+}
+
+/** the track, tier 1 first: coins growing along it, some bonus XP, a shield every 5th tier and big coin prizes at 10, 20 and 30 */
+export const PASS_TIERS: readonly PassReward[] = [
+  { kind: 'coins', amount: 100 },
+  { kind: 'coins', amount: 120 },
+  { kind: 'xp', amount: 50 },
+  { kind: 'coins', amount: 150 },
+  { kind: 'shield', amount: 1 },
+  { kind: 'coins', amount: 180 },
+  { kind: 'coins', amount: 200 },
+  { kind: 'xp', amount: 75 },
+  { kind: 'coins', amount: 220 },
+  { kind: 'coins', amount: 1_000 },
+  { kind: 'coins', amount: 250 },
+  { kind: 'coins', amount: 270 },
+  { kind: 'xp', amount: 100 },
+  { kind: 'coins', amount: 300 },
+  { kind: 'shield', amount: 1 },
+  { kind: 'coins', amount: 330 },
+  { kind: 'coins', amount: 350 },
+  { kind: 'xp', amount: 125 },
+  { kind: 'coins', amount: 380 },
+  { kind: 'coins', amount: 2_000 },
+  { kind: 'coins', amount: 400 },
+  { kind: 'coins', amount: 430 },
+  { kind: 'xp', amount: 150 },
+  { kind: 'coins', amount: 460 },
+  { kind: 'shield', amount: 1 },
+  { kind: 'coins', amount: 500 },
+  { kind: 'coins', amount: 530 },
+  { kind: 'xp', amount: 200 },
+  { kind: 'coins', amount: 570 },
+  { kind: 'coins', amount: 5_000 },
+];
+
+/** tiers reached with this much pass XP (0 to PASS_TIERS.length) */
+export const passTierOf = (xp: number): number => Math.min(PASS_TIERS.length, Math.floor(Math.max(0, xp) / PASS_TIER_XP));
+
+/** one tier on the track */
+export interface PassTierView {
+  /** 1 to PASS_TIERS.length */
+  tier: number;
+  reward: PassReward;
+  reached: boolean;
+  claimed: boolean;
+}
+
+/** GET /api/me/pass */
+export interface PassResponse {
+  /** the ranked season the pass runs for; a new season starts it again */
+  season: number;
+  /** ISO times the season started and the next one starts (null when not known or not booked) */
+  startedAt: string | null;
+  endsAt: string | null;
+  /** pass XP this season */
+  xp: number;
+  /** tiers reached */
+  tier: number;
+  tiers: PassTierView[];
+  /** reached tiers not claimed yet */
+  claimable: number;
+}
+
+/** POST /api/me/pass/claim: the pass after the claim, what it gave (coins instead of a shield when they held MAX_SHIELDS), and the account */
+export interface PassClaimResponse {
+  pass: PassResponse;
+  got: PassReward;
+  /** a shield tier paid coins because they already held MAX_SHIELDS */
+  shieldSwapped: boolean;
+  user: PublicUser;
 }

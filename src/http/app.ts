@@ -11,6 +11,7 @@ import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
 import { friendRoutes, type NotifyFriends, type RoomOfUser } from './routes/friends.js';
 import { meRoutes } from './routes/me.js';
+import { messageRoutes, type DeliverDm, type DmRead } from './routes/messages.js';
 import { playerRoutes } from './routes/players.js';
 import { pushRoutes } from './routes/push.js';
 
@@ -28,6 +29,10 @@ export interface ApiOptions {
   onSettingsChanged?: (settings: AppSettings) => void;
   /** a player picked a new avatar, card back or table: rooms they're in show it at once */
   onLookChanged?: (userId: string, look: PlayerLook) => void;
+  /** a private message was saved: both people's open apps get it */
+  onDirectMessage?: DeliverDm;
+  /** a thread was read: both people's open apps hear it */
+  onDmRead?: DmRead;
 }
 
 /** HTTP side of the server: health check and the /api routes */
@@ -56,6 +61,7 @@ export function createApi(store: Store | null, opts: ApiOptions): express.Expres
     // search, profiles and friend requests: 20 a minute per user, shared
     const social = userRateLimit(20, 60_000);
     app.use('/api/friends', friendRoutes(store, opts.presence, opts.notifyFriends ?? (() => {}), opts.roomOfUser ?? (() => null), social));
+    app.use('/api/friends', messageRoutes(store, opts.onDirectMessage ?? (() => {}), opts.onDmRead ?? (() => {})));
     app.use('/api/players', playerRoutes(store, opts.presence, social));
     app.use('/api/push', pushRoutes(store, social));
     app.use('/api/admin', adminRoutes(store, opts.adminApiKey, limited, opts.onSettingsChanged ?? (() => {})));

@@ -52,6 +52,8 @@ const tableKey = (g: Crazy7Game) => `${g.moveSeq}|${g.turnId}|${g.penalty}|${g.p
 export class Crazy7Bots {
   private tables = new Map<Room, Map<string, Seat>>();
   private chatTimers = new Map<Room, Set<Timer>>();
+  /** turn timer: a bot brain per person that watches the game and plays their turn when it runs out */
+  private standins = new Map<Room, Map<string, Seat>>();
 
   constructor(
     private readonly hooks: Crazy7BotHooks,
@@ -64,6 +66,7 @@ export class Crazy7Bots {
   /** every bot at the table remembers what just happened */
   observe(room: Room, events: GameEvent[]): void {
     const g = room.c7;
+    if (g && room.config.turnTimer) for (const seat of this.standinsOf(room, g).values()) this.memoryOf(seat, g).observe(events);
     const seats = this.seats(room);
     if (!g || events.length === 0 || seats.size === 0) return;
     for (const seat of seats.values()) if (g.order.includes(seat.id)) this.memoryOf(seat, g).observe(events);
@@ -73,6 +76,9 @@ export class Crazy7Bots {
   /** after any change: plan what each bot does next */
   wake(room: Room): void {
     if (!this.isOpen(room)) return this.forget(room);
+    // people's stand-ins start watching from the deal
+    const c7 = room.c7;
+    if (c7 && !c7.over && room.config.turnTimer) for (const seat of this.standinsOf(room, c7).values()) this.memoryOf(seat, c7);
     const seats = this.seats(room);
     if (seats.size === 0) return;
     const g = room.c7;
@@ -109,6 +115,7 @@ export class Crazy7Bots {
   forget(room: Room): void {
     for (const seat of this.tables.get(room)?.values() ?? []) this.cancel(seat);
     for (const t of this.chatTimers.get(room) ?? []) clearTimeout(t);
+    this.standins.delete(room);
     this.tables.delete(room);
     this.chatTimers.delete(room);
   }
@@ -242,6 +249,54 @@ export class Crazy7Bots {
   }
 
   /** a fresh memory for each new game */
+  /** a person's turn timer ran out: the bot brain picks their move like a bot's, always saying last card; [] if nothing worked */
+  playFor(room: Room, id: string): GameEvent[] {
+    const g = room.c7;
+    if (!g || g.over || g.turnId !== id) return [];
+    const seat = this.standinsOf(room, g).get(id);
+    const view = seatView(room.view(id));
+    if (!seat || !view) return [];
+    const mem = this.memoryOf(seat, g);
+    mem.sync(view.c7);
+    let action: Crazy7Action;
+    try {
+      action = decide({ view, mem, me: seat.me, rand: this.rand });
+    } catch (err) {
+      console.error('[crazy7 bots] stand-in decision failed:', (err as Error).message);
+      action = fallback(view);
+    }
+    const run = (a: Crazy7Action): GameEvent[] | null => {
+      try {
+        const events: GameEvent[] = [];
+        if (a.kind === 'play') {
+          if (g.hand(id).length === 2 && g.canCall(id)) events.push(...g.call(id));
+          events.push(...g.play(id, a.cardId));
+          if (g.atRisk === id && g.canCall(id)) events.push(...g.call(id));
+        } else if (a.kind === 'pick') events.push(...g.pick(id));
+        else events.push(...g.pass(id));
+        return events;
+      } catch (err) {
+        if (!(err instanceof GameError)) console.error('[crazy7 bots] stand-in move failed:', err);
+        return null;
+      }
+    };
+    return run(action) ?? run(fallback(seatView(room.view(id)) ?? view)) ?? [];
+  }
+
+  /** one stand-in per person seated in this game */
+  private standinsOf(room: Room, g: Crazy7Game): Map<string, Seat> {
+    let seats = this.standins.get(room);
+    if (!seats) {
+      seats = new Map();
+      this.standins.set(room, seats);
+    }
+    for (const id of g.order) {
+      if (room.isBot(id) || seats.has(id)) continue;
+      seats.set(id, { id, me: makePersonality(pickStyle([], this.rand), this.rand), mem: null, game: null, timer: null, key: null, callTimer: null });
+    }
+    return seats;
+  }
+
   private memoryOf(seat: Seat, g: Crazy7Game): Crazy7Memory {
     if (!seat.mem || seat.game !== g) {
       seat.game = g;

@@ -54,6 +54,13 @@ export function createBluffServer(deps: ServerDeps = {}) {
     },
     onSettingsChanged: (settings) => settingsChanged(settings),
     onLookChanged: (userId, look) => lookChanged(userId, look),
+    // private messages reach every open app of both people
+    onDirectMessage: (msg) => {
+      for (const id of [...presence.socketsOf(msg.to), ...presence.socketsOf(msg.from)]) io.to(id).emit('dm', msg);
+    },
+    onDmRead: (event) => {
+      for (const id of [...presence.socketsOf(event.reader), ...presence.socketsOf(event.other)]) io.to(id).emit('dm:read', event);
+    },
   });
   const httpServer = createServer(app);
 

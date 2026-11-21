@@ -1,5 +1,5 @@
 import { MongoClient } from 'mongodb';
-import type { AuditDoc, Collections, DbNames, FriendDoc, GameDoc, PushSubscriptionDoc, SeasonDoc, SessionDoc, SettingsDoc, UserDoc } from './documents.js';
+import type { AuditDoc, Collections, DbNames, FriendDoc, GameDoc, MessageDoc, PushSubscriptionDoc, SeasonDoc, SessionDoc, SettingsDoc, UserDoc } from './documents.js';
 
 export interface MongoConnection {
   client: MongoClient;
@@ -19,6 +19,7 @@ export async function connectMongo(uri: string, names: DbNames): Promise<MongoCo
     settings: db.collection<SettingsDoc>(names.settings),
     push: db.collection<PushSubscriptionDoc>(names.push ?? 'push_subscriptions'),
     seasons: db.collection<SeasonDoc>(names.seasons ?? 'ranked_seasons'),
+    messages: db.collection<MessageDoc>(names.messages ?? 'messages'),
   };
   await Promise.all([
     cols.users.createIndex({ username: 1 }, { unique: true }),
@@ -32,6 +33,9 @@ export async function connectMongo(uri: string, names: DbNames): Promise<MongoCo
     cols.friends.createIndex({ recipient: 1 }),
     cols.push.createIndex({ endpoint: 1 }, { unique: true }),
     cols.push.createIndex({ userId: 1 }),
+    // a pair's thread by time, and unread counts
+    cols.messages.createIndex({ pair: 1, at: -1 }),
+    cols.messages.createIndex({ to: 1, read: 1 }),
   ]);
   return { client, cols };
 }

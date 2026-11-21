@@ -13,6 +13,9 @@ import {
   sazaOf,
   STAKES,
   THROWS,
+  TURN_SECONDS,
+  TURN_TIMER,
+  type TurnSeconds,
   type BotLevel,
   type ChatKind,
   type GameConfig,
@@ -20,6 +23,7 @@ import {
   type Role,
   type SazaBadge,
 } from './types.js';
+import { DM_MAX_LENGTH } from './types.js';
 
 export type Payload = Record<string, unknown>;
 
@@ -67,12 +71,14 @@ export function parseConfig(p: Payload): GameConfig {
   const voice = p.voice === undefined ? true : typeof p.voice === 'boolean' ? p.voice : null;
   const kismat = p.kismat === undefined ? false : typeof p.kismat === 'boolean' ? p.kismat : null;
   const seedhi = p.seedhi === undefined ? false : typeof p.seedhi === 'boolean' ? p.seedhi : null;
+  const turnTimer = p.turnTimer === undefined ? false : typeof p.turnTimer === 'boolean' ? p.turnTimer : null;
+  const turnSec = p.turnSec === undefined ? TURN_TIMER.turnSec : (TURN_SECONDS as readonly unknown[]).includes(p.turnSec) ? (p.turnSec as TurnSeconds) : null;
   if (!decks || !bluffRule || stake === null || peeks === null || bets === null || teams === null) throw new GameError('Invalid settings');
-  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null || ranked === null || voice === null || kismat === null || seedhi === null) {
+  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null || ranked === null || voice === null || kismat === null || seedhi === null || turnTimer === null || turnSec === null) {
     throw new GameError('Invalid settings');
   }
   // Bluff's extras are kept while Crazy 7 is picked (it ignores them), so switching back keeps them; bets need coins at stake
-  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked, voice, kismat, seedhi };
+  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked, voice, kismat, seedhi, turnTimer, turnSec };
 }
 
 // only the browsers' own push services: the server never posts to any other address a client sends
@@ -238,4 +244,21 @@ export function parseCardIndex(value: unknown): number | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'number' || !Number.isInteger(value)) throw new GameError('Invalid card');
   return value;
+}
+
+/** a private message: trimmed, 1 to DM_MAX_LENGTH characters */
+export function parseDmText(value: unknown): string {
+  // line breaks stay; other control characters go
+  const text = typeof value === 'string' ? value.replace(/[^\P{Cc}\n]/gu, '').trim() : '';
+  if (!text) throw new GameError('Type a message first');
+  if ([...text].length > DM_MAX_LENGTH) throw new GameError(`Messages can be up to ${DM_MAX_LENGTH} characters`);
+  return text;
+}
+
+/** an ISO time for paging back through messages; undefined when missing */
+export function parseBefore(value: unknown): Date | undefined {
+  if (value === undefined || value === '') return undefined;
+  const at = typeof value === 'string' ? new Date(value) : new Date(NaN);
+  if (Number.isNaN(at.getTime())) throw new GameError('Invalid time');
+  return at;
 }

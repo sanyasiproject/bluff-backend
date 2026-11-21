@@ -38,7 +38,7 @@ export function requireAdmin(store: Store): RequestHandler[] {
 export const currentUser = (res: Response) => res.locals.user as WithId<UserDoc>;
 
 /** fixed window per logged-in user (use after requireUser), for features a script could spam */
-export function userRateLimit(max: number, windowMs: number): RequestHandler {
+export function userRateLimit(max: number, windowMs: number, message = 'Too many requests, try again in a minute'): RequestHandler {
   const hits = new Map<string, { count: number; resetAt: number }>();
   return (_req, res, next) => {
     const now = Date.now();
@@ -51,7 +51,7 @@ export function userRateLimit(max: number, windowMs: number): RequestHandler {
     if (hits.size > 10_000) for (const [k, v] of hits) if (v.resetAt <= now) hits.delete(k);
     if (++entry.count > max) {
       res.setHeader('Retry-After', String(Math.ceil((entry.resetAt - now) / 1000)));
-      next(new ApiError(429, 'Too many requests, try again in a minute'));
+      next(new ApiError(429, message));
       return;
     }
     next();
