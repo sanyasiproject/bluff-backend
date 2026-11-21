@@ -13,9 +13,6 @@ import {
   sazaOf,
   STAKES,
   THROWS,
-  VOICE_MAX_BYTES,
-  VOICE_MAX_MS,
-  VOICE_TYPES,
   type BotLevel,
   type ChatKind,
   type GameConfig,
@@ -66,7 +63,7 @@ export function parseConfig(p: Payload): GameConfig {
   const saza = p.saza === undefined ? false : typeof p.saza === 'boolean' ? p.saza : null;
   const secretLies = p.secretLies === undefined ? false : typeof p.secretLies === 'boolean' ? p.secretLies : null;
   const ranked = p.ranked === undefined ? false : typeof p.ranked === 'boolean' ? p.ranked : null;
-  // voice notes are on unless the host turns them off
+  // voice is on unless the host turns it off
   const voice = p.voice === undefined ? true : typeof p.voice === 'boolean' ? p.voice : null;
   const kismat = p.kismat === undefined ? false : typeof p.kismat === 'boolean' ? p.kismat : null;
   const seedhi = p.seedhi === undefined ? false : typeof p.seedhi === 'boolean' ? p.seedhi : null;
@@ -184,19 +181,6 @@ export function parseRtcSignal(p: Payload): { to: string; sdp: { type: 'offer' |
   if (!sdp || typeof sdp !== 'object' || (sdp.type !== 'offer' && sdp.type !== 'answer')) throw new GameError('Invalid voice connection');
   if (typeof sdp.sdp !== 'string' || sdp.sdp.length === 0 || sdp.sdp.length > RTC_MAX_SDP) throw new GameError('Invalid voice connection');
   return { to, sdp: { type: sdp.type, sdp: sdp.sdp } };
-}
-
-/** a recorded voice note: raw audio bytes, an audio type and its length; anything else is refused */
-export function parseVoice(p: Payload): { audio: Buffer; mime: string; ms: number } {
-  const raw = p.audio;
-  const audio = Buffer.isBuffer(raw) ? raw : raw instanceof ArrayBuffer ? Buffer.from(raw) : raw instanceof Uint8Array ? Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength) : null;
-  if (!audio || audio.length === 0) throw new GameError('Invalid voice note');
-  if (audio.length > VOICE_MAX_BYTES) throw new GameError('That voice note is too long');
-  const mime = typeof p.mime === 'string' && p.mime.length <= 80 && /^[a-z0-9/.+-]+(;\s*codecs="?[a-z0-9.,+ -]+"?)?$/i.test(p.mime) ? p.mime : null;
-  if (!mime || !(VOICE_TYPES as readonly string[]).includes(mime.split(';')[0].trim().toLowerCase())) throw new GameError('This voice note format is not supported');
-  const ms = p.ms;
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0 || ms > VOICE_MAX_MS + 1_000) throw new GameError('Invalid voice note');
-  return { audio, mime, ms: Math.round(Math.min(ms, VOICE_MAX_MS)) };
 }
 
 export function parseGift(value: unknown): number {

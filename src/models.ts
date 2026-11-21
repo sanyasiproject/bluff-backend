@@ -1,4 +1,4 @@
-import type { Award, Card, CoinResult, GameConfig, InviteEvent, LifetimeStats, PlayReveal, Rank, SazaBadge, ShopLookKind } from './types.js';
+import type { Award, Card, CoinResult, GameConfig, InviteEvent, LifetimeStats, PlayReveal, Rank, RankDivisionId, SazaBadge, ShopLookKind } from './types.js';
 
 /** one of a player's plays this game with the true cards (server only); open: it never stood or was called (still waiting, or cut off by a walk-out or End game) */
 export interface LoggedPlay extends PlayReveal {
@@ -51,6 +51,14 @@ export interface Member {
   saza: SazaBadge | null;
   /** shop looks they rent, each with the time it runs out (read at join and when they buy or switch) */
   shop: ShopWear;
+  /** this season's division and points, read at join and updated after each ranked game; null for guests and bots */
+  rank: RankBadge | null;
+}
+
+/** a division and rank points, as shown on seats and lobby rows */
+export interface RankBadge {
+  division: RankDivisionId;
+  points: number;
 }
 
 /** shop looks worn, each with when its rental runs out (ms); null: none of that kind */
@@ -127,6 +135,8 @@ export interface MemberAccount {
   habits: Habits | null;
   /** missing: none (tests and older callers) */
   shop?: ShopWear;
+  /** missing: Bronze 0 for a logged-in player (tests and older callers) */
+  rank?: RankBadge | null;
 }
 
 /** someone asking to watch a game in progress; the host lets them in or not */
@@ -217,6 +227,7 @@ export interface AccountInfo {
   /** null until they've played a Bluff game with an account */
   habits: Habits | null;
   shop: ShopWear;
+  rank: RankBadge;
 }
 
 /** balances after a gift between friends */

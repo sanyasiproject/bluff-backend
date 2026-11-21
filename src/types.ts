@@ -108,7 +108,7 @@ export interface GameConfig {
   secretLies: boolean;
   /** Bluff: a rated table, logged-in people only and no bots (older apps don't send it: off) */
   ranked: boolean;
-  /** both games: logged-in people may send voice notes to the table (older apps don't send it: on) */
+  /** both games: live voice for logged-in seated players (older apps don't send it: on) */
   voice: boolean;
   /** Bluff: a random rank is drawn at the deal and its cards are wild, backing up any claim (older apps don't send it: off) */
   kismat: boolean;
@@ -262,10 +262,6 @@ export interface ChatEvent {
   on?: 'pile';
 }
 
-/** a voice note: the longest clip, the most bytes one may be, and how long a player waits before the next one */
-export const VOICE_MAX_MS = 7_000;
-export const VOICE_MAX_BYTES = 90 * 1024;
-export const VOICE_GAP_MS = 10_000;
 /** live voice: the most a connection message (offer or answer, with its network routes) may be */
 export const RTC_MAX_SDP = 32 * 1024;
 
@@ -278,20 +274,6 @@ export interface LiveVoiceJoin {
 export interface RtcSignal {
   from: string;
   sdp: { type: 'offer' | 'answer'; sdp: string };
-}
-
-/** audio formats a voice note may come in (the part before any ";codecs=") */
-export const VOICE_TYPES = ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/aac', 'audio/mpeg'] as const;
-
-/** a voice note passed on to everyone else in the room as it comes in; the server never keeps it */
-export interface VoiceEvent {
-  /** member id of the sender */
-  from: string;
-  audio: ArrayBuffer;
-  /** the recording's type, e.g. "audio/webm;codecs=opus" */
-  mime: string;
-  /** length as the sender's phone measured it */
-  ms: number;
 }
 
 /** emoji a player throws at someone in the room; everyone sees it fly across. New ones go at the end: the index is what's sent */
@@ -552,6 +534,10 @@ export interface PublicPlayer {
   shop?: ShopLook;
   /** in live voice right now: logged in, seated, connected and the host's voice switch on (missing from older servers) */
   live?: boolean;
+  /** in live voice with the mic on; in it with this false: only listening (missing from older servers) */
+  mic?: boolean;
+  /** this season's division and points (logged-in people; refreshed after each ranked game); null for guests and bots */
+  rank?: { division: RankDivisionId; points: number } | null;
 }
 
 /** how one player's coins changed when a game ended */
@@ -957,14 +943,49 @@ export interface RivalsResponse {
 
 /** ranked divisions by rank points; you keep showing one until you're RANK_PROTECTION points below its start */
 export const RANK_DIVISIONS = [
-  // win and loss: shares of a full win's points; a loss weighs 1/4 of a win in Bronze, rising step by step to 2/3 at the top
-  { id: 'bronze', name: 'Bronze', emoji: '🥉', min: 0, win: 1, loss: 0.25 },
-  { id: 'silver', name: 'Silver', emoji: '🥈', min: 300, win: 0.9, loss: 0.3 },
-  { id: 'gold', name: 'Gold', emoji: '🥇', min: 700, win: 0.8, loss: 0.33 },
-  { id: 'platinum', name: 'Platinum', emoji: '💠', min: 1_200, win: 0.7, loss: 0.35 },
-  { id: 'diamond', name: 'Diamond', emoji: '💎', min: 1_800, win: 0.6, loss: 0.35 },
-  { id: 'badshah', name: 'Bluff Badshah', emoji: '👑', min: 2_500, win: 0.5, loss: 0.33 },
+  // tiers: equal steps shown as Gold 1, Gold 2… (1 is the lowest); display only, points and protection work per division
+  // how much a win and a loss move points in each division is server-only (services/ranked.ts), never sent to apps
+  { id: 'bronze', name: 'Bronze', emoji: '🥉', min: 0, tiers: 3 },
+  { id: 'silver', name: 'Silver', emoji: '🥈', min: 300, tiers: 3 },
+  { id: 'gold', name: 'Gold', emoji: '🥇', min: 700, tiers: 4 },
+  { id: 'platinum', name: 'Platinum', emoji: '💠', min: 1_200, tiers: 4 },
+  { id: 'diamond', name: 'Diamond', emoji: '💎', min: 1_800, tiers: 5 },
+  { id: 'badshah', name: 'Bluff Badshah', emoji: '👑', min: 2_500, tiers: 1 },
 ] as const;
+
+/** where each tier of a division starts, lowest first (one entry for a division without tiers) */
+export function tierStarts(id: RankDivisionId): number[] {
+  const i = RANK_DIVISIONS.findIndex((d) => d.id === id);
+  const d = RANK_DIVISIONS[i];
+  const end = RANK_DIVISIONS[i + 1]?.min ?? d.min;
+  return Array.from({ length: d.tiers }, (_, t) => Math.ceil(d.min + ((end - d.min) * t) / d.tiers));
+}
+
+/** the tier (1 is the lowest) for these points in the division shown; under its start (its protection) counts as tier 1; null without tiers */
+export function rankTier(points: number, id: RankDivisionId): number | null {
+  const starts = tierStarts(id);
+  if (starts.length < 2) return null;
+  let tier = 1;
+  starts.forEach((at, t) => points >= at && (tier = t + 1));
+  return tier;
+}
+
+/** "Gold 2", or "Bluff Badshah" for a division without tiers */
+export function rankName(points: number, id: RankDivisionId): string {
+  const d = RANK_DIVISIONS.find((x) => x.id === id) ?? RANK_DIVISIONS[0];
+  const tier = rankTier(points, d.id);
+  return tier === null ? d.name : `${d.name} ${tier}`;
+}
+
+/** the next tier or division up from here, and the points where it starts; null at the top */
+export function nextRankStep(points: number, id: RankDivisionId): { name: string; emoji: string; at: number } | null {
+  const i = RANK_DIVISIONS.findIndex((d) => d.id === id);
+  const d = RANK_DIVISIONS[i];
+  const higher = tierStarts(d.id).find((at) => at > points);
+  if (higher !== undefined) return { name: rankName(higher, d.id), emoji: d.emoji, at: higher };
+  const up = RANK_DIVISIONS[i + 1];
+  return up ? { name: rankName(up.min, up.id), emoji: up.emoji, at: up.min } : null;
+}
 
 /** points can fall this far below a division's start before the division shown drops to the one below */
 export const RANK_PROTECTION = 50;

@@ -61,9 +61,9 @@ export function createBluffServer(deps: ServerDeps = {}) {
     cors: { origin: (origin, cb) => cb(null, isAllowedOrigin(origin)) },
     // CORS does not cover WebSocket upgrades, so check the origin here too
     allowRequest: (req, cb) => cb(null, isAllowedOrigin(req.headers.origin)),
-    // room for one voice note (VOICE_MAX_BYTES, a third bigger as base64 on polling); everything else is far smaller
+    // room for one live voice connection message (RTC_MAX_SDP) with plenty to spare; everything else is far smaller
     maxHttpBufferSize: 128 * 1024,
-    // one binary part per message (a voice note), so a client can't make the server hold several half-sent ones
+    // at most one binary part per message, so a client can't make the server hold several half-sent ones
     parser: { ...ioParser, Decoder: OneAttachmentDecoder },
   });
 

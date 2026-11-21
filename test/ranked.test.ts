@@ -11,6 +11,10 @@ import { nextStanding, rankBadgeOf, ranksOf, rankViewOf, seasonsPlayed, seasonSt
 import { createStore, type Store } from '../src/services/store.js';
 import {
   DEFAULT_CARD_BACK,
+  nextRankStep,
+  rankName,
+  rankTier,
+  tierStarts,
   DEFAULT_TABLE_THEME,
   type AuditEntry,
   type CoinResult,
@@ -160,6 +164,26 @@ describe('rank points from a rated game', () => {
     expect(rankBadgeOf(doc, 2)).toEqual({ division: 'gold', points: 845 });
   });
 
+  it('splits divisions into tiers climbing from 1, for display only', () => {
+    expect(tierStarts('bronze')).toEqual([0, 100, 200]);
+    expect(tierStarts('silver')).toEqual([300, 434, 567]);
+    expect(tierStarts('gold')).toEqual([700, 825, 950, 1075]);
+    expect(tierStarts('platinum')).toEqual([1200, 1350, 1500, 1650]);
+    expect(tierStarts('diamond')).toEqual([1800, 1940, 2080, 2220, 2360]);
+    expect(tierStarts('badshah')).toEqual([2500]);
+    expect([0, 99, 100, 299].map((p) => rankName(p, 'bronze'))).toEqual(['Bronze 1', 'Bronze 1', 'Bronze 2', 'Bronze 3']);
+    expect([700, 824, 825, 1199].map((p) => rankName(p, 'gold'))).toEqual(['Gold 1', 'Gold 1', 'Gold 2', 'Gold 4']);
+    // inside Gold's protection, under 700: still Gold 1
+    expect(rankName(680, 'gold')).toBe('Gold 1');
+    expect(rankName(3000, 'badshah')).toBe('Bluff Badshah');
+    expect(rankTier(3000, 'badshah')).toBe(null);
+    // the next step: a tier in the same division, then the next division's first tier, then nothing
+    expect(nextRankStep(760, 'gold')).toEqual({ name: 'Gold 2', emoji: '🥇', at: 825 });
+    expect(nextRankStep(1100, 'gold')).toEqual({ name: 'Platinum 1', emoji: '💠', at: 1200 });
+    expect(nextRankStep(2400, 'diamond')).toEqual({ name: 'Bluff Badshah', emoji: '👑', at: 2500 });
+    expect(nextRankStep(2600, 'badshah')).toBe(null);
+  });
+
   it('drops 1.5 divisions at a new season, never below 0', () => {
     expect([200, 750, 1500, 1900, 2600, 5000].map(seasonStartPoints)).toEqual([0, 180, 700, 1021, 1586, 3950]);
     // a carried Gold standing keeps Gold's floor
@@ -197,6 +221,24 @@ function lobby(names: string[], guests: string[] = []) {
 }
 
 describe('ranked rooms', () => {
+  it("shows each person's division on their seat; guests and bots have none; says when the table is ranked", () => {
+    const r = new Room('RANK');
+    const asha = r.addMember('Asha', { ...account('Asha'), rank: { division: 'gold', points: 980 } });
+    const ravi = r.addMember('Ravi', account('Ravi'));
+    const guest = r.addMember('Guest');
+    const players = r.view(asha.id).players;
+    expect(players.find((p) => p.id === asha.id)!.rank).toEqual({ division: 'gold', points: 980 });
+    // a logged-in player the server knows no rank for starts at Bronze 0
+    expect(players.find((p) => p.id === ravi.id)!.rank).toEqual({ division: 'bronze', points: 0 });
+    expect(players.find((p) => p.id === guest.id)!.rank).toBe(null);
+    expect(r.isRanked).toBe(false);
+    r.setConfig(asha.id, { ...r.config, ranked: true });
+    expect(r.isRanked).toBe(true);
+    // Crazy 7 keeps the switch but is never ranked
+    r.setConfig(asha.id, { ...r.config, game: 'crazy7' });
+    expect(r.isRanked).toBe(false);
+  });
+
   it('takes no bots: turning it on with a bot seated is refused, and so is adding one while it is on', () => {
     const { r, host } = lobby(['Asha', 'Ravi']);
     const { bot } = r.addBot(host.id, 'Tara');

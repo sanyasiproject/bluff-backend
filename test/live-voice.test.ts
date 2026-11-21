@@ -50,8 +50,16 @@ describe('live voice rules', () => {
     r.setConfig(asha.id, { ...r.config, voice: false });
     expect(r.isLive(asha.id)).toBe(false);
     expect(() => r.setLive(asha.id, true)).toThrow('The host turned voice off');
-    // turning it off always works
+    // the mic is part of it: on shows to everyone, off means only listening
+    r.setConfig(asha.id, { ...r.config, voice: true });
+    r.setLive(asha.id, true, true);
+    expect(r.view(asha.id).players.find((p) => p.id === asha.id)).toMatchObject({ live: true, mic: true });
+    r.setLive(asha.id, true, false);
+    expect(r.view(asha.id).players.find((p) => p.id === asha.id)).toMatchObject({ live: true, mic: false });
+    r.setLive(asha.id, true, true);
+    // turning it off always works, and takes the mic with it
     r.setLive(asha.id, false);
+    expect(r.micOn(asha.id)).toBe(false);
     expect(r.view(asha.id).players.find((p) => p.id === asha.id)!.live).toBe(false);
   });
 

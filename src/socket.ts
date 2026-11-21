@@ -22,7 +22,6 @@ import {
   type RtcSignal,
   type ServerInfo,
   stakeLevelOf,
-  type VoiceEvent,
 } from './types.js';
 import {
   asPayload,
@@ -45,7 +44,6 @@ import {
   parseThrow,
   parseToken,
   parseUserId,
-  parseVoice,
   type Payload,
 } from './validate.js';
 
@@ -132,6 +130,8 @@ export function registerHandlers(
           const m = room.members.find((x) => x.id === r.playerId);
           if (m && r.coins !== null) m.coins = r.coins;
           if (m && r.level !== null) m.level = r.level;
+          // seats and lobby rows show the new rank straight away
+          if (m && r.rank) m.rank = { division: r.rank.division, points: r.rank.after };
         }
         if (room.table === game) room.coinResults = results;
         broadcast(room);
@@ -298,6 +298,7 @@ export function registerHandlers(
       table: fresh?.table ?? DEFAULT_TABLE_THEME,
       habits: fresh?.habits ?? null,
       shop: fresh?.shop,
+      rank: fresh?.rank,
     };
   };
 
@@ -369,7 +370,7 @@ export function registerHandlers(
     const user = socket.data.user as SocketUser | undefined;
     const ip = socket.data.ip as string;
     connections.set(ip, (connections.get(ip) ?? 0) + 1);
-    // only logged-in players send voice notes: a guest connection sending anything big is cut off before it's read
+    // every guest event is small: a guest connection sending anything big is cut off before it's read
     if (!user) {
       socket.conn.on('packet', (packet: { data?: unknown }) => {
         const d = packet.data;
@@ -572,8 +573,11 @@ export function registerHandlers(
 
     on('room:config', (p) => {
       const { room, member } = current();
+      const wasRanked = room.isRanked;
       const { stakeLowered, readyAgain } = room.setConfig(member.id, parseConfig(p));
       const notes = stakeLowered ? [room.note('room', stakeLoweredText(room))] : [];
+      // everyone hears when the table turns ranked or casual
+      if (room.isRanked !== wasRanked) notes.push(room.note('room', room.isRanked ? `🏅 ${member.name} made this a ranked game` : `🎮 ${member.name} made this a casual game`));
       if (readyAgain) notes.push(room.note('room', 'Settings changed: tap Ready again'));
       publish(room, notes);
     });
@@ -791,20 +795,13 @@ export function registerHandlers(
       io.to(room.code).emit('throw', room.throwAt(member.id, to, index));
     });
 
-    // a voice note goes straight on to everyone else in the room and is never kept
-    on('voice:send', (p) => {
-      const { room, member } = current();
-      const { audio, mime, ms } = parseVoice(p);
-      room.voice(member.id);
-      const note: Omit<VoiceEvent, 'audio'> & { audio: Buffer } = { from: member.id, audio, mime, ms };
-      socket.to(room.code).emit('voice', note);
-    });
-
     // live voice on or off: everyone's state says who's in it, so phones connect to and drop each other by themselves
     on('voice:live', (p) => {
       const { room, member } = current();
       const live = parseFlag(p.on, 'Live voice');
-      room.setLive(member.id, live);
+      // whether their mic is on, so everyone's seat shows it (older apps don't say: off)
+      const mic = p.mic === undefined ? false : parseFlag(p.mic, 'Mic');
+      room.setLive(member.id, live, mic);
       broadcast(room);
       const join: LiveVoiceJoin = { iceServers: live ? RTC_ICE_SERVERS : [] };
       return join;

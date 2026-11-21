@@ -7,7 +7,7 @@ import type { Actor, AuditDoc, Collections, UserDoc } from '../db/documents.js';
 import { habitsFrom } from '../habits.js';
 import { ApiError } from '../http/errors.js';
 import type { AccountInfo } from '../models.js';
-import { rankViewOf, seasonsPlayed } from './ranked.js';
+import { rankBadgeOf, rankViewOf, seasonsPlayed } from './ranked.js';
 import {
   cardBackOf,
   DAILY_GIFT_LIMIT,
@@ -171,7 +171,7 @@ export class UserService {
   async getAccounts(userIds: string[]): Promise<Map<string, AccountInfo>> {
     const ids = userIds.filter((id) => /^[a-f0-9]{24}$/i.test(id)).map((id) => new ObjectId(id));
     const users = await this.cols.users
-      .find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1, avatar: 1, cardBack: 1, tableTheme: 1, habits: 1, shop: 1 } })
+      .find({ _id: { $in: ids } }, { projection: { coins: 1, stats: 1, avatar: 1, cardBack: 1, tableTheme: 1, habits: 1, shop: 1, ranked: 1 } })
       .toArray();
     return new Map(
       users.map((u) => [
@@ -182,6 +182,8 @@ export class UserService {
           // server-side only: the bots' read on how this player really plays
           habits: habitsFrom(u.habits),
           shop: shopWearOf(u),
+          // this season's division, for seats and lobby rows
+          rank: rankBadgeOf(u.ranked),
         },
       ]),
     );

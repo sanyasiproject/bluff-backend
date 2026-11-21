@@ -14,7 +14,6 @@ import {
   SAZA_BADGES,
   sazaOf,
   stakeLevelOf,
-  VOICE_GAP_MS,
   type AnnounceKind,
   type Announcement,
   type ChatEvent,
@@ -96,9 +95,10 @@ export class Room {
   private announceSeq = 0;
   private lastChat = new Map<string, number>();
   /** by account, kept after leaving, so leaving and joining again doesn't skip the wait */
-  private lastVoice = new Map<string, number>();
   /** members who turned live voice on; they count only while isLive says so */
   private live = new Set<string>();
+  /** of those, who has their mic on (the rest only listen) */
+  private mics = new Set<string>();
 
   constructor(readonly code: string) {}
 
@@ -156,6 +156,8 @@ export class Room {
       hasTwists: false,
       saza: null,
       shop: account?.shop ?? NO_WEAR,
+      // logged-in people start a season at Bronze 0
+      rank: account ? (account.rank ?? { division: 'bronze', points: 0 }) : null,
     };
     this.members.push(member);
     if (!this.hostId) this.hostId = member.id;
@@ -166,6 +168,7 @@ export class Room {
   removeMember(id: string): GameEvent[] {
     const leaving = this.member(id);
     this.live.delete(id);
+    this.mics.delete(id);
     let events: GameEvent[] = [];
     if (this.table?.order.includes(id)) {
       // kept so the saved game and the game-over screen still have their name
@@ -474,6 +477,11 @@ export class Room {
     return this.config.teams && this.config.game !== 'crazy7';
   }
 
+  /** the table is ranked right now (Bluff with Ranked on) */
+  get isRanked(): boolean {
+    return this.rankedTable;
+  }
+
   /** a rated table: ranked is on and the game is Bluff (Crazy 7 keeps the setting but ignores it) */
   private get rankedTable(): boolean {
     return this.config.ranked && this.config.game !== 'crazy7';
@@ -652,32 +660,30 @@ export class Room {
     return { from: by, to, index };
   }
 
-  /** checks a voice note may go out now: logged-in people only, while the host allows them, one every VOICE_GAP_MS */
-  voice(by: string, now = Date.now()): void {
-    const member = this.member(by);
-    if (!this.config.voice) throw new GameError('The host turned voice notes off');
-    if (!member.userId) throw new GameError('Log in to send voice notes');
-    const wait = VOICE_GAP_MS - (now - (this.lastVoice.get(member.userId) ?? -Infinity));
-    if (wait > 0) throw new GameError(`Wait ${Math.ceil(wait / 1000)} s for your next voice note`);
-    this.lastVoice.set(member.userId, now);
-  }
-
   /** seated right now: in the game's order once it's on, otherwise not watching */
   private seatedNow(m: Member): boolean {
     return this.table ? this.table.order.includes(m.id) : !m.watching;
   }
 
   /** turns live voice on or off for a member; only logged-in, seated people may turn it on, and only while voice is on */
-  setLive(by: string, on: boolean): void {
+  setLive(by: string, on: boolean, mic = false): void {
     const member = this.member(by);
     if (!on) {
       this.live.delete(by);
+      this.mics.delete(by);
       return;
     }
     if (!this.config.voice) throw new GameError('The host turned voice off');
     if (!member.userId) throw new GameError('Log in to talk');
     if (member.bot || !this.seatedNow(member)) throw new GameError('Only players in the game can talk. Watchers just watch');
     this.live.add(by);
+    if (mic) this.mics.add(by);
+    else this.mics.delete(by);
+  }
+
+  /** in live voice with the mic on */
+  micOn(id: string): boolean {
+    return this.isLive(id) && this.mics.has(id);
   }
 
   /** in live voice now: turned it on and still logged in, seated, connected, with the host's voice switch on */
@@ -689,6 +695,7 @@ export class Room {
   /** a fresh connection starts with live voice off (a reload, another tab) */
   dropLive(id: string): void {
     this.live.delete(id);
+    this.mics.delete(id);
   }
 
   view(meId: string): RoomView {
@@ -726,6 +733,8 @@ export class Room {
         saza: this.sazaOn ? m.saza : null,
         shop: shopLookOf(m.shop),
         live: this.isLive(m.id),
+        mic: this.micOn(m.id),
+        rank: m.bot ? null : m.rank,
       })),
       watchers: this.members
         .filter((m) => !seatedIds.has(m.id))

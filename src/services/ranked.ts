@@ -10,6 +10,7 @@ import {
   SEASON_START_DELAY_DAYS,
   type CoinResult,
   type PublicProfile,
+  type RankDivisionId,
   type RankView,
   type SeasonResult,
 } from '../types.js';
@@ -32,6 +33,19 @@ export interface RankedSeat {
 
 /** one player's result from a rated game */
 export type RankResult = NonNullable<CoinResult['rank']>;
+
+/**
+ * shares of a full win's points a win and a loss move, by the division shown: higher divisions climb slower and fall faster.
+ * Server-only on purpose: never in types.ts, so no app or player sees them
+ */
+const RANK_RATES: Record<RankDivisionId, { win: number; loss: number }> = {
+  bronze: { win: 1, loss: 0.25 },
+  silver: { win: 0.9, loss: 0.3 },
+  gold: { win: 0.8, loss: 0.33 },
+  platinum: { win: 0.7, loss: 0.35 },
+  diamond: { win: 0.6, loss: 0.35 },
+  badshah: { win: 0.5, loss: 0.33 },
+};
 
 /** the top division has no end, so it counts as this wide when working out how far into it someone is */
 const TOP_DIVISION_WIDTH = 700;
@@ -152,7 +166,8 @@ export function nextStanding(
   const skill = Math.round(POINTS_PER_MU * (after.mu - before.mu));
   // by the division shown: wins give less and losses weigh more the higher it is (1:4 in Bronze to 1:1.5 at the top)
   const division = shownDivision(points0, floor0);
-  const raw = Math.round(skill * (skill < 0 ? division.loss : division.win));
+  const rate = RANK_RATES[division.id];
+  const raw = Math.round(skill * (skill < 0 ? rate.loss : rate.win));
   // no daily limit: every win and loss counts in full; only 0 stops a loss
   const capped = Math.max(0, points0 + raw);
   // a shield stops a loss that would really cost points; nothing is owed for it
