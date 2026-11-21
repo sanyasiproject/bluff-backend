@@ -270,7 +270,8 @@ export function registerHandlers(
       return;
     }
     try {
-      const added = room.addMember(req.name, req.account);
+      // their choice when asking through a friend; mid-game everyone new watches anyway
+      const added = room.addMember(req.name, req.account, req.watch ?? false);
       io.to(req.socketId).emit('watch:admitted', { code: room.code, token: added.token, name: added.name });
       publish(room, [room.note('room', added.watching ? `${added.name} is watching` : `${added.name} joined`)]);
     } catch (err) {
@@ -534,7 +535,14 @@ export function registerHandlers(
       const room = rooms.roomOfUser(friendId);
       if (!room) throw new GameError('Your friend is not in a room right now');
       if (room === seat?.room) throw new GameError("You're already in this room");
-      return joinRoom(room, user.displayName, watch);
+      // never straight in: the friend gets a card and says yes or no (lobby or game)
+      const friend = room.members.find((m) => m.userId === friendId);
+      if (!friend) throw new GameError('Your friend is not in a room right now');
+      releaseOthers(room);
+      room.requestWatch(user.displayName, await accountOf(user), socket.id, requestKey(user.displayName), { askedOf: friend.id, watch });
+      pendingIn = room;
+      broadcast(room);
+      return { code: room.code, pending: true, askedOf: friend.name };
     });
 
     on('room:rejoin', (p) => {

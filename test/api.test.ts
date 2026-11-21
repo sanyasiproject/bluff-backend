@@ -1021,38 +1021,46 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     expect(games[0].players.filter((p) => p.bot && !p.guest)).toHaveLength(3);
   });
 
-  it('lets friends join or watch from the Friends list, and asks the host once a game is on', async () => {
+  it('never lets anyone straight in from the Friends list: the friend they tapped says yes or no', async () => {
     const a = await register('join_a', 'secret-pass-1', 'Ja');
     const b = await register('join_b', 'secret-pass-1', 'Jb');
     const c = await register('join_c', 'secret-pass-1', 'Jc');
-    await api().post('/api/friends/request').set(bearer(a.body.token)).send({ username: 'join_b' });
-    await api().post(`/api/friends/${a.body.user.id}/accept`).set(bearer(b.body.token));
-    const [aS, bS, cS] = [await socketClient(a.body.token), await socketClient(b.body.token), await socketClient(c.body.token)];
+    const e = await register('join_e', 'secret-pass-1', 'Je');
+    const befriend = async (x: typeof a, y: typeof a, yName: string) => {
+      await api().post('/api/friends/request').set(bearer(x.body.token)).send({ username: yName });
+      await api().post(`/api/friends/${x.body.user.id}/accept`).set(bearer(y.body.token));
+    };
+    await befriend(a, b, 'join_b');
+    await befriend(e, b, 'join_b');
+    const [aS, bS, cS, eS] = [await socketClient(a.body.token), await socketClient(b.body.token), await socketClient(c.body.token), await socketClient(e.body.token)];
     const { code } = await send(aS, 'room:create', {});
-    const friendOfB = async () => ((await api().get('/api/friends').set(bearer(b.body.token))).body as FriendsResponse).friends[0];
-    expect(await friendOfB()).toMatchObject({ username: 'join_a', inRoom: 'other', roomPhase: 'lobby' });
+    const friendOfB = async () => ((await api().get('/api/friends').set(bearer(b.body.token))).body as FriendsResponse).friends.find((f) => f.username === 'join_a');
+    expect(await friendOfB()).toMatchObject({ inRoom: 'other', roomPhase: 'lobby' });
 
     expect(await send(cS, 'friend:join', { userId: a.body.user.id })).toEqual({ ok: false, error: 'You can only join friends' });
-    // lobby: straight in, here as a watcher by choice
-    expect(await send(bS, 'friend:join', { userId: a.body.user.id, watch: true })).toMatchObject({ ok: true, code });
-    await until(() => aS.state!.watchers.some((w) => w.name === 'Jb' && w.byChoice));
-    expect(await send(bS, 'friend:join', { userId: a.body.user.id })).toEqual({ ok: false, error: "You're already in this room" });
-    expect(await friendOfB()).toMatchObject({ inRoom: 'here', roomPhase: null });
-    await send(bS, 'room:leave');
-
-    // once a game is on, joining is a request the host answers; after a no, a 10 s wait
-    await send(aS, 'room:addBot');
-    expect(await send(aS, 'room:start')).toEqual({ ok: true });
-    await until(() => aS.state?.phase === 'playing');
-    expect(await friendOfB()).toMatchObject({ inRoom: 'other', roomPhase: 'playing' });
-    expect(await send(bS, 'friend:join', { userId: a.body.user.id })).toEqual({ ok: true, code, pending: true });
+    // even in the lobby it's a request: Ja (the friend) gets it, Jb isn't in yet
+    expect(await send(bS, 'friend:join', { userId: a.body.user.id, watch: true })).toEqual({ ok: true, code, pending: true, askedOf: 'Ja' });
     await until(() => aS.state!.watchRequests.length === 1);
-    expect(await send(aS, 'room:admit', { requestId: aS.state!.watchRequests[0].id, accept: false })).toEqual({ ok: true });
-    expect(await send(bS, 'friend:join', { userId: a.body.user.id })).toMatchObject({
-      ok: false,
-      error: expect.stringMatching(/^Wait \d+ s before asking again$/),
-    });
-    [aS, bS, cS].forEach((x) => x.socket.disconnect());
+    expect(aS.state!.watchRequests[0]).toMatchObject({ name: 'Jb', watch: true, viaFriend: true });
+    expect(aS.state!.watchers.some((w) => w.name === 'Jb')).toBe(false);
+    // a yes lets them in the way they asked: watching
+    expect(await send(aS, 'room:admit', { requestId: aS.state!.watchRequests[0].id, accept: true })).toEqual({ ok: true });
+    await until(() => aS.state!.watchers.some((w) => w.name === 'Jb' && w.byChoice));
+    const jbId = aS.state!.watchers.find((w) => w.name === 'Jb')!.id;
+    expect(await send(aS, 'room:kick', { memberId: jbId })).toMatchObject({ ok: true });
+    await until(() => !aS.state!.watchers.some((w) => w.name === 'Jb'));
+
+    // the friend they tapped answers, not the host: Je came in with the room code
+    expect((await send(eS, 'room:join', { code })).ok).toBe(true);
+    expect(await send(bS, 'friend:join', { userId: e.body.user.id })).toEqual({ ok: true, code, pending: true, askedOf: 'Je' });
+    await until(() => eS.state?.watchRequests.length === 1);
+    expect(aS.state!.watchRequests).toEqual([]);
+    const reqId = eS.state!.watchRequests[0].id;
+    expect(await send(aS, 'room:admit', { requestId: reqId, accept: true })).toEqual({ ok: false, error: 'Only the friend they asked can answer' });
+    // after a no, a short wait before asking again
+    expect(await send(eS, 'room:admit', { requestId: reqId, accept: false })).toEqual({ ok: true });
+    expect(await send(bS, 'friend:join', { userId: e.body.user.id })).toMatchObject({ ok: false, error: expect.stringMatching(/^Wait \d+ s before asking again$/) });
+    [aS, bS, cS, eS].forEach((x) => x.socket.disconnect());
   });
 
   it('allows API calls only from allowed sites', async () => {

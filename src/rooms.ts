@@ -245,7 +245,7 @@ export class Room {
     return this.phase === 'playing';
   }
 
-  requestWatch(name: string, account: MemberAccount | null, socketId: string, key: string): WatchRequest {
+  requestWatch(name: string, account: MemberAccount | null, socketId: string, key: string, via: { askedOf?: string; watch?: boolean } = {}): WatchRequest {
     const now = Date.now();
     for (const [k, at] of this.askedAt) if (now - at >= WATCH_ASK_GAP_MS) this.askedAt.delete(k);
     const last = this.askedAt.get(key);
@@ -256,7 +256,7 @@ export class Room {
     const taken = [...this.members.map((m) => m.name), ...this.watchRequests.map((r) => r.name)];
     if (taken.some((n) => n.toLowerCase() === name.toLowerCase())) throw new GameError('That name is taken in this room');
     this.dropWatchRequests(socketId);
-    const req: WatchRequest = { id: randomBytes(6).toString('hex'), name, account, socketId, key };
+    const req: WatchRequest = { id: randomBytes(6).toString('hex'), name, account, socketId, key, ...via };
     this.watchRequests.push(req);
     this.askedAt.set(key, now);
     return req;
@@ -264,11 +264,13 @@ export class Room {
 
   /** the host answers one request; it's removed either way, and a no starts the wait before asking again */
   takeWatchRequest(by: string, id: string, accept: boolean): WatchRequest {
-    this.assertHost(by);
     const req = this.watchRequests.find((r) => r.id === id);
     if (!req) throw new GameError('That request was cancelled');
+    if (by !== this.approverOf(req)) throw new GameError(req.askedOf ? 'Only the friend they asked can answer' : 'Only the host can do that');
     this.watchRequests = this.watchRequests.filter((r) => r !== req);
+    // a no starts the wait before asking again; a yes clears it
     if (!accept) this.askedAt.set(req.key, Date.now());
+    else this.askedAt.delete(req.key);
     return req;
   }
 
@@ -279,11 +281,16 @@ export class Room {
     return this.watchRequests.length !== before;
   }
 
-  /** back in the lobby, everyone still waiting just comes in */
+  /** who answers a request: the friend they asked while that friend is still here, otherwise the host */
+  private approverOf(req: WatchRequest): string | null {
+    return req.askedOf && this.members.some((m) => m.id === req.askedOf) ? req.askedOf : this.hostId;
+  }
+
+  /** back in the lobby, everyone waiting on the host just comes in; those who asked a friend still wait for their answer */
   takeAllWatchRequests(): WatchRequest[] {
-    const all = this.watchRequests;
-    this.watchRequests = [];
-    return all;
+    const forHost = this.watchRequests.filter((r) => !r.askedOf);
+    this.watchRequests = this.watchRequests.filter((r) => r.askedOf);
+    return forHost;
   }
 
   /** host removes someone; mid-game their cards leave the game. Returns who left and any game events */
@@ -780,10 +787,10 @@ export class Room {
       swapAsks: [...this.swapAsks].map(([toId, fromId]) => ({ fromId, toId })),
       // partners plan together: each sees the other's hand; nobody else gets it
       partnerHand: b?.teams && seatedIds.has(meId) ? [...(b.hands.get(b.partnerOf(meId) ?? '') ?? [])] : null,
-      watchRequests:
-        meId === this.hostId
-          ? this.watchRequests.map((r) => ({ id: r.id, name: r.name, registered: r.account !== null, level: r.account?.level ?? null }))
-          : [],
+      // each person sees only the requests they answer
+      watchRequests: this.watchRequests
+        .filter((r) => this.approverOf(r) === meId)
+        .map((r) => ({ id: r.id, name: r.name, registered: r.account !== null, level: r.account?.level ?? null, watch: r.watch ?? true, viaFriend: !!r.askedOf })),
       leftPlayers: g
         ? g.order.flatMap((id) => {
             const m = g.forfeited.has(id) ? this.departed.get(id) : undefined;

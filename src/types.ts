@@ -645,7 +645,8 @@ export interface RoomView {
   /** 2v2 game: my partner's cards (only ever sent to their partner) */
   partnerHand: Card[] | null;
   /** host only: people asking to watch the game in progress */
-  watchRequests: { id: string; name: string; registered: boolean; level: number | null }[];
+  /** people waiting for me to let them in: through me as their friend, or (host) mid-game watchers; watch: they asked to watch */
+  watchRequests: { id: string; name: string; registered: boolean; level: number | null; watch?: boolean; viaFriend?: boolean }[];
   /** players who used Leave game in this game: they lost and still pay the stake */
   leftPlayers: { id: string; name: string; registered: boolean; level: number | null }[];
   /** the Crazy 7 table while a Crazy 7 game is on, else null */

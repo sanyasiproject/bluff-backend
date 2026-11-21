@@ -147,6 +147,10 @@ export interface WatchRequest {
   socketId: string;
   /** the account, or a guest's network and name, for the wait before asking again */
   key: string;
+  /** asked through a friend (Friends, Online now): that friend's member id answers; missing: the host does */
+  askedOf?: string;
+  /** they asked to watch rather than take a seat */
+  watch?: boolean;
 }
 
 /** logged-in account attached to a socket */

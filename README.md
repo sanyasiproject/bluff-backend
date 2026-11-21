@@ -219,7 +219,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 |---|---|
 | `room:create` | `{ name }` → `{ code, token }` (name ignored when logged in) |
 | `room:join` | `{ code, name, watch? }` → `{ code, token }`, or `{ code, pending: true }` once a game has started (waits for the host). `watch`: join the lobby as a watcher |
-| `friend:join` | `{ userId, watch? }` (logged in, friends only): join or watch the friend's room; once their game is on it's a request to the host, like `room:join` |
+| `friend:join` | `{ userId, watch? }` (logged in, friends only) → `{ code, pending: true, askedOf }`: never straight in; a request that friend answers with `room:admit` (shown to them in `RoomView.watchRequests` with `watch` and `viaFriend`), or the host once that friend has left; a yes lets them in to play or watch as asked and clears the wait, a no starts it. Room codes and invite links still join directly |
 | `room:addBot` | – (host, lobby, free seat: a bot sits down; a stake over 100 drops to 100) |
 | `room:cancelRequest` | – (withdraw a pending join request) |
 | `room:admit` | `{ requestId, accept }` (host: let a pending request in to watch, or turn it down). After asking, or a no, the same account (a guest: network + name) waits 10 s before asking again |
