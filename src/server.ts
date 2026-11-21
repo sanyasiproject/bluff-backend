@@ -13,6 +13,9 @@ import type { AppSettings } from './types.js';
 import { giftLeftOf } from './services/users.js';
 import { MAX_CONNECTIONS_PER_IP, registerHandlers, type OnlineAlertTimes } from './socket.js';
 
+/** how often the server checks whether a booked ranked season is due */
+const SEASON_CHECK_MS = 60_000;
+
 export interface ServerDeps {
   /** MongoDB-backed accounts, coins, friends and game history; omit for guest-only */
   store?: Store | null;
@@ -69,8 +72,25 @@ export function createBluffServer(deps: ServerDeps = {}) {
   };
   // every open app hears about it, so home screens show or hide guest play right away
   settingsChanged = (settings) => {
-    io.emit('settings:changed', { guestsAllowed: settings.guestsAllowed, pushInvites: !!store?.push.ready && settings.pushInvites, rankedSeason: settings.rankedSeason });
+    io.emit('settings:changed', {
+      guestsAllowed: settings.guestsAllowed,
+      pushInvites: !!store?.push.ready && settings.pushInvites,
+      rankedSeason: settings.rankedSeason,
+      nextSeasonAt: settings.nextSeasonAt ?? null,
+    });
   };
+  // a booked ranked season starts by itself once its time comes; every open app then reads its account again
+  const startDueSeason = async () => {
+    if (!store) return;
+    try {
+      if ((await store.ranked.startDueSeason()) !== null) settingsChanged(await store.settings.view());
+    } catch (err) {
+      console.error('[ranked] could not start the booked season:', (err as Error).message);
+    }
+  };
+  void startDueSeason();
+  const seasonTimer = setInterval(() => void startDueSeason(), SEASON_CHECK_MS);
+  seasonTimer.unref();
 
   const rooms = new RoomManager({ ...DEFAULT_ROOM_LIMITS, ...deps.limits });
   const handlers = registerHandlers(
@@ -115,6 +135,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
     rooms,
     app,
     close: () => {
+      clearInterval(seasonTimer);
       handlers.stop();
       io.close();
     },

@@ -106,16 +106,27 @@ export function adminRoutes(
     }),
   );
 
-  // a new ranked season: everyone's rank starts again; open apps get the new season number
+  // books a new ranked season to start in SEASON_START_DELAY_DAYS; open apps hear when it's coming
   r.post(
     '/ranked/season',
     ...admin,
     ah(async (req, res) => {
       const from = asPayload(req.body).from;
       if (from !== undefined && !Number.isInteger(from)) throw new ApiError(400, 'Which season is it now?');
-      const season = await store.ranked.newSeason(actorOf(res), from as number | undefined);
+      const booked = await store.ranked.newSeason(actorOf(res), from as number | undefined);
       onSettingsChanged(await store.settings.view());
-      res.json({ season });
+      res.json(booked);
+    }),
+  );
+
+  // calls off a booked season before it starts
+  r.post(
+    '/ranked/season/cancel',
+    ...admin,
+    ah(async (_req, res) => {
+      await store.ranked.cancelNewSeason(actorOf(res));
+      onSettingsChanged(await store.settings.view());
+      res.status(204).end();
     }),
   );
 

@@ -30,8 +30,10 @@ export function meRoutes(store: Store, onLookChanged: (userId: string, look: Pla
     '/',
     ah(async (_req, res) => {
       const daily = await store.users.claimLoginBonus(currentUser(res));
-      const friendRequests = await store.friends.incomingCount(daily.user._id);
-      res.json({ user: toPublicUser(daily.user), bonus: daily.bonus, friendRequests });
+      // a new ranked season since last time: last season goes into the history and the rank drops a little
+      const user = await store.ranked.rollover(daily.user);
+      const friendRequests = await store.friends.incomingCount(user._id);
+      res.json({ user: toPublicUser(user), bonus: daily.bonus, friendRequests });
     }),
   );
 

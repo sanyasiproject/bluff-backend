@@ -563,8 +563,11 @@ export interface CoinResult {
   boostXp?: number;
   /** extra coins from a shop coin boost on the daily ladder and missions, already in coins (missing from older servers) */
   boostCoins?: number;
-  /** a rated game's rank points before and after, the division now, and what held the change back: the daily cap, the floor, paying back losses they held off earlier, or a Rank Shield used up; null otherwise */
-  rank: { before: number; after: number; division: RankDivisionId; held: 'cap' | 'floor' | 'debt' | 'shield' | null } | null;
+  /**
+   * a rated game's rank points before and after, the division shown now, and what held the change back: the daily cap, 0 points
+   * (floor), paying back losses held off earlier, a Rank Shield used up, or the division kept by its 50-point protection (grace); null otherwise
+   */
+  rank: { before: number; after: number; division: RankDivisionId; held: 'cap' | 'floor' | 'debt' | 'shield' | 'grace' | null } | null;
 }
 
 export interface LastPlayView {
@@ -898,15 +901,19 @@ export interface RivalsResponse {
   records: RivalRecord[];
 }
 
-/** ranked divisions by rank points; reaching one makes its start a floor for the rest of the season */
+/** ranked divisions by rank points; you keep showing one until you're RANK_PROTECTION points below its start */
 export const RANK_DIVISIONS = [
-  { id: 'bronze', name: 'Bronze', emoji: '🥉', min: 0 },
-  { id: 'silver', name: 'Silver', emoji: '🥈', min: 300 },
-  { id: 'gold', name: 'Gold', emoji: '🥇', min: 700 },
-  { id: 'platinum', name: 'Platinum', emoji: '💠', min: 1_200 },
-  { id: 'diamond', name: 'Diamond', emoji: '💎', min: 1_800 },
-  { id: 'badshah', name: 'Bluff Badshah', emoji: '👑', min: 2_500 },
+  // win and loss: shares of a full win's points; a loss weighs 1/4 of a win in Bronze, rising step by step to 2/3 at the top
+  { id: 'bronze', name: 'Bronze', emoji: '🥉', min: 0, win: 1, loss: 0.25 },
+  { id: 'silver', name: 'Silver', emoji: '🥈', min: 300, win: 0.9, loss: 0.3 },
+  { id: 'gold', name: 'Gold', emoji: '🥇', min: 700, win: 0.8, loss: 0.33 },
+  { id: 'platinum', name: 'Platinum', emoji: '💠', min: 1_200, win: 0.7, loss: 0.35 },
+  { id: 'diamond', name: 'Diamond', emoji: '💎', min: 1_800, win: 0.6, loss: 0.35 },
+  { id: 'badshah', name: 'Bluff Badshah', emoji: '👑', min: 2_500, win: 0.5, loss: 0.33 },
 ] as const;
+
+/** points can fall this far below a division's start before the division shown drops to the one below */
+export const RANK_PROTECTION = 50;
 export type RankDivisionId = (typeof RANK_DIVISIONS)[number]['id'];
 
 /** the division for some rank points */
@@ -918,17 +925,40 @@ export const RANK_DAILY_CAP = 150;
 /** a ranked loss costs this share of the points the same win would give, so wins count for more */
 export const RANK_LOSS_SHARE = 0.7;
 
+/** a new season starts everyone this many divisions below where they ended the last one (never below 0) */
+export const RANK_SEASON_DROP = 1.5;
+
+/** an admin's new season starts this many days after they ask for it */
+export const SEASON_START_DELAY_DAYS = 7;
+
+/** a season normally runs about a month; from this day on the admin's button reminds them to start the next one */
+export const SEASON_REMIND_DAY = 23;
+
+/** one finished season of a player's, for their history */
+export interface SeasonResult {
+  season: number;
+  division: RankDivisionId;
+  points: number;
+  games: number;
+  wins: number;
+}
+
 /** my ranked standing this season */
 export interface RankView {
   season: number;
   points: number;
   division: RankDivisionId;
-  /** points never drop below this: the start of the best division reached this season */
+  /** the start of the division shown; points may go RANK_PROTECTION below it before that division drops */
   floor: number;
   games: number;
   wins: number;
   /** today's change so far, within RANK_DAILY_CAP either way */
   today: number;
+  /** when this season started, and when the next one starts once an admin asked for it (ISO); null when not known or not asked */
+  startedAt?: string | null;
+  nextAt?: string | null;
+  /** earlier seasons played, newest first (missing from older servers) */
+  history?: SeasonResult[];
 }
 
 /** XP needed to reach a level: each level needs 100 more than the last (0, 100, 300, 600, 1000…) */
@@ -960,7 +990,7 @@ export interface PublicUser {
   giftLeft: number;
   /** games whose practice tutorial this account has finished or skipped */
   tutorials: GameKind[];
-  /** this season's ranked standing; null before a ranked game this season (older servers don't send it) */
+  /** this season's ranked standing; everyone starts at Bronze (older servers send null before a ranked game) */
   rank: RankView | null;
 }
 
@@ -1037,6 +1067,10 @@ export interface AppSettings {
   guestsAllowed: boolean;
   /** the ranked season now on; an admin starts a new one (older documents: 1) */
   rankedSeason: number;
+  /** when the season now on started (ISO); null if not known */
+  rankedSeasonStartedAt?: string | null;
+  /** when the next season starts, once an admin asked for it (ISO); null otherwise */
+  nextSeasonAt?: string | null;
   /** friend invites go to offline friends as phone notifications; an admin can switch it off */
   pushInvites: boolean;
   /** the admin who last changed it, and when; null if never changed */
@@ -1119,8 +1153,10 @@ export interface PublicProfile {
   stats: LifetimeStats;
   /** how they relate to me */
   status: 'me' | 'friend' | 'sent' | 'incoming' | 'none';
-  /** this season's division and rank points; null before a ranked game this season */
+  /** this season's division and rank points; everyone starts at Bronze (older servers send null before a ranked game) */
   rank: { division: RankDivisionId; points: number } | null;
+  /** earlier seasons they played, newest first (missing from older servers) */
+  seasons?: SeasonResult[];
   /** their shop aura while it runs; null when none (missing from older servers) */
   aura?: string | null;
 }

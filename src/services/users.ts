@@ -7,7 +7,7 @@ import type { Actor, AuditDoc, Collections, UserDoc } from '../db/documents.js';
 import { habitsFrom } from '../habits.js';
 import { ApiError } from '../http/errors.js';
 import type { AccountInfo } from '../models.js';
-import { rankViewOf } from './ranked.js';
+import { rankViewOf, seasonsPlayed } from './ranked.js';
 import {
   cardBackOf,
   DAILY_GIFT_LIMIT,
@@ -81,8 +81,8 @@ export function toPublicUser(u: WithId<UserDoc>): PublicUser {
     avatar: avatarOf(u),
     cardBack: cardBackChoice(u),
     tableTheme: tableThemeChoice(u),
-    // this season's standing; a stored one from another season shows as none
-    rank: rankViewOf(u.ranked),
+    // this season's standing (Bronze 0 before any ranked game) and earlier seasons
+    rank: rankViewOf(u.ranked, undefined, undefined, seasonsPlayed(u)),
   };
 }
 

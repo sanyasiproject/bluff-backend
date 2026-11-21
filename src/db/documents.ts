@@ -1,6 +1,6 @@
 import type { Collection, ObjectId } from 'mongodb';
 import type { Habits, PlayerStats } from '../models.js';
-import type { AuditAction, GameConfig, GameKind, LeagueStats, LifetimeStats, Role, ShopLookKind } from '../types.js';
+import type { AuditAction, GameConfig, GameKind, LeagueStats, LifetimeStats, Role, SeasonResult, ShopLookKind } from '../types.js';
 
 /** database and collection names, all overridable from env */
 export interface DbNames {
@@ -13,6 +13,8 @@ export interface DbNames {
   settings: string;
   /** phones that get friend-invite notifications; push_subscriptions by default */
   push?: string;
+  /** one document per ranked season; ranked_seasons by default */
+  seasons?: string;
 }
 
 export interface UserDoc {
@@ -59,6 +61,8 @@ export interface UserDoc {
   leagueHidden?: boolean;
   /** ranked standing for the season it was earned in (services/ranked.ts) */
   ranked?: RankedDoc;
+  /** earlier seasons played, oldest first; added when a standing moves into a new season */
+  rankHistory?: SeasonResult[];
   /** coin shop rentals and the looks worn from them (services/shop.ts) */
   shop?: ShopDoc;
 }
@@ -92,7 +96,7 @@ export interface RankedDoc {
   mu: number;
   sigma: number;
   points: number;
-  /** points can't drop below this: the start of the best division reached this season */
+  /** the start of the division shown (older documents: the best division reached); points may go RANK_PROTECTION below it before it drops */
   floor: number;
   games: number;
   wins: number;
@@ -232,6 +236,10 @@ export interface SettingsDoc {
   pushInvites?: boolean;
   /** the ranked season now on; missing in older documents: 1 */
   rankedSeason?: number;
+  /** when the season now on started; set at first load for older documents */
+  rankedSeasonStartedAt?: Date;
+  /** when the next season starts, once an admin asked for it; null or missing otherwise */
+  nextSeasonAt?: Date | null;
   updatedBy: ObjectId | null;
   updatedAt: Date;
 }
@@ -244,6 +252,18 @@ export interface Collections {
   friends: Collection<FriendDoc>;
   settings: Collection<SettingsDoc>;
   push: Collection<PushSubscriptionDoc>;
+  seasons: Collection<SeasonDoc>;
+}
+
+/** one ranked season: when it starts and ends, and who asked for it */
+export interface SeasonDoc {
+  _id: number;
+  startsAt: Date;
+  /** set when the next season starts */
+  endsAt: Date | null;
+  /** the admin who asked for it; null for the first season */
+  scheduledBy: ObjectId | null;
+  scheduledAt: Date;
 }
 
 /** who performed an admin action */

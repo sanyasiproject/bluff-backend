@@ -7,7 +7,7 @@ import type { GameRecord, GameRecordPlayer, MemberAccount } from '../src/models.
 import { DEFAULT_RATING } from '../src/rating.js';
 import { Room } from '../src/rooms.js';
 import { createBluffServer } from '../src/server.js';
-import { nextStanding, rankBadgeOf, ranksOf, rankViewOf } from '../src/services/ranked.js';
+import { nextStanding, rankBadgeOf, ranksOf, rankViewOf, seasonsPlayed, seasonStartPoints, standingIn } from '../src/services/ranked.js';
 import { createStore, type Store } from '../src/services/store.js';
 import {
   DEFAULT_CARD_BACK,
@@ -64,51 +64,78 @@ describe('rank points from a rated game', () => {
     expect(s.doc.today).toBe(150);
     // at the cap a win moves nothing, a loss still counts
     expect(nextStanding(s.doc, 1, b, a, true, DAY).result).toMatchObject({ after: 430, held: 'cap' });
-    // a loss costs 70% of what the same win gives: -100 in skill is -70 points
+    // in Silver a loss weighs 30% of a full win: -100 in skill is -30 points
     s = nextStanding(s.doc, 1, b, { mu: 22.5, sigma: 5.9 }, false, DAY);
-    expect(s.result).toEqual({ before: 430, after: 360, division: 'silver', held: null });
-    expect(s.doc.today).toBe(80);
-    // losses are capped too
-    s = nextStanding(standing({ points: 1000, floor: 700, today: -120 }), 1, b, { mu: 23, sigma: 5.9 }, false, DAY);
+    expect(s.result).toEqual({ before: 430, after: 400, division: 'silver', held: null });
+    expect(s.doc.today).toBe(120);
+    // losses are capped too: -400 in skill is -132 in Gold, only 30 of it today
+    s = nextStanding(standing({ points: 1000, floor: 700, today: -120 }), 1, b, { mu: 15, sigma: 5.9 }, false, DAY);
     expect(s.result).toMatchObject({ after: 970, held: 'cap' });
     expect(s.doc.today).toBe(-150);
     // a new day starts at 0
     const next = istDay(FRI);
+    // in Silver a win gives 90%: +80 in skill is +72 points
     s = nextStanding(standing({ points: 430, floor: 300, today: 150 }), 1, b, a, true, next);
-    expect(s.result).toMatchObject({ after: 510, held: null });
-    expect(s.doc).toMatchObject({ day: next, today: 80 });
+    expect(s.result).toMatchObject({ after: 502, held: null });
+    expect(s.doc).toMatchObject({ day: next, today: 72 });
     // past the cap (it was lowered): a win never turns into a loss
     expect(nextStanding(standing({ points: 500, floor: 300, today: 160 }), 1, b, a, true, DAY).result).toMatchObject({ after: 500, held: 'cap' });
   });
 
-  it('never drops below the start of the best division reached this season', () => {
+  it('keeps the division shown until points are 50 below its start; points themselves always move', () => {
     const [b] = move(0);
+    // Gold 720 loses 26 (-80 in skill at 33%): 694 is under Gold's 700 but within the 50-point protection
     let s = nextStanding(standing({ points: 720, floor: 700 }), 1, b, { mu: 23, sigma: 5.9 }, false, DAY);
-    expect(s.result).toEqual({ before: 720, after: 700, division: 'gold', held: 'floor' });
-    expect(s.doc).toMatchObject({ points: 700, floor: 700, today: -20, mu: 23 });
-    // reaching Silver makes 300 the floor
+    expect(s.result).toEqual({ before: 720, after: 694, division: 'gold', held: 'grace' });
+    expect(s.doc).toMatchObject({ points: 694, floor: 700, today: -26, mu: 23 });
+    // 650 is the last point of the protection; one more loss drops to Silver
+    s = nextStanding(standing({ points: 690, floor: 700 }), 1, b, { mu: 22, sigma: 5.9 }, false, DAY);
+    expect(s.result).toEqual({ before: 690, after: 650, division: 'gold', held: 'grace' });
+    s = nextStanding(s.doc, 1, b, { mu: 22, sigma: 5.9 }, false, DAY);
+    expect(s.result).toEqual({ before: 650, after: 610, division: 'silver', held: null });
+    expect(s.doc).toMatchObject({ points: 610, floor: 300, today: -80 });
+    // a win inside the protection climbs back with Gold's rates (80% of +80)
+    s = nextStanding(standing({ points: 650, floor: 700 }), 1, b, { mu: 27, sigma: 5.9 }, true, DAY);
+    expect(s.result).toEqual({ before: 650, after: 714, division: 'gold', held: null });
+    // reaching Silver shows Silver
     s = nextStanding(standing({ points: 290 }), 1, b, { mu: 25.5, sigma: 5.9 }, true, DAY);
     expect(s.doc).toMatchObject({ points: 310, floor: 300 });
     expect(s.result.division).toBe('silver');
-    // the floor stays where it was after a drop within the division
-    s = nextStanding(standing({ points: 1250, floor: 1200 }), 1, b, { mu: 24, sigma: 5.9 }, false, DAY);
-    expect(s.doc).toMatchObject({ points: 1222, floor: 1200 });
   });
 
-  it('pays back losses the floor held off before a win adds points; wins count for more than losses', () => {
+  it('pays back losses 0 points or the daily cap held off before a win adds points', () => {
+    // Bronze 0 can't go lower: the 25 (25% of -100) is owed
     const lost = nextStanding(standing(), 1, DEFAULT_RATING, { mu: 22.5, sigma: 5.9 }, false, DAY);
     expect(lost.result).toEqual({ before: 0, after: 0, division: 'bronze', held: 'floor' });
-    expect(lost.doc.debt).toBe(70);
-    // the next win of 100 pays back the 70 first, then 30 counts
-    const won = nextStanding(lost.doc, 1, { mu: 22.5, sigma: 5.9 }, { mu: 25, sigma: 5.8 }, true, DAY);
-    expect(won.result).toEqual({ before: 0, after: 30, division: 'bronze', held: 'debt' });
-    expect(won.doc).toMatchObject({ debt: 0, today: 30 });
+    expect(lost.doc.debt).toBe(25);
+    // the next win of 100 pays back the 25 first, then 75 counts
+    const won = nextStanding(lost.doc, 1, { mu: 22.5, sigma: 5.8 }, { mu: 25, sigma: 5.8 }, true, DAY);
+    expect(won.result).toEqual({ before: 0, after: 75, division: 'bronze', held: 'debt' });
+    expect(won.doc).toMatchObject({ debt: 0, today: 75 });
     // after that, wins count in full
     const again = nextStanding(won.doc, 1, { mu: 25, sigma: 5.8 }, { mu: 26, sigma: 5.7 }, true, DAY);
-    expect(again.result).toMatchObject({ after: 70, held: null });
-    // a loss the daily cap held off is owed too
-    const capped = nextStanding(standing({ points: 1000, floor: 700, today: -120 }), 1, DEFAULT_RATING, { mu: 23, sigma: 5.9 }, false, DAY);
-    expect(capped.doc).toMatchObject({ points: 970, debt: 26 });
+    expect(again.result).toMatchObject({ after: 115, held: null });
+    // a loss the daily cap held off is owed too: -132 wanted, -30 allowed
+    const capped = nextStanding(standing({ points: 1000, floor: 700, today: -120 }), 1, DEFAULT_RATING, { mu: 15, sigma: 5.9 }, false, DAY);
+    expect(capped.doc).toMatchObject({ points: 970, debt: 102 });
+  });
+
+  it('weighs a loss 1:4 against a win in Bronze, rising step by step to 1:1.5 at the top, while wins shrink', () => {
+    const win = { mu: 27.5, sigma: 5.9 };
+    const loss = { mu: 22.5, sigma: 5.9 };
+    // the same +100 / -100 in skill, from early in each division
+    const moves = [100, 300, 700, 1200, 1800, 2500].map((points) => {
+      const from = standing({ points, floor: points });
+      return [nextStanding(from, 1, DEFAULT_RATING, win, true, DAY).result.after - points, nextStanding({ ...from, floor: 0 }, 1, DEFAULT_RATING, loss, false, DAY).result.after - points];
+    });
+    expect(moves).toEqual([
+      [100, -25],
+      [90, -30],
+      [80, -33],
+      [70, -35],
+      [60, -35],
+      [50, -33],
+    ]);
   });
 
   it('a Rank Shield stops a loss that would cost points, and only then', () => {
@@ -118,21 +145,43 @@ describe('rank points from a rated game', () => {
     expect(s.result).toEqual({ before: 500, after: 500, division: 'silver', held: 'shield' });
     // nothing is owed for it, the skill still drops
     expect(s.doc).toMatchObject({ points: 500, debt: 0, today: 0, mu: 23, games: 1 });
-    // a win, or a loss the floor already stops, keeps the shield
+    // a win, or a loss at 0 points that costs nothing anyway, keeps the shield
     expect(nextStanding(standing({ points: 500, floor: 300 }), 1, b, { mu: 26, sigma: 5.9 }, true, DAY, true).shielded).toBe(false);
-    const floor = nextStanding(standing({ points: 300, floor: 300 }), 1, b, { mu: 23, sigma: 5.9 }, false, DAY, true);
+    const floor = nextStanding(standing({ points: 0 }), 1, b, { mu: 23, sigma: 5.9 }, false, DAY, true);
     expect([floor.shielded, floor.result.held]).toEqual([false, 'floor']);
   });
 
-  it('shows a standing only in its own season', () => {
+  it('starts everyone at Bronze 0 and carries a standing into later seasons 1.5 divisions lower', () => {
     const doc = standing({ season: 2, points: 845, floor: 700, games: 9, wins: 4, today: -30 });
-    expect(rankViewOf(doc, 2, THU)).toEqual({ season: 2, points: 845, division: 'gold', floor: 700, games: 9, wins: 4, today: -30 });
+    expect(rankViewOf(doc, 2, THU)).toMatchObject({ season: 2, points: 845, division: 'gold', floor: 700, games: 9, wins: 4, today: -30 });
     // another day: nothing moved today yet
-    expect(rankViewOf(doc, 2, FRI)?.today).toBe(0);
-    expect(rankViewOf(doc, 3, THU)).toBe(null);
-    expect(rankViewOf(undefined, 2, THU)).toBe(null);
+    expect(rankViewOf(doc, 2, FRI).today).toBe(0);
+    // never played: Bronze 0
+    expect(rankViewOf(undefined, 2, THU)).toMatchObject({ season: 2, points: 0, division: 'bronze', floor: 0, games: 0, wins: 0, today: 0 });
+    expect(rankBadgeOf(undefined, 2)).toEqual({ division: 'bronze', points: 0 });
+    // the next season: Gold 845 (2.29 divisions up the scale) starts at 0.79, Bronze 237; games count again
+    expect(rankViewOf(doc, 3, THU)).toMatchObject({ season: 3, points: 237, division: 'bronze', floor: 0, games: 0, wins: 0, today: 0 });
+    expect(rankBadgeOf(doc, 3)).toEqual({ division: 'bronze', points: 237 });
+    // two seasons on, it dropped twice
+    expect(standingIn(doc, 4)).toMatchObject({ season: 4, points: 0, mu: doc.mu });
+    // a standing from a later season (a game read before a new season) is none
+    expect(rankBadgeOf(doc, 1)).toEqual({ division: 'bronze', points: 0 });
     expect(rankBadgeOf(doc, 2)).toEqual({ division: 'gold', points: 845 });
-    expect(rankBadgeOf(doc, 1)).toBe(null);
+  });
+
+  it('drops 1.5 divisions at a new season, never below 0', () => {
+    expect([200, 750, 1500, 1900, 2600, 5000].map(seasonStartPoints)).toEqual([0, 180, 700, 1021, 1586, 3950]);
+    // a carried Gold standing keeps Gold's floor
+    expect(standingIn(standing({ season: 1, points: 2600, floor: 2500, games: 30 }), 2)).toMatchObject({ points: 1586, floor: 1200, games: 0 });
+  });
+
+  it('lists earlier seasons newest first, with one not yet moved into the season now on', () => {
+    const saved = [{ season: 1, division: 'silver' as const, points: 420, games: 8, wins: 5 }];
+    const u = { ranked: standing({ season: 2, points: 750, games: 6, wins: 4 }), rankHistory: saved };
+    expect(seasonsPlayed(u, 3)).toEqual([{ season: 2, division: 'gold', points: 750, games: 6, wins: 4 }, ...saved]);
+    // in its own season it isn't history yet; a season with no games isn't listed
+    expect(seasonsPlayed(u, 2)).toEqual(saved);
+    expect(seasonsPlayed({ ranked: standing({ season: 2, games: 0 }) }, 3)).toEqual([]);
   });
 });
 
@@ -252,7 +301,8 @@ describe.skipIf(!MONGO)('ranked (MongoDB)', () => {
     const res = await api().post('/api/auth/register').send({ username, password: 'secret-pass-1' });
     expect(res.status).toBe(201);
     const user = res.body.user as PublicUser;
-    expect(user.rank).toBe(null);
+    // everyone starts at Bronze 0
+    expect(user.rank).toMatchObject({ points: 0, division: 'bronze', games: 0 });
     return { id: user.id, oid: new ObjectId(user.id), token: res.body.token as string, username };
   }
   type Account = Awaited<ReturnType<typeof account>>;
@@ -304,12 +354,12 @@ describe.skipIf(!MONGO)('ranked (MongoDB)', () => {
     expect(await rankDoc(bo)).toMatchObject({ points: 0, games: 1, wins: 0, today: 0 });
     expect(doc.mu + (await rankDoc(bo))!.mu).toBeCloseTo(50, 9);
 
-    expect(await myRank(ana)).toEqual({ season: 1, points: 105, division: 'bronze', floor: 0, games: 1, wins: 1, today: 105 });
+    expect(await myRank(ana)).toMatchObject({ season: 1, points: 105, division: 'bronze', floor: 0, games: 1, wins: 1, today: 105, history: [] });
     expect(await cardRank(cy, ana)).toEqual({ division: 'bronze', points: 105 });
     expect(await cardRank(ana, bo)).toEqual({ division: 'bronze', points: 0 });
-    // never played ranked: none
-    expect(await myRank(cy)).toBe(null);
-    expect(await cardRank(ana, cy)).toBe(null);
+    // never played ranked: Bronze 0
+    expect(await myRank(cy)).toMatchObject({ points: 0, division: 'bronze', games: 0 });
+    expect(await cardRank(ana, cy)).toEqual({ division: 'bronze', points: 0 });
   });
 
   it('orders players by where they finished; kicked players and guests are not rated', async () => {
@@ -377,38 +427,44 @@ describe.skipIf(!MONGO)('ranked (MongoDB)', () => {
 
   it('caps each IST day either way, keeps moving the hidden skill, and starts again the next day', async () => {
     const [ia, jo] = [await account(), await account()];
-    await setRank(jo, { points: 1000, floor: 700, day: istDay(THU) });
+    // Jo already lost 120 today
+    await setRank(jo, { points: 1000, floor: 700, day: istDay(THU), today: -120 });
     let res = await store.ranked.rate(seats(ia, jo), THU);
     expect(res.get(ia.username)).toEqual({ before: 0, after: 105, division: 'bronze', held: null });
-    // the loser drops 70% of the winner's gain
-    expect(res.get(jo.username)).toEqual({ before: 1000, after: 927, division: 'gold', held: null });
+    // Jo's loss is trimmed to the 30 left today
+    expect(res.get(jo.username)).toEqual({ before: 1000, after: 970, division: 'gold', held: 'cap' });
     res = await store.ranked.rate(seats(ia, jo), THU);
     expect(res.get(ia.username)).toMatchObject({ after: RANK_DAILY_CAP, held: 'cap' });
-    // smaller losses reach the cap a game later
-    expect(res.get(jo.username)).toMatchObject({ before: 927, held: null });
+    expect(res.get(jo.username)).toMatchObject({ before: 970, after: 970, held: 'cap' });
     const mu = (await rankDoc(ia))!.mu;
     res = await store.ranked.rate(seats(ia, jo), THU);
     expect(res.get(ia.username)).toMatchObject({ before: 150, after: 150, held: 'cap' });
-    expect(res.get(jo.username)).toMatchObject({ after: 1000 - RANK_DAILY_CAP, held: 'cap' });
     expect((await rankDoc(ia))!.mu).toBeGreaterThan(mu);
     expect(rankViewOf(await rankDoc(ia), store.settings.rankedSeason, THU)).toMatchObject({ points: 150, today: 150, games: 3, wins: 3 });
-    expect(rankViewOf(await rankDoc(jo), store.settings.rankedSeason, THU)).toMatchObject({ points: 850, today: -150, games: 3, wins: 0 });
+    expect(rankViewOf(await rankDoc(jo), store.settings.rankedSeason, THU)).toMatchObject({ points: 970, today: -150, games: 3, wins: 0 });
     // Friday: a fresh day
     res = await store.ranked.rate(seats(ia, jo), FRI);
     const fri = res.get(ia.username)!;
     expect(fri.held).toBe(null);
     expect(fri.after).toBeGreaterThan(150);
     expect(await rankDoc(ia)).toMatchObject({ day: istDay(FRI), today: fri.after - 150, games: 4 });
-    expect(res.get(jo.username)!.after).toBeLessThan(850);
+    expect(res.get(jo.username)!.after).toBeLessThan(970);
   });
 
-  it('holds a player at the start of the best division reached this season', async () => {
+  it('keeps showing a division within 50 points of its start, then drops it', async () => {
     const [ka, lu] = [await account(), await account()];
     await setRank(ka, { points: 705, floor: 700, games: 12, wins: 6 });
-    const res = await duel(lu, ka);
-    expect(res.get('b')!.rank).toEqual({ before: 705, after: 700, division: 'gold', held: 'floor' });
-    expect(await rankDoc(ka)).toMatchObject({ points: 700, floor: 700, games: 13, wins: 6 });
-    expect(await myRank(ka)).toMatchObject({ points: 700, division: 'gold', floor: 700, today: -5 });
+    let res = await duel(lu, ka);
+    // the points really drop under 700; Gold stays on show
+    expect(res.get('b')!.rank).toEqual({ before: 705, after: 670, division: 'gold', held: 'grace' });
+    expect(await rankDoc(ka)).toMatchObject({ points: 670, floor: 700, games: 13, wins: 6 });
+    expect(await myRank(ka)).toMatchObject({ points: 670, division: 'gold', floor: 700, today: -35 });
+    expect(await cardRank(lu, ka)).toEqual({ division: 'gold', points: 670 });
+    // under 650: Silver
+    res = await duel(lu, ka);
+    expect(res.get('b')!.rank).toMatchObject({ before: 670, division: 'silver', held: null });
+    expect(res.get('b')!.rank!.after).toBeLessThan(650);
+    expect(await myRank(ka)).toMatchObject({ division: 'silver', floor: 300 });
   });
 
   /** runs fn the first time the ranked service writes a user, just before that write */
@@ -445,48 +501,85 @@ describe.skipIf(!MONGO)('ranked (MongoDB)', () => {
     expect((await rankDoc(ma))!.points).toBeGreaterThan(500);
   });
 
-  it('lets an admin start a new season: everyone starts again, it is logged, and a new standing is never written over', async () => {
-    const [boss, oli, pia] = [await account('rk_boss'), await account(), await account()];
-    await duel(oli, pia);
-    expect(await myRank(oli)).toMatchObject({ points: 105 });
+  it('lets an admin book a new season 7 days out; it starts by itself and each player moves into it 1.5 divisions lower', async () => {
+    const [boss, oli, pia, qi] = [await account('rk_boss'), await account(), await account(), await account()];
     const season = store.settings.rankedSeason;
     // admins only
     expect((await api().post('/api/admin/ranked/season')).status).toBe(401);
     expect((await api().post('/api/admin/ranked/season').set(bearer(boss.token))).status).toBe(403);
-    expect(store.settings.rankedSeason).toBe(season);
     await api().post('/api/admin/make-admin').set('X-Admin-Key', ADMIN_KEY).send({ username: boss.username });
-    const started = await api().post('/api/admin/ranked/season').set(bearer(boss.token));
-    expect(started.status).toBe(200);
-    expect(started.body).toEqual({ season: season + 1 });
+
+    // booked, not started: the season now on carries on for 7 days
+    const asked = Date.now();
+    const booked = await api().post('/api/admin/ranked/season').set(bearer(boss.token)).send({ from: season });
+    expect(booked.status).toBe(200);
+    expect(booked.body.season).toBe(season);
+    const at = new Date(booked.body.nextSeasonAt as string);
+    expect(at.getTime() - asked).toBeGreaterThan(7 * 86_400_000 - 60_000);
+    expect(at.getTime() - asked).toBeLessThan(7 * 86_400_000 + 60_000);
+    expect(store.settings.rankedSeason).toBe(season);
+    expect((await api().get('/api/admin/settings').set(bearer(boss.token))).body.settings).toMatchObject({ rankedSeason: season, nextSeasonAt: at.toISOString() });
+    expect(await myRank(oli)).toMatchObject({ season, nextAt: at.toISOString() });
+    const seasons = raw.db(DB).collection('ranked_seasons');
+    expect(await seasons.findOne({ _id: (season + 1) as never })).toMatchObject({ startsAt: at, endsAt: null, scheduledBy: boss.oid });
+    let history = (await api().get(`/api/admin/users/${boss.id}/history`).set(bearer(boss.token))).body.history as AuditEntry[];
+    expect(history[0]).toMatchObject({ action: 'settings', by: boss.username, detail: `Ranked season ${season + 1} booked to start on ${at.toISOString().slice(0, 10)}` });
+    // one booking at a time; a stale screen can't book one either
+    expect((await api().post('/api/admin/ranked/season').set(bearer(boss.token))).status).toBe(409);
+    expect((await api().post('/api/admin/ranked/season').set(bearer(boss.token)).send({ from: season - 1 })).status).toBe(409);
+
+    // called off, then booked again
+    expect((await api().post('/api/admin/ranked/season/cancel').set(bearer(boss.token))).status).toBe(204);
+    expect(store.settings.nextSeasonAt).toBe(null);
+    expect(await seasons.findOne({ _id: (season + 1) as never })).toBe(null);
+    history = (await api().get(`/api/admin/users/${boss.id}/history`).set(bearer(boss.token))).body.history as AuditEntry[];
+    expect(history[0]).toMatchObject({ detail: `Ranked season ${season + 1} called off` });
+    expect((await api().post('/api/admin/ranked/season/cancel').set(bearer(boss.token))).status).toBe(409);
+    const again = await api().post('/api/admin/ranked/season').set(bearer(boss.token));
+    const start = new Date(again.body.nextSeasonAt as string);
+
+    // standings in the season now on
+    await duel(oli, pia);
+    await setRank(pia, { points: 750, floor: 700, games: 6, wins: 4 });
+    await setRank(qi, { points: 1900, floor: 1800, games: 20, wins: 12 });
+
+    // nothing happens before its time; then it starts in one go
+    expect(await store.ranked.startDueSeason(new Date(start.getTime() - 1000))).toBe(null);
+    expect(await store.ranked.startDueSeason(start)).toBe(season + 1);
     expect(store.settings.rankedSeason).toBe(season + 1);
-    expect((await api().get('/api/admin/settings').set(bearer(boss.token))).body.settings).toMatchObject({ rankedSeason: season + 1, updatedBy: boss.username });
-    const history = (await api().get(`/api/admin/users/${boss.id}/history`).set(bearer(boss.token))).body.history as AuditEntry[];
-    expect(history[0]).toMatchObject({ action: 'settings', by: boss.username, detail: `Ranked season ${season + 1} started` });
+    expect(store.settings.nextSeasonAt).toBe(null);
+    expect(await store.ranked.startDueSeason(new Date(start.getTime() + 1000))).toBe(null);
+    expect(await seasons.findOne({ _id: season as never })).toMatchObject({ endsAt: start });
+    expect(await seasons.findOne({ _id: (season + 1) as never })).toMatchObject({ startsAt: start, endsAt: null });
 
-    // last season's standing no longer shows, and the next game starts from scratch
-    expect(await myRank(oli)).toBe(null);
-    expect(await cardRank(pia, oli)).toBe(null);
-    const res = await duel(oli, pia);
-    expect(res.get('a')!.rank).toEqual({ before: 0, after: 105, division: 'bronze', held: null });
-    expect(await rankDoc(oli)).toMatchObject({ season: season + 1, games: 1, wins: 1, points: 105, today: 105 });
-    expect(await myRank(oli)).toMatchObject({ season: season + 1, points: 105, games: 1 });
+    // opening the app moves Pia into the new season: Gold 750 drops to Bronze 180, and last season goes into the history
+    const piaRank = await myRank(pia);
+    expect(piaRank).toMatchObject({ season: season + 1, points: 180, division: 'bronze', games: 0, wins: 0 });
+    expect(piaRank!.history).toEqual([{ season, division: 'gold', points: 750, games: 6, wins: 4 }]);
+    expect(await rankDoc(pia)).toMatchObject({ season: season + 1, points: 180, games: 0 });
+    expect((await users.findOne({ _id: pia.oid }))!.rankHistory).toEqual([{ season, division: 'gold', points: 750, games: 6, wins: 4 }]);
+    // opening it again changes nothing
+    expect((await myRank(pia))!.history).toHaveLength(1);
+    // Qi hasn't opened the app: their card already shows where the new season puts them, and last season
+    expect(await cardRank(pia, qi)).toEqual({ division: 'gold', points: 1021 });
+    const card = (await api().get(`/api/players/${qi.username}`).set(bearer(pia.token))).body.profile;
+    expect(card.seasons).toEqual([{ season, division: 'diamond', points: 1900, games: 20, wins: 12 }]);
+    // Qi's first game of the new season moves them in too, from 1021
+    const res = await duel(qi, oli);
+    expect(res.get('a')!.rank).toMatchObject({ before: 1021, division: 'gold' });
+    expect(await rankDoc(qi)).toMatchObject({ season: season + 1, games: 1, wins: 1 });
+    expect((await users.findOne({ _id: qi.oid }))!.rankHistory).toEqual([{ season, division: 'diamond', points: 1900, games: 20, wins: 12 }]);
+    expect((await myRank(oli))!.history).toEqual([{ season, division: 'bronze', points: 105, games: 1, wins: 1 }]);
 
-    // another season starts and Pia's first game of it lands between this game's read and write:
-    // the game belongs to the season that ended, so it's rated there and the new standing is never written over
+    // a game read before the next season starts belongs to the old one: it never writes over a standing of the new season
+    await api().post('/api/admin/ranked/season').set(bearer(boss.token));
     const res2 = await beforeFirstWrite(async () => {
-      await store.ranked.newSeason({ userId: boss.oid, via: 'admin' });
+      await store.ranked.startDueSeason(new Date(Date.now() + 8 * 86_400_000));
       await users.updateOne({ _id: pia.oid }, { $set: { ranked: standing({ season: season + 2, points: 40, games: 1, wins: 1, day: istDay(), today: 40 }) } });
     }, () => store.ranked.rate(seats(pia, oli)));
     expect(res2.get(pia.username)).toBeUndefined();
     expect(await rankDoc(pia)).toMatchObject({ season: season + 2, points: 40, games: 1, wins: 1 });
-    expect(await rankDoc(oli)).toMatchObject({ season: season + 1, games: 2 });
-    expect(await myRank(oli)).toBe(null);
-    expect(await myRank(pia)).toMatchObject({ season: season + 2, games: 1 });
-    // a stale admin screen can't start an extra season
-    const stale = await api().post('/api/admin/ranked/season').set(bearer(boss.token)).send({ from: season + 1 });
-    expect(stale.status).toBe(409);
-    expect(store.settings.rankedSeason).toBe(season + 2);
     const settings = await raw.db(DB).collection('settings').findOne({ _id: 'app' as never });
-    expect(settings).toMatchObject({ rankedSeason: season + 2, guestsAllowed: true });
+    expect(settings).toMatchObject({ rankedSeason: season + 2, guestsAllowed: true, nextSeasonAt: null });
   });
 });

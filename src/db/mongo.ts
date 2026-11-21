@@ -1,5 +1,5 @@
 import { MongoClient } from 'mongodb';
-import type { AuditDoc, Collections, DbNames, FriendDoc, GameDoc, PushSubscriptionDoc, SessionDoc, SettingsDoc, UserDoc } from './documents.js';
+import type { AuditDoc, Collections, DbNames, FriendDoc, GameDoc, PushSubscriptionDoc, SeasonDoc, SessionDoc, SettingsDoc, UserDoc } from './documents.js';
 
 export interface MongoConnection {
   client: MongoClient;
@@ -18,6 +18,7 @@ export async function connectMongo(uri: string, names: DbNames): Promise<MongoCo
     friends: db.collection<FriendDoc>(names.friends),
     settings: db.collection<SettingsDoc>(names.settings),
     push: db.collection<PushSubscriptionDoc>(names.push ?? 'push_subscriptions'),
+    seasons: db.collection<SeasonDoc>(names.seasons ?? 'ranked_seasons'),
   };
   await Promise.all([
     cols.users.createIndex({ username: 1 }, { unique: true }),
