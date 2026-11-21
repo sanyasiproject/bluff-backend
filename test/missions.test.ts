@@ -55,7 +55,7 @@ describe('IST days and weeks', () => {
 });
 
 describe('dealing missions', () => {
-  it('deals each set as one social mission and two others of its period, no repeats, the same every time', () => {
+  it('deals each set as one social mission and three others of its period, no repeats, the same every time', () => {
     const seen = new Set<string>();
     for (let i = 0; i < 60; i++) {
       const userId = new ObjectId().toHexString();
@@ -275,10 +275,10 @@ describe.skipIf(!MONGO)('missions (MongoDB)', () => {
   const zero = { bluffs: 0, caught: 0, goodCalls: 0, wrongCalls: 0, pickedUp: 0, plays: 0, chances: 0 };
   type Seat = Partial<GameRecordPlayer> & { memberId: string };
   /** a saved game's coin results by member id */
-  async function play(seats: Seat[], opts: { seconds?: number; status?: GameRecord['status']; game?: GameKind } = {}) {
+  async function play(seats: Seat[], opts: { seconds?: number; status?: GameRecord['status']; game?: GameKind; ranked?: boolean; teams?: boolean } = {}) {
     const record: GameRecord = {
       roomCode: 'MISN',
-      config: { ...CONFIG, game: opts.game ?? 'bluff' },
+      config: { ...CONFIG, game: opts.game ?? 'bluff', ranked: opts.ranked ?? false, teams: opts.teams ?? false },
       status: opts.status ?? 'finished',
       startedAt: new Date(Date.now() - (opts.seconds ?? 90) * 1000),
       endedAt: new Date(),
@@ -397,6 +397,32 @@ describe.skipIf(!MONGO)('missions (MongoDB)', () => {
     expect(await missionsOf(eve.oid)).toEqual(['d-c7games2 1', 'd-sevens3 3 done', 'd-sneak3 0', 'w-c7wins3 1', 'w-catch10 0', 'w-friend5 0']);
     await play([{ memberId: 'eve', userId: eve.id, won: true, place: 1, stats: { ...zero, sevens: 2, goodCalls: 1, bluffs: 2 } }, { memberId: 'bot', bot: true }]);
     expect(await missionsOf(eve.oid)).toEqual(['d-c7games2 1', 'd-sevens3 3 done', 'd-sneak3 2', 'w-c7wins3 1', 'w-catch10 1', 'w-friend5 0']);
+  });
+
+  it('counts Bluff wins, lies, ranked games and wins, 2 vs 2 wins, wins with a friend, and Crazy 7 stacks and last cards', async () => {
+    const [gus, hal] = [await account('mis_gus'), await account('mis_hal')];
+    await befriend(gus, hal);
+    await setMissions(gus.oid, ['d-bluffwin1', 'd-lies6', 'd-ranked2', 'd-friendwin1'], ['w-rankedwins5', 'w-teamwins3', 'w-stacks5', 'w-friendwins5']);
+    // a ranked Bluff game against a friend: won, with 4 lies told
+    const ranked = await play(
+      [
+        { memberId: 'gus', userId: gus.id, won: true, place: 1, stats: { ...zero, bluffs: 4, caught: 1 } },
+        { memberId: 'hal', userId: hal.id, loser: true },
+      ],
+      { ranked: true },
+    );
+    expect(ranked.get('gus')!.missionsDone.map((d) => d.id)).toEqual(['d-bluffwin1', 'd-friendwin1']);
+    expect(await missionsOf(gus.oid)).toEqual([
+      'd-bluffwin1 1 done', 'd-lies6 4', 'd-ranked2 1', 'd-friendwin1 1 done',
+      'w-rankedwins5 1', 'w-teamwins3 0', 'w-stacks5 0', 'w-friendwins5 1',
+    ]);
+    // a 2 vs 2 win that isn't ranked, with bots; then a Crazy 7 game with two 7s answered
+    await play([{ memberId: 'gus', userId: gus.id, won: true, place: 1, stats: { ...zero, bluffs: 2 } }, { memberId: 'bot', bot: true }], { teams: true });
+    await play([{ memberId: 'gus', userId: gus.id, place: 2, stats: { ...zero, stacks: 2, lastCalls: 1, bluffs: 3 } }, { memberId: 'bot', bot: true, won: true }], { game: 'crazy7' });
+    expect(await missionsOf(gus.oid)).toEqual([
+      'd-bluffwin1 1 done', 'd-lies6 6 done', 'd-ranked2 1', 'd-friendwin1 1 done',
+      'w-rankedwins5 1', 'w-teamwins3 1', 'w-stacks5 2', 'w-friendwins5 1',
+    ]);
   });
 
   it('adds a done secret card to bonus XP, so the level counts it', async () => {

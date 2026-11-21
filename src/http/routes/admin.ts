@@ -99,6 +99,7 @@ export function adminRoutes(
       const b = asPayload(req.body);
       const changes: UserChanges = {};
       if (b.displayName !== undefined) changes.displayName = parseName(b.displayName);
+      if (b.username !== undefined) changes.username = parseUsername(b.username);
       if (b.role !== undefined) changes.role = parseRole(b.role);
       if (b.blocked !== undefined) changes.blocked = parseFlag(b.blocked, 'Blocked');
       if (Object.keys(changes).length === 0) throw new ApiError(400, 'Nothing to change');

@@ -12,7 +12,6 @@ import { createStore, type Store } from '../src/services/store.js';
 import {
   DEFAULT_CARD_BACK,
   DEFAULT_TABLE_THEME,
-  RANK_DAILY_CAP,
   type AuditEntry,
   type CoinResult,
   type GameConfig,
@@ -56,30 +55,24 @@ describe('rank points from a rated game', () => {
     expect(lost.doc).toMatchObject({ mu: 22, points: 0, games: 1, wins: 0, today: 0 });
   });
 
-  it(`keeps each IST day's change within ${RANK_DAILY_CAP} either way`, () => {
+  it('has no daily limit: every win and loss counts in full, and today just adds them up', () => {
     const [b, a] = move(2);
-    // +80 with 120 already won today: only 30 more
-    let s = nextStanding(standing({ points: 400, floor: 300, today: 120 }), 1, b, a, true, DAY);
-    expect(s.result).toEqual({ before: 400, after: 430, division: 'silver', held: 'cap' });
-    expect(s.doc.today).toBe(150);
-    // at the cap a win moves nothing, a loss still counts
-    expect(nextStanding(s.doc, 1, b, a, true, DAY).result).toMatchObject({ after: 430, held: 'cap' });
+    // +80 in skill is +72 in Silver, even with 400 already won today
+    let s = nextStanding(standing({ points: 400, floor: 300, today: 400 }), 1, b, a, true, DAY);
+    expect(s.result).toEqual({ before: 400, after: 472, division: 'silver', held: null });
+    expect(s.doc.today).toBe(472);
     // in Silver a loss weighs 30% of a full win: -100 in skill is -30 points
     s = nextStanding(s.doc, 1, b, { mu: 22.5, sigma: 5.9 }, false, DAY);
-    expect(s.result).toEqual({ before: 430, after: 400, division: 'silver', held: null });
-    expect(s.doc.today).toBe(120);
-    // losses are capped too: -400 in skill is -132 in Gold, only 30 of it today
-    s = nextStanding(standing({ points: 1000, floor: 700, today: -120 }), 1, b, { mu: 15, sigma: 5.9 }, false, DAY);
-    expect(s.result).toMatchObject({ after: 970, held: 'cap' });
-    expect(s.doc.today).toBe(-150);
-    // a new day starts at 0
+    expect(s.result).toEqual({ before: 472, after: 442, division: 'silver', held: null });
+    expect(s.doc.today).toBe(442);
+    // a big loss is taken in full: -400 in skill is -132 in Gold (868 is still Gold: Gold starts at 700)
+    s = nextStanding(standing({ points: 1000, floor: 700, today: -300 }), 1, b, { mu: 15, sigma: 5.9 }, false, DAY);
+    expect(s.result).toEqual({ before: 1000, after: 868, division: 'gold', held: null });
+    expect(s.doc.today).toBe(-432);
+    // a new day starts today at 0
     const next = istDay(FRI);
-    // in Silver a win gives 90%: +80 in skill is +72 points
     s = nextStanding(standing({ points: 430, floor: 300, today: 150 }), 1, b, a, true, next);
-    expect(s.result).toMatchObject({ after: 502, held: null });
-    expect(s.doc).toMatchObject({ day: next, today: 72 });
-    // past the cap (it was lowered): a win never turns into a loss
-    expect(nextStanding(standing({ points: 500, floor: 300, today: 160 }), 1, b, a, true, DAY).result).toMatchObject({ after: 500, held: 'cap' });
+    expect(s.doc).toMatchObject({ points: 502, day: next, today: 72 });
   });
 
   it('keeps the division shown until points are 50 below its start; points themselves always move', () => {
@@ -103,21 +96,19 @@ describe('rank points from a rated game', () => {
     expect(s.result.division).toBe('silver');
   });
 
-  it('pays back losses 0 points or the daily cap held off before a win adds points', () => {
-    // Bronze 0 can't go lower: the 25 (25% of -100) is owed
+  it('stops a loss at 0 with nothing owed, so the next win counts in full', () => {
     const lost = nextStanding(standing(), 1, DEFAULT_RATING, { mu: 22.5, sigma: 5.9 }, false, DAY);
     expect(lost.result).toEqual({ before: 0, after: 0, division: 'bronze', held: 'floor' });
-    expect(lost.doc.debt).toBe(25);
-    // the next win of 100 pays back the 25 first, then 75 counts
+    expect(lost.doc.debt).toBe(0);
     const won = nextStanding(lost.doc, 1, { mu: 22.5, sigma: 5.8 }, { mu: 25, sigma: 5.8 }, true, DAY);
-    expect(won.result).toEqual({ before: 0, after: 75, division: 'bronze', held: 'debt' });
-    expect(won.doc).toMatchObject({ debt: 0, today: 75 });
-    // after that, wins count in full
-    const again = nextStanding(won.doc, 1, { mu: 25, sigma: 5.8 }, { mu: 26, sigma: 5.7 }, true, DAY);
-    expect(again.result).toMatchObject({ after: 115, held: null });
-    // a loss the daily cap held off is owed too: -132 wanted, -30 allowed
-    const capped = nextStanding(standing({ points: 1000, floor: 700, today: -120 }), 1, DEFAULT_RATING, { mu: 15, sigma: 5.9 }, false, DAY);
-    expect(capped.doc).toMatchObject({ points: 970, debt: 102 });
+    expect(won.result).toEqual({ before: 0, after: 100, division: 'bronze', held: null });
+    // a loss that only partly fits above 0 takes what's there
+    const part = nextStanding(standing({ points: 10 }), 1, DEFAULT_RATING, { mu: 22.5, sigma: 5.9 }, false, DAY);
+    expect(part.result).toEqual({ before: 10, after: 0, division: 'bronze', held: 'floor' });
+    // owed points from older games are dropped, never taken from a win
+    const old = nextStanding(standing({ points: 200, debt: 80 }), 1, DEFAULT_RATING, { mu: 26, sigma: 5.9 }, true, DAY);
+    expect(old.result).toMatchObject({ after: 240, held: null });
+    expect(old.doc.debt).toBe(0);
   });
 
   it('weighs a loss 1:4 against a win in Bronze, rising step by step to 1:1.5 at the top, while wins shrink', () => {
@@ -425,30 +416,24 @@ describe.skipIf(!MONGO)('ranked (MongoDB)', () => {
     { memberId: loser.username, userId: loser.oid, won: false, place: null },
   ];
 
-  it('caps each IST day either way, keeps moving the hidden skill, and starts again the next day', async () => {
+  it('has no daily limit: a long night of wins keeps climbing, and losses keep counting', async () => {
     const [ia, jo] = [await account(), await account()];
-    // Jo already lost 120 today
-    await setRank(jo, { points: 1000, floor: 700, day: istDay(THU), today: -120 });
+    await setRank(jo, { points: 1000, floor: 700, day: istDay(THU) });
     let res = await store.ranked.rate(seats(ia, jo), THU);
     expect(res.get(ia.username)).toEqual({ before: 0, after: 105, division: 'bronze', held: null });
-    // Jo's loss is trimmed to the 30 left today
-    expect(res.get(jo.username)).toEqual({ before: 1000, after: 970, division: 'gold', held: 'cap' });
-    res = await store.ranked.rate(seats(ia, jo), THU);
-    expect(res.get(ia.username)).toMatchObject({ after: RANK_DAILY_CAP, held: 'cap' });
-    expect(res.get(jo.username)).toMatchObject({ before: 970, after: 970, held: 'cap' });
-    const mu = (await rankDoc(ia))!.mu;
-    res = await store.ranked.rate(seats(ia, jo), THU);
-    expect(res.get(ia.username)).toMatchObject({ before: 150, after: 150, held: 'cap' });
-    expect((await rankDoc(ia))!.mu).toBeGreaterThan(mu);
-    expect(rankViewOf(await rankDoc(ia), store.settings.rankedSeason, THU)).toMatchObject({ points: 150, today: 150, games: 3, wins: 3 });
-    expect(rankViewOf(await rankDoc(jo), store.settings.rankedSeason, THU)).toMatchObject({ points: 970, today: -150, games: 3, wins: 0 });
-    // Friday: a fresh day
+    const jo1 = res.get(jo.username)!;
+    expect(jo1).toMatchObject({ before: 1000, division: 'gold', held: null });
+    expect(jo1.after).toBeLessThan(1000);
+    for (let i = 0; i < 4; i++) res = await store.ranked.rate(seats(ia, jo), THU);
+    // well past the old 150 a day, nothing held
+    const ia5 = res.get(ia.username)!;
+    expect(ia5.held).toBe(null);
+    expect(ia5.after).toBeGreaterThan(300);
+    expect(res.get(jo.username)!.after).toBeLessThan(jo1.after);
+    expect(rankViewOf(await rankDoc(ia), store.settings.rankedSeason, THU)).toMatchObject({ points: ia5.after, today: ia5.after, games: 5, wins: 5 });
+    // Friday: today starts again at 0
     res = await store.ranked.rate(seats(ia, jo), FRI);
-    const fri = res.get(ia.username)!;
-    expect(fri.held).toBe(null);
-    expect(fri.after).toBeGreaterThan(150);
-    expect(await rankDoc(ia)).toMatchObject({ day: istDay(FRI), today: fri.after - 150, games: 4 });
-    expect(res.get(jo.username)!.after).toBeLessThan(970);
+    expect(await rankDoc(ia)).toMatchObject({ day: istDay(FRI), today: res.get(ia.username)!.after - ia5.after, games: 6 });
   });
 
   it('keeps showing a division within 50 points of its start, then drops it', async () => {

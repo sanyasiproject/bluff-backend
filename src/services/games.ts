@@ -116,7 +116,7 @@ export class GameRecorder {
     if (record.config.game !== 'crazy7') await this.addHabits(players);
     // missions move only with games that count, like the daily ladder; finished ones are paid as they're saved
     const missionsDone = counts
-      ? await this.countMissions(players, record.config.game === 'crazy7', secretDone, (p) => boostOfP(p).coins, addBoostCoins)
+      ? await this.countMissions(players, record.config, secretDone, (p) => boostOfP(p).coins, addBoostCoins)
       : new Map<string, MissionDone[]>();
     // the weekly friends league counts games of 2+ logged-in people that count; never coins
     const people = players.filter((p) => p.userId && !p.kicked);
@@ -295,12 +295,15 @@ export class GameRecorder {
   /** counts a game for each logged-in, non-removed player's missions; returns what each one finished, by member id */
   private async countMissions(
     players: (GamePlayerDoc & { memberId: string })[],
-    crazy7: boolean,
+    config: GameRecord['config'],
     secretDone: Set<string>,
     coinBoostOf: (p: GamePlayerDoc & { memberId: string }) => number,
     onBoost: (memberId: string, extra: number) => void,
   ): Promise<Map<string, MissionDone[]>> {
+    const crazy7 = config.game === 'crazy7';
+    // ranked counts only where it rates: Bluff with 2+ logged-in people (bots can't sit at a ranked table)
     const counted = players.filter((p) => p.userId && !p.kicked);
+    const ranked = !!config.ranked && !crazy7 && counted.length >= 2;
     // a failed friends lookup only loses this game's friends missions
     const friends = await this.friendPairs(counted.map((p) => p.userId!.toHexString())).catch((err: Error) => {
       console.error('[missions] could not read friends:', err.message);
@@ -321,6 +324,14 @@ export class GameRecorder {
         sevens: crazy7 ? (p.stats.sevens ?? 0) : 0,
         friendGames: withFriend ? 1 : 0,
         secrets: secretDone.has(p.memberId) ? 1 : 0,
+        bluffWins: !crazy7 && p.won ? 1 : 0,
+        bluffs: crazy7 ? 0 : p.stats.bluffs,
+        rankedGames: ranked ? 1 : 0,
+        rankedWins: ranked && p.won ? 1 : 0,
+        teamWins: config.teams && !crazy7 && p.won ? 1 : 0,
+        friendWins: withFriend && p.won ? 1 : 0,
+        lastCalls: crazy7 ? (p.stats.lastCalls ?? 0) : 0,
+        stacks: crazy7 ? (p.stats.stacks ?? 0) : 0,
       };
       try {
         const boost = coinBoostOf(p);

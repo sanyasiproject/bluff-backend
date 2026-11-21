@@ -30,6 +30,15 @@ export const SESSION_TTL_DAYS = intEnv('SESSION_TTL_DAYS', 30) || 30;
 /** secret for making the first admin (header X-Admin-Key); empty disables that route */
 export const ADMIN_API_KEY = process.env.ADMIN_API_KEY?.trim() ?? '';
 
+/** live voice: how phones find a path to each other. Public STUN needs no key; a TURN relay is optional (RTC_TURN_URLS, comma-separated, with its username and credential) */
+const turnUrls = (process.env.RTC_TURN_URLS ?? '').split(',').map((u) => u.trim()).filter(Boolean);
+export const RTC_ICE_SERVERS: { urls: string | string[]; username?: string; credential?: string }[] = [
+  { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+  ...(turnUrls.length > 0
+    ? [{ urls: turnUrls, username: process.env.RTC_TURN_USERNAME?.trim() ?? '', credential: process.env.RTC_TURN_CREDENTIAL?.trim() ?? '' }]
+    : []),
+];
+
 /** comma-separated frontend URLs, e.g. https://my-bluff.vercel.app */
 export const CLIENT_ORIGINS = (process.env.CLIENT_ORIGIN ?? '')
   .split(',')

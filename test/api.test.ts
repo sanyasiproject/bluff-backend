@@ -167,6 +167,31 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     ]);
   });
 
+  it('lets an admin change a username: logged, unique, and the player logs in and is found by the new one', async () => {
+    const boss = await register('uname_boss');
+    const kavi = await register('kavi_old', 'secret-pass-1', 'Kavi');
+    await register('taken_one');
+    const bossAuth = bearer(boss.body.token);
+    const kaviId = kavi.body.user.id as string;
+    await api().post('/api/admin/make-admin').set('X-Admin-Key', ADMIN_KEY).send({ username: 'uname_boss' });
+    // same rules as sign-up, and never one that's taken
+    expect((await api().post(`/api/admin/users/${kaviId}`).set(bossAuth).send({ username: 'no' })).status).toBe(400);
+    const taken = await api().post(`/api/admin/users/${kaviId}`).set(bossAuth).send({ username: 'Taken_One' });
+    expect([taken.status, taken.body.error]).toEqual([409, 'That username is taken']);
+    // name and username together; stored lowercase
+    const done = await api().post(`/api/admin/users/${kaviId}`).set(bossAuth).send({ username: '  Kavi_New ', displayName: 'Kavi R' });
+    expect(done.status).toBe(200);
+    expect(done.body.user).toMatchObject({ username: 'kavi_new', displayName: 'Kavi R' });
+    const history = (await api().get(`/api/admin/users/${kaviId}/history`).set(bossAuth)).body.history as AuditEntry[];
+    expect(history[0].detail).toBe('Name: Kavi → Kavi R · Username: @kavi_old → @kavi_new');
+    // still logged in; logs in and is found by the new username only
+    expect((await api().get('/api/me').set(bearer(kavi.body.token))).body.user.username).toBe('kavi_new');
+    expect((await api().post('/api/auth/login').send({ username: 'kavi_new', password: 'secret-pass-1' })).status).toBe(200);
+    expect((await api().post('/api/auth/login').send({ username: 'kavi_old', password: 'secret-pass-1' })).status).toBe(401);
+    expect((await api().get('/api/players/kavi_new').set(bossAuth)).body.profile.displayName).toBe('Kavi R');
+    expect((await api().get('/api/players/kavi_old').set(bossAuth)).status).toBe(404);
+  });
+
   it('gives admins a full user page and lets them rename, block and reset passwords', async () => {
     const chief = await register('chief_1');
     const meena = await register('meena_1', 'secret-pass-1', 'Meena');

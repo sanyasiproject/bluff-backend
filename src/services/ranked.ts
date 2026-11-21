@@ -4,7 +4,6 @@ import type { Actor, Collections, RankedDoc, UserDoc } from '../db/documents.js'
 import { DEFAULT_RATING, rate, type Rating } from '../rating.js';
 import {
   divisionOf,
-  RANK_DAILY_CAP,
   RANK_DIVISIONS,
   RANK_PROTECTION,
   RANK_SEASON_DROP,
@@ -149,24 +148,17 @@ export function nextStanding(
 ): { doc: RankedDoc; result: RankResult; shielded: boolean } {
   const points0 = prev?.points ?? 0;
   const floor0 = prev?.floor ?? 0;
-  const debt0 = prev?.debt ?? 0;
   const sofar = prev && prev.day === day ? prev.today : 0;
   const skill = Math.round(POINTS_PER_MU * (after.mu - before.mu));
   // by the division shown: wins give less and losses weigh more the higher it is (1:4 in Bronze to 1:1.5 at the top)
   const division = shownDivision(points0, floor0);
   const raw = Math.round(skill * (skill < 0 ? division.loss : division.win));
-  // a gain first pays back losses 0 points or the cap held off, so taking turns to win can't lift both players
-  const payback = raw > 0 ? Math.min(debt0, raw) : 0;
-  const wanted = raw - payback;
-  // today's total stays within the cap either way, and a win never turns into a loss
-  const allowed = Math.min(Math.max(wanted, Math.min(0, -RANK_DAILY_CAP - sofar)), Math.max(0, RANK_DAILY_CAP - sofar));
-  const capped = Math.max(0, points0 + allowed);
+  // no daily limit: every win and loss counts in full; only 0 stops a loss
+  const capped = Math.max(0, points0 + raw);
   // a shield stops a loss that would really cost points; nothing is owed for it
   const shielded = shield && capped < points0;
   const points = shielded ? points0 : capped;
   const change = points - points0;
-  // the part of a loss that was held off is owed (not when a shield took it)
-  const debt = debt0 - payback + (raw < 0 && !shielded ? change - raw : 0);
   const doc: RankedDoc = {
     season,
     mu: after.mu,
@@ -178,25 +170,15 @@ export function nextStanding(
     wins: (prev?.wins ?? 0) + (won ? 1 : 0),
     day,
     today: sofar + change,
-    debt,
+    // nothing is owed any more: 0 simply stops a loss
+    debt: 0,
   };
-  // 0 points is what stopped it when it bit last; otherwise the daily cap, a payback, or the protection keeping the division
-  const kept = change < 0 && points < doc.floor;
-  const held = shielded
-    ? 'shield'
-    : points !== points0 + allowed
-      ? 'floor'
-      : allowed !== wanted
-        ? 'cap'
-        : payback > 0
-          ? 'debt'
-          : kept
-            ? 'grace'
-            : null;
+  // a shield, 0 points stopping a loss, or the protection keeping the division
+  const held = shielded ? 'shield' : raw < 0 && points !== points0 + raw ? 'floor' : change < 0 && points < doc.floor ? 'grace' : null;
   return { doc, result: { before: points0, after: points, division: shownDivision(points, doc.floor).id, held }, shielded };
 }
 
-/** ranked play: a hidden skill rating per season, shown as rank points with divisions, floors and a daily cap */
+/** ranked play: a hidden skill rating per season, shown as rank points with divisions and their 50-point protection */
 export class RankedService {
   constructor(
     private readonly cols: Collections,

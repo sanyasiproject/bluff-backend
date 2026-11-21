@@ -1,5 +1,6 @@
 import { GameError } from './game.js';
 import {
+  RTC_MAX_SDP,
   BET_STEPS,
   BOT_LEVELS,
   CRAZY7_HAND_SIZES,
@@ -174,6 +175,15 @@ export function parseThrow(p: Payload): { to: string; index: number } {
   const index = p.index;
   if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= THROWS.length) throw new GameError('Invalid emoji');
   return { to: parseMemberId(p.to), index };
+}
+
+/** a live voice connection message for one other player: who it's for, and an offer or answer of bounded size */
+export function parseRtcSignal(p: Payload): { to: string; sdp: { type: 'offer' | 'answer'; sdp: string } } {
+  const to = parseMemberId(p.to);
+  const sdp = p.sdp as { type?: unknown; sdp?: unknown } | null | undefined;
+  if (!sdp || typeof sdp !== 'object' || (sdp.type !== 'offer' && sdp.type !== 'answer')) throw new GameError('Invalid voice connection');
+  if (typeof sdp.sdp !== 'string' || sdp.sdp.length === 0 || sdp.sdp.length > RTC_MAX_SDP) throw new GameError('Invalid voice connection');
+  return { to, sdp: { type: sdp.type, sdp: sdp.sdp } };
 }
 
 /** a recorded voice note: raw audio bytes, an audio type and its length; anything else is refused */

@@ -93,6 +93,8 @@ export function toAdminUser(u: WithId<UserDoc>): AdminUser {
 /** fields an admin can change on an account */
 export interface UserChanges {
   displayName?: string;
+  /** already checked by parseUsername (lowercase); must not be taken */
+  username?: string;
   role?: Role;
   blocked?: boolean;
 }
@@ -277,6 +279,11 @@ export class UserService {
       set.displayName = changes.displayName;
       notes.push(`Name: ${user.displayName} → ${changes.displayName}`);
     }
+    // everything links accounts by id, so a new username only changes how they log in and are found
+    if (changes.username !== undefined && changes.username !== user.username) {
+      set.username = changes.username;
+      notes.push(`Username: @${user.username} → @${changes.username}`);
+    }
     if (changes.role !== undefined && changes.role !== user.role) {
       set.role = changes.role;
       notes.push(`Role: ${roleName(user.role)} → ${roleName(changes.role)}`);
@@ -287,7 +294,14 @@ export class UserService {
     }
     if (notes.length === 0) return toAdminUser(user);
 
-    const updated = await this.cols.users.findOneAndUpdate({ _id }, { $set: set }, { returnDocument: 'after' });
+    let updated: WithId<UserDoc> | null;
+    try {
+      updated = await this.cols.users.findOneAndUpdate({ _id }, { $set: set }, { returnDocument: 'after' });
+    } catch (err) {
+      // the unique index on username
+      if (err instanceof MongoServerError && err.code === 11000) throw new ApiError(409, 'That username is taken');
+      throw err;
+    }
     if (!updated) throw new ApiError(404, 'User not found');
     if (set.blocked) await this.cols.sessions.deleteMany({ userId: _id });
     await this.audit(_id, 'update', by, { detail: notes.join(' · ') });

@@ -266,6 +266,20 @@ export interface ChatEvent {
 export const VOICE_MAX_MS = 7_000;
 export const VOICE_MAX_BYTES = 90 * 1024;
 export const VOICE_GAP_MS = 10_000;
+/** live voice: the most a connection message (offer or answer, with its network routes) may be */
+export const RTC_MAX_SDP = 32 * 1024;
+
+/** what the server tells a phone that joins live voice: how to reach the others (STUN, and TURN when the server has one) */
+export interface LiveVoiceJoin {
+  iceServers: { urls: string | string[]; username?: string; credential?: string }[];
+}
+
+/** a live voice connection message, passed from one seated player to another; the server never keeps it */
+export interface RtcSignal {
+  from: string;
+  sdp: { type: 'offer' | 'answer'; sdp: string };
+}
+
 /** audio formats a voice note may come in (the part before any ";codecs=") */
 export const VOICE_TYPES = ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/aac', 'audio/mpeg'] as const;
 
@@ -536,6 +550,8 @@ export interface PublicPlayer {
   saza: SazaBadge | null;
   /** shop looks they rent (aura, win burst, entry flash); missing from older servers */
   shop?: ShopLook;
+  /** in live voice right now: logged in, seated, connected and the host's voice switch on (missing from older servers) */
+  live?: boolean;
 }
 
 /** how one player's coins changed when a game ended */
@@ -712,7 +728,22 @@ export type MissionCounter =
   /** games finished with an accepted friend at the table */
   | 'friendGames'
   /** secret mission cards done */
-  | 'secrets';
+  | 'secrets'
+  /** Bluff games won */
+  | 'bluffWins'
+  /** Bluff: lies told (plays with a fake in them), caught or not */
+  | 'bluffs'
+  /** ranked Bluff games finished, and won */
+  | 'rankedGames'
+  | 'rankedWins'
+  /** 2 vs 2 games won */
+  | 'teamWins'
+  /** games won with an accepted friend at the table */
+  | 'friendWins'
+  /** Crazy 7: "last card" said in time */
+  | 'lastCalls'
+  /** Crazy 7: a waiting 7 answered with your own 7 */
+  | 'stacks';
 
 export type MissionPeriod = 'daily' | 'weekly';
 
@@ -740,6 +771,16 @@ export const MISSIONS: readonly MissionDef[] = [
   { id: 'd-secret1', period: 'daily', emoji: '🤫', title: 'Complete a secret mission', counter: 'secrets', goal: 1, coins: 150, xp: 30, social: false },
   { id: 'd-friend1', period: 'daily', emoji: '👯', title: 'Finish a game with a friend', counter: 'friendGames', goal: 1, coins: 200, xp: 40, social: true },
   { id: 'd-friend2', period: 'daily', emoji: '👯', title: 'Finish 2 games with friends', counter: 'friendGames', goal: 2, coins: 250, xp: 50, social: true },
+  { id: 'd-games5', period: 'daily', emoji: '🔥', title: 'Finish 5 games', counter: 'games', goal: 5, coins: 250, xp: 50, social: false },
+  { id: 'd-wins3', period: 'daily', emoji: '🏆', title: 'Win 3 games', counter: 'wins', goal: 3, coins: 350, xp: 60, social: false },
+  { id: 'd-bluffwin1', period: 'daily', emoji: '😏', title: 'Win a game of Bluff', counter: 'bluffWins', goal: 1, coins: 200, xp: 40, social: false },
+  { id: 'd-lies6', period: 'daily', emoji: '🤥', title: 'Tell 6 lies in Bluff', counter: 'bluffs', goal: 6, coins: 150, xp: 30, social: false },
+  { id: 'd-catch5', period: 'daily', emoji: '🔍', title: 'Catch 5 liars in Bluff', counter: 'goodCalls', goal: 5, coins: 250, xp: 50, social: false },
+  { id: 'd-ranked2', period: 'daily', emoji: '🏅', title: 'Finish 2 ranked games', counter: 'rankedGames', goal: 2, coins: 250, xp: 50, social: false },
+  { id: 'd-teamwin1', period: 'daily', emoji: '🤝', title: 'Win a 2 vs 2 game', counter: 'teamWins', goal: 1, coins: 200, xp: 40, social: false },
+  { id: 'd-lastcall2', period: 'daily', emoji: '📢', title: 'Say last card in time twice in Crazy 7', counter: 'lastCalls', goal: 2, coins: 150, xp: 30, social: false },
+  { id: 'd-stack1', period: 'daily', emoji: '🔁', title: 'Answer a 7 with your own 7', counter: 'stacks', goal: 1, coins: 200, xp: 40, social: false },
+  { id: 'd-friendwin1', period: 'daily', emoji: '🥳', title: 'Win a game with a friend at the table', counter: 'friendWins', goal: 1, coins: 300, xp: 50, social: true },
   { id: 'w-games15', period: 'weekly', emoji: '🎴', title: 'Finish 15 games', counter: 'games', goal: 15, coins: 1_000, xp: 150, social: false },
   { id: 'w-wins5', period: 'weekly', emoji: '🏆', title: 'Win 5 games', counter: 'wins', goal: 5, coins: 1_200, xp: 200, social: false },
   { id: 'w-catch10', period: 'weekly', emoji: '🕵️', title: 'Catch 10 liars in Bluff', counter: 'goodCalls', goal: 10, coins: 1_000, xp: 150, social: false },
@@ -747,10 +788,23 @@ export const MISSIONS: readonly MissionDef[] = [
   { id: 'w-c7wins3', period: 'weekly', emoji: '7️⃣', title: 'Win 3 games of Crazy 7', counter: 'crazy7Wins', goal: 3, coins: 1_000, xp: 150, social: false },
   { id: 'w-secret5', period: 'weekly', emoji: '🤫', title: 'Complete 5 secret missions', counter: 'secrets', goal: 5, coins: 1_000, xp: 150, social: false },
   { id: 'w-friend5', period: 'weekly', emoji: '👯', title: 'Finish 5 games with friends', counter: 'friendGames', goal: 5, coins: 1_200, xp: 200, social: true },
+  { id: 'w-games40', period: 'weekly', emoji: '🔥', title: 'Finish 40 games', counter: 'games', goal: 40, coins: 2_500, xp: 400, social: false },
+  { id: 'w-wins15', period: 'weekly', emoji: '🏆', title: 'Win 15 games', counter: 'wins', goal: 15, coins: 3_000, xp: 500, social: false },
+  { id: 'w-bluffwins8', period: 'weekly', emoji: '😏', title: 'Win 8 games of Bluff', counter: 'bluffWins', goal: 8, coins: 2_000, xp: 300, social: false },
+  { id: 'w-lies40', period: 'weekly', emoji: '🤥', title: 'Tell 40 lies in Bluff', counter: 'bluffs', goal: 40, coins: 1_200, xp: 200, social: false },
+  { id: 'w-catch25', period: 'weekly', emoji: '🔍', title: 'Catch 25 liars in Bluff', counter: 'goodCalls', goal: 25, coins: 2_000, xp: 300, social: false },
+  { id: 'w-sneak30', period: 'weekly', emoji: '🗿', title: 'Get 30 lies past everyone in Bluff', counter: 'cleanBluffs', goal: 30, coins: 2_000, xp: 300, social: false },
+  { id: 'w-ranked10', period: 'weekly', emoji: '🏅', title: 'Finish 10 ranked games', counter: 'rankedGames', goal: 10, coins: 2_000, xp: 300, social: false },
+  { id: 'w-rankedwins5', period: 'weekly', emoji: '🎖️', title: 'Win 5 ranked games', counter: 'rankedWins', goal: 5, coins: 2_500, xp: 400, social: false },
+  { id: 'w-teamwins3', period: 'weekly', emoji: '🤝', title: 'Win 3 games of 2 vs 2', counter: 'teamWins', goal: 3, coins: 1_500, xp: 250, social: false },
+  { id: 'w-c7games10', period: 'weekly', emoji: '🌀', title: 'Finish 10 games of Crazy 7', counter: 'crazy7Games', goal: 10, coins: 1_200, xp: 200, social: false },
+  { id: 'w-stacks5', period: 'weekly', emoji: '🔁', title: 'Answer 5 sevens with your own 7', counter: 'stacks', goal: 5, coins: 1_200, xp: 200, social: false },
+  { id: 'w-friend15', period: 'weekly', emoji: '👯', title: 'Finish 15 games with friends', counter: 'friendGames', goal: 15, coins: 2_000, xp: 300, social: true },
+  { id: 'w-friendwins5', period: 'weekly', emoji: '🥳', title: 'Win 5 games with a friend at the table', counter: 'friendWins', goal: 5, coins: 2_500, xp: 400, social: true },
 ];
 
 /** missions in each day's set and in each week's set */
-export const MISSIONS_PER_SET = 3;
+export const MISSIONS_PER_SET = 4;
 
 /** the catalogue entry for a mission id, or null */
 export const missionOf = (id: string | null | undefined) => MISSIONS.find((m) => m.id === id) ?? null;
@@ -919,9 +973,6 @@ export type RankDivisionId = (typeof RANK_DIVISIONS)[number]['id'];
 /** the division for some rank points */
 export const divisionOf = (points: number) => [...RANK_DIVISIONS].reverse().find((d) => points >= d.min) ?? RANK_DIVISIONS[0];
 
-/** rank points a player can win or lose in one IST day, so one night can't make or break a season */
-export const RANK_DAILY_CAP = 150;
-
 /** a ranked loss costs this share of the points the same win would give, so wins count for more */
 export const RANK_LOSS_SHARE = 0.7;
 
@@ -952,7 +1003,7 @@ export interface RankView {
   floor: number;
   games: number;
   wins: number;
-  /** today's change so far, within RANK_DAILY_CAP either way */
+  /** today's change so far (no limit) */
   today: number;
   /** when this season started, and when the next one starts once an admin asked for it (ISO); null when not known or not asked */
   startedAt?: string | null;

@@ -5,6 +5,7 @@ import { Crazy7Bots } from './crazy7/driver.js';
 import { rankPlural } from './cards.js';
 import { GameError } from './game.js';
 import type { AccountInfo, GameEvent, GameRecord, Member, MemberAccount, PlayerLook, SocketHooks, SocketUser, WatchRequest } from './models.js';
+import { RTC_ICE_SERVERS } from './config.js';
 import { Presence } from './presence.js';
 import { botStakeText, type Room, type RoomManager } from './rooms.js';
 import {
@@ -17,6 +18,8 @@ import {
   type GiftEvent,
   type GiftReceived,
   type InviteEvent,
+  type LiveVoiceJoin,
+  type RtcSignal,
   type ServerInfo,
   stakeLevelOf,
   type VoiceEvent,
@@ -36,6 +39,7 @@ import {
   parseName,
   parsePlayId,
   parseRank,
+  parseRtcSignal,
   parseSaza,
   parseSlot,
   parseThrow,
@@ -415,6 +419,8 @@ export function registerHandlers(
       }
       member.socketId = socket.id;
       member.lastSeen = Date.now();
+      // a fresh connection starts with live voice off, so others never wait on a phone that isn't in it
+      room.dropLive(member.id);
       member.hasReady = socket.data.hasReady === true;
       member.hasTwists = socket.data.hasTwists === true;
       socket.join(room.code);
@@ -792,6 +798,27 @@ export function registerHandlers(
       room.voice(member.id);
       const note: Omit<VoiceEvent, 'audio'> & { audio: Buffer } = { from: member.id, audio, mime, ms };
       socket.to(room.code).emit('voice', note);
+    });
+
+    // live voice on or off: everyone's state says who's in it, so phones connect to and drop each other by themselves
+    on('voice:live', (p) => {
+      const { room, member } = current();
+      const live = parseFlag(p.on, 'Live voice');
+      room.setLive(member.id, live);
+      broadcast(room);
+      const join: LiveVoiceJoin = { iceServers: live ? RTC_ICE_SERVERS : [] };
+      return join;
+    });
+
+    // a live voice connection message goes straight to the one player it's for; only between two players in live voice
+    on('rtc:signal', (p) => {
+      const { room, member } = current();
+      const { to, sdp } = parseRtcSignal(p);
+      if (!room.isLive(member.id)) throw new GameError('Turn live voice on first');
+      const target = room.members.find((m) => m.id === to);
+      if (!target?.socketId || !room.isLive(to)) throw new GameError('They left live voice');
+      const signal: RtcSignal = { from: member.id, sdp };
+      io.to(target.socketId).emit('rtc:signal', signal);
     });
 
     // coins for a friend, picked in the friends list (userId) or in this room (memberId)

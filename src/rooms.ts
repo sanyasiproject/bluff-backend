@@ -97,6 +97,8 @@ export class Room {
   private lastChat = new Map<string, number>();
   /** by account, kept after leaving, so leaving and joining again doesn't skip the wait */
   private lastVoice = new Map<string, number>();
+  /** members who turned live voice on; they count only while isLive says so */
+  private live = new Set<string>();
 
   constructor(readonly code: string) {}
 
@@ -163,6 +165,7 @@ export class Room {
   /** leaves the room; a player seated in a running game forfeits it. Returns any game events */
   removeMember(id: string): GameEvent[] {
     const leaving = this.member(id);
+    this.live.delete(id);
     let events: GameEvent[] = [];
     if (this.table?.order.includes(id)) {
       // kept so the saved game and the game-over screen still have their name
@@ -659,6 +662,35 @@ export class Room {
     this.lastVoice.set(member.userId, now);
   }
 
+  /** seated right now: in the game's order once it's on, otherwise not watching */
+  private seatedNow(m: Member): boolean {
+    return this.table ? this.table.order.includes(m.id) : !m.watching;
+  }
+
+  /** turns live voice on or off for a member; only logged-in, seated people may turn it on, and only while voice is on */
+  setLive(by: string, on: boolean): void {
+    const member = this.member(by);
+    if (!on) {
+      this.live.delete(by);
+      return;
+    }
+    if (!this.config.voice) throw new GameError('The host turned voice off');
+    if (!member.userId) throw new GameError('Log in to talk');
+    if (member.bot || !this.seatedNow(member)) throw new GameError('Only players in the game can talk. Watchers just watch');
+    this.live.add(by);
+  }
+
+  /** in live voice now: turned it on and still logged in, seated, connected, with the host's voice switch on */
+  isLive(id: string): boolean {
+    const m = this.members.find((x) => x.id === id);
+    return !!m && this.live.has(id) && this.config.voice && !!m.userId && !m.bot && m.socketId !== null && this.seatedNow(m);
+  }
+
+  /** a fresh connection starts with live voice off (a reload, another tab) */
+  dropLive(id: string): void {
+    this.live.delete(id);
+  }
+
   view(meId: string): RoomView {
     // g is whichever game is on; b only while it's Bluff
     const g = this.table;
@@ -693,6 +725,7 @@ export class Room {
         ready: m.bot || m.id === this.hostId || !m.hasReady || m.ready,
         saza: this.sazaOn ? m.saza : null,
         shop: shopLookOf(m.shop),
+        live: this.isLive(m.id),
       })),
       watchers: this.members
         .filter((m) => !seatedIds.has(m.id))
