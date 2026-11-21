@@ -16,6 +16,7 @@ import {
   HISTORY_PAGE_SIZE,
   levelOf,
   LOGIN_BONUS,
+  NAME_CHANGE_DAYS,
   parseAvatar,
   type AdminUser,
   type AuditEntry,
@@ -67,6 +68,15 @@ export const tableThemeChoice = (u: Pick<UserDoc, 'tableTheme'>): string | null 
 export const giftLeftOf = (u: Pick<UserDoc, 'giftDay' | 'giftGiven'>, today = istDay()): number =>
   u.giftDay === today ? Math.max(0, DAILY_GIFT_LIMIT - (u.giftGiven ?? 0)) : DAILY_GIFT_LIMIT;
 
+const DAY_MS = 86_400_000;
+
+/** when a player may change their own name again (ISO), or null when they may now; admins never wait */
+export function nextNameChangeOf(u: Pick<UserDoc, 'nameChangedAt' | 'role'>, now = Date.now()): string | null {
+  if (!u.nameChangedAt || u.role === 'admin') return null;
+  const at = u.nameChangedAt.getTime() + NAME_CHANGE_DAYS * DAY_MS;
+  return at > now ? new Date(at).toISOString() : null;
+}
+
 export function toPublicUser(u: WithId<UserDoc>): PublicUser {
   return {
     id: u._id.toHexString(),
@@ -83,6 +93,7 @@ export function toPublicUser(u: WithId<UserDoc>): PublicUser {
     tableTheme: tableThemeChoice(u),
     // this season's standing (Bronze 0 before any ranked game) and earlier seasons
     rank: rankViewOf(u.ranked, undefined, undefined, seasonsPlayed(u)),
+    nameChangeAt: nextNameChangeOf(u),
   };
 }
 
@@ -379,6 +390,38 @@ export class UserService {
       { _id: new ObjectId(), action: 'gift', targetUserId: toOid, byUserId: fromOid, via: 'player', amount, balanceAfter: to.coins, detail: `Gift from ${from.displayName}`, createdAt: at },
     ]);
     return { from, to };
+  }
+
+  /**
+   * a player changes their own display name: the first time whenever they like, then once every NAME_CHANGE_DAYS; admins any time.
+   * One guarded write, so two taps can't both get through; logged in their history
+   */
+  async changeOwnName(userId: ObjectId, name: string, now = new Date()): Promise<PublicUser> {
+    const user = await this.cols.users.findOne({ _id: userId });
+    if (!user) throw new ApiError(404, 'User not found');
+    if (name === user.displayName) throw new ApiError(400, "That's already your name");
+    const wait = nextNameChangeOf(user, now.getTime());
+    if (wait) throw new ApiError(409, `You can change your name again on ${new Date(wait).toDateString().slice(4)}`);
+    const since = new Date(now.getTime() - NAME_CHANGE_DAYS * DAY_MS);
+    // admins aren't held to the wait; everyone else only when the last change is old enough
+    const guard: Filter<UserDoc> =
+      user.role === 'admin' ? { _id: userId } : { _id: userId, $or: [{ nameChangedAt: { $exists: false } }, { nameChangedAt: { $lte: since } }] };
+    const updated = await this.cols.users.findOneAndUpdate(
+      guard,
+      { $set: { displayName: name, nameChangedAt: now } },
+      { returnDocument: 'after' },
+    );
+    if (!updated) throw new ApiError(409, 'Your name was just changed. Try again later');
+    await this.cols.audit.insertOne({
+      _id: new ObjectId(),
+      action: 'update',
+      targetUserId: userId,
+      byUserId: userId,
+      via: 'player',
+      detail: `Name: ${user.displayName} → ${name} (by the player)`,
+      createdAt: now,
+    });
+    return toPublicUser(updated);
   }
 
   /** picks an avatar (or null for the first letter); faces and backgrounds above the account's level are refused */

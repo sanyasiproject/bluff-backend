@@ -59,6 +59,8 @@ export interface UserDoc {
   league?: LeagueDoc;
   /** left off friends' league boards */
   leagueHidden?: boolean;
+  /** when the player last changed their own display name; the next change waits NAME_CHANGE_DAYS (admin renames don't count) */
+  nameChangedAt?: Date;
   /** ranked standing for the season it was earned in (services/ranked.ts) */
   ranked?: RankedDoc;
   /** earlier seasons played, oldest first; added when a standing moves into a new season */

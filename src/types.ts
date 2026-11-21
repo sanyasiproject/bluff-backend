@@ -1048,6 +1048,8 @@ export interface PublicUser {
   id: string;
   username: string;
   displayName: string;
+  /** when this player may change their own name again (ISO); null: now. The first change is free, then one every NAME_CHANGE_DAYS; admins any time (missing from older servers) */
+  nameChangeAt?: string | null;
   /** chosen avatar ("face.bg"); null shows the first letter */
   avatar: string | null;
   /** chosen card back (CARD_BACKS id); null until picked (shown as the classic back) */
@@ -1122,6 +1124,9 @@ export interface AdminUser extends PublicUser {
 }
 
 export type AuditAction = 'coins' | 'make_admin' | 'update' | 'password' | 'gift' | 'settings' | 'shop';
+
+/** after a player changes their own display name, the next change waits this long */
+export const NAME_CHANGE_DAYS = 60;
 
 /** sent on every connection (and to a guest who is turned away), so the app never depends on one HTTP check */
 export interface ServerInfo {

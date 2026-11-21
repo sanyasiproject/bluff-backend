@@ -14,7 +14,7 @@ import {
   type ShopLookKind,
   type ShopResponse,
 } from '../../types.js';
-import { asPayload, parseQueryInt } from '../../validate.js';
+import { asPayload, parseName, parseQueryInt } from '../../validate.js';
 import { ApiError } from '../errors.js';
 import { ah, currentUser, requireUser } from '../middleware.js';
 
@@ -95,6 +95,15 @@ export function meRoutes(store: Store, onLookChanged: (userId: string, look: Pla
       if (typeof id !== 'string' || id.length > 40) throw new ApiError(400, "That isn't one of your missions");
       const body: MissionsResponse = await store.missions.swap(currentUser(res)._id, id);
       res.json(body);
+    }),
+  );
+
+  // the player's own display name: the first change any time, then once every NAME_CHANGE_DAYS
+  r.post(
+    '/name',
+    ah(async (req, res) => {
+      const name = parseName(asPayload(req.body).displayName);
+      res.json({ user: await store.users.changeOwnName(currentUser(res)._id, name) });
     }),
   );
 

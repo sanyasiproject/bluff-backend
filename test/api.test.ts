@@ -1,5 +1,5 @@
 import type { AddressInfo } from 'node:net';
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 import { io as connect, type Socket } from 'socket.io-client';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -165,6 +165,41 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
       ['coins', 'admin', -200],
       ['make_admin', 'admin', null],
     ]);
+  });
+
+  it('lets a player change their own name once, then again only after 2 months; admins any time', async () => {
+    const ana = await register('name_ana', 'secret-pass-1', 'Anna');
+    const anaAuth = bearer(ana.body.token);
+    const anaId = ana.body.user.id as string;
+    expect(ana.body.user.nameChangeAt).toBe(null);
+    // the first change is free
+    const first = await api().post('/api/me/name').set(anaAuth).send({ displayName: '  Ana  ' });
+    expect(first.status).toBe(200);
+    expect(first.body.user.displayName).toBe('Ana');
+    const next = new Date(first.body.user.nameChangeAt as string).getTime();
+    expect(Math.round((next - Date.now()) / 86_400_000)).toBe(60);
+    // then locked, with the date in the message; nothing changed
+    const again = await api().post('/api/me/name').set(anaAuth).send({ displayName: 'Ana K' });
+    expect(again.status).toBe(409);
+    expect(again.body.error).toMatch(/^You can change your name again on /);
+    expect((await api().get('/api/me').set(anaAuth)).body.user.displayName).toBe('Ana');
+    // same rules as everywhere else
+    expect((await api().post('/api/me/name').set(anaAuth).send({ displayName: '' })).status).toBe(400);
+    // 2 months on, it opens again
+    const client = new MongoClient(MONGO!);
+    await client.connect();
+    await client.db(DB).collection('users').updateOne({ _id: new ObjectId(anaId) }, { $set: { nameChangedAt: new Date(Date.now() - 61 * 86_400_000) } });
+    await client.close();
+    expect((await api().get('/api/me').set(anaAuth)).body.user.nameChangeAt).toBe(null);
+    expect((await api().post('/api/me/name').set(anaAuth).send({ displayName: 'Ana K' })).body.user.displayName).toBe('Ana K');
+    // admins are never made to wait
+    const boss = await register('name_boss');
+    const bossAuth = bearer(boss.body.token);
+    await api().post('/api/admin/make-admin').set('X-Admin-Key', ADMIN_KEY).send({ username: 'name_boss' });
+    expect((await api().post('/api/me/name').set(bossAuth).send({ displayName: 'Boss One' })).status).toBe(200);
+    const twice = await api().post('/api/me/name').set(bossAuth).send({ displayName: 'Boss Two' });
+    expect(twice.status).toBe(200);
+    expect(twice.body.user).toMatchObject({ displayName: 'Boss Two', nameChangeAt: null });
   });
 
   it('lets an admin change a username: logged, unique, and the player logs in and is found by the new one', async () => {
