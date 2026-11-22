@@ -74,6 +74,19 @@ export interface RoomLimits {
 
 export const DEFAULT_ROOM_LIMITS: RoomLimits = { createsPerIp: 10, liveRoomsPerIp: 5 };
 
+/** Rang: the +2/+4 cards on top of the pile that add up to the waiting penalty, oldest first */
+function penaltyChain(pile: RangCard[], penalty: number): number[] {
+  const out: number[] = [];
+  let sum = 0;
+  for (let i = pile.length - 1; i >= 0 && sum < penalty; i--) {
+    const v = pile[i].value === 'draw2' ? 2 : pile[i].value === 'wild4' ? 4 : 0;
+    if (v === 0) break;
+    out.unshift(v);
+    sum += v;
+  }
+  return sum === penalty ? out : [penalty];
+}
+
 /** power cards: the suit a J names, spoken */
 const SUIT_WORDS: Record<Suit, string> = { S: 'spades', H: 'hearts', D: 'diamonds', C: 'clubs' };
 
@@ -1066,6 +1079,7 @@ export class Room {
       deckCount: r.deck.length,
       dir: r.dir,
       penalty: r.penalty,
+      chain: penaltyChain(r.pile, r.penalty),
       picks: r.picks,
       maxPicks: r.maxPicks(),
       playable: seated ? r.playable(meId).map((c) => c.id) : [],
@@ -1106,7 +1120,7 @@ export class Room {
         return [
           'bluff',
           e.guilty
-            ? `${n(e.playerId)} challenged the +4. Caught! ${n(e.targetId)} had the colour and picks ${e.count}`
+            ? `${n(e.playerId)} challenged the +4. Caught! ${n(e.targetId)} had the colour, takes the +4 back and picks ${e.count}`
             : `${n(e.playerId)} challenged the +4, but it was fair. ${n(e.playerId)} picks ${e.count}`,
         ];
       case 'rgcall':

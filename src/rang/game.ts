@@ -38,7 +38,8 @@ export interface RangState {
   dir: 1 | -1;
   topBy: string | null;
   /** the +4 on top that may still be challenged: who played it and whether they held the colour in play */
-  challengeable: { by: string; guilty: boolean } | null;
+  /** the unstacked +4 on top that may still be challenged, and the colour and player before it (a caught +4 is undone) */
+  challengeable: { by: string; guilty: boolean; color?: RangColor | null; topBy?: string | null } | null;
 }
 
 const NUMBERS: RangValue[] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
@@ -123,7 +124,7 @@ export class RangGame implements TableGame<RangCard> {
   /** 1 in seat order, -1 after a Reverse */
   dir: 1 | -1 = 1;
   /** the +4 on top that may still be challenged (not stacked on a chain) */
-  challengeable: { by: string; guilty: boolean } | null = null;
+  challengeable: { by: string; guilty: boolean; color?: RangColor | null; topBy?: string | null } | null = null;
   /** ended because nobody could play and nothing was left to pick */
   stalled = false;
   /** turns in a row that passed by themselves without picking anything (a stuck table) */
@@ -368,6 +369,8 @@ export class RangGame implements TableGame<RangCard> {
     const wild = isWild(card);
     // a +4 played while holding the colour in play can be challenged
     const guilty = card.value === 'wild4' && hand.some((c) => c !== card && c.color !== null && c.color === this.color);
+    // what the table was before this play, so a caught +4 can be undone
+    const before = { color: this.color, topBy: this.topBy };
     this.hands.set(id, hand.filter((c) => !cards.includes(c)));
     this.pile.push(...cards);
     this.topBy = id;
@@ -379,7 +382,7 @@ export class RangGame implements TableGame<RangCard> {
     if (card.value === 'draw2' || card.value === 'wild4') {
       if (stacked) s.stacks = (s.stacks ?? 0) + 1;
       this.penalty += card.value === 'draw2' ? 2 : 4;
-      if (card.value === 'wild4' && !stacked) this.challengeable = { by: id, guilty };
+      if (card.value === 'wild4' && !stacked) this.challengeable = { by: id, guilty, color: before.color, topBy: before.topBy };
     }
     const play: Extract<GameEvent, { kind: 'rgplay' }> = { kind: 'rgplay', playerId: id, card: topCard, color: this.color, penalty: this.penalty };
     const all = { ...(cards.length > 1 && { cards: [...cards] }), ...(forced && { forced: true }) };
@@ -520,10 +523,20 @@ export class RangGame implements TableGame<RangCard> {
   challenge(id: string): GameEvent[] {
     this.assertTurn(id);
     if (!this.canChallenge(id)) throw new GameError('Only a +4 played on you can be challenged');
-    const { by, guilty } = this.challengeable!;
+    const { by, guilty, color, topBy } = this.challengeable!;
     const events = this.closeWindow(id);
     this.challengeable = null;
     this.penalty = 0;
+    if (guilty) {
+      // caught: the +4 goes back to its player and the table is as it was before it; they also pick 4
+      const four = this.pile.pop()!;
+      this.hand(by).push(four);
+      byColor(this.hand(by));
+      this.color = color ?? null;
+      this.topBy = topBy ?? null;
+      const s = this.stat(by);
+      s.wilds = Math.max(0, (s.wilds ?? 0) - 1);
+    }
     const got = this.draw(guilty ? by : id, guilty ? 4 : 6, events);
     events.push({ kind: 'rgchallenge', playerId: id, targetId: by, guilty, count: got });
     this.move('challenge', id, null, got, { targetId: by, guilty });

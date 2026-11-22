@@ -250,12 +250,38 @@ describe('rang: +2 and +4', () => {
   });
 });
 
+describe('rang: a long stack', () => {
+  it('+2, +2, +4, +4 makes the next player pick 12', () => {
+    const g = table(
+      {
+        a: [rc('red', 'draw2'), rc('red', '1')],
+        b: [rc('blue', 'draw2'), rc('red', '2')],
+        c: [w('wild4'), rc('red', '3')],
+        d: [w('wild4', 2), rc('red', '4')],
+        e: [rc('green', '1'), rc('green', '2')],
+      },
+      [rc('red', '5')],
+      'a',
+      { deck: Array.from({ length: 20 }, (_, i) => rc('yellow', String(i % 10) as RangValue, i < 10 ? 1 : 2)), stepwise: true },
+    );
+    g.play('a', 'rg-red-draw2-1');
+    g.play('b', 'rg-blue-draw2-1');
+    g.play('c', 'rg-w-wild4-1', { color: 'green' });
+    g.play('d', 'rg-w-wild4-2', { color: 'green' });
+    expect(g.penalty).toBe(12);
+    expect(g.turnId).toBe('e');
+    const events = g.pick('e');
+    expect(events.find((x) => x.kind === 'rgpenalty')).toMatchObject({ playerId: 'e', count: 12 });
+    expect(g.hand('e')).toHaveLength(14);
+  });
+});
+
 describe('rang: +4 challenge', () => {
   const deck = () => Array.from({ length: 10 }, (_, i) => rc('yellow', String(i) as RangValue, 2));
 
-  it('guilty: the +4 player picks 4 and the challenger plays on', () => {
+  it('guilty: the +4 goes back to its player, the table is as before it, they pick 4, and the challenger plays on', () => {
     const g = table(
-      { a: [rc('red', '3'), w('wild4'), rc('blue', '1')], b: [rc('green', '2'), rc('blue', '4')], c: [rc('red', '4'), rc('red', '6')] },
+      { a: [rc('red', '3'), w('wild4'), rc('blue', '1')], b: [rc('red', '2'), rc('blue', '4')], c: [rc('red', '4'), rc('red', '6')] },
       [rc('red', '5')],
       'a',
       { deck: deck(), config: { rangStack: false } },
@@ -263,16 +289,23 @@ describe('rang: +4 challenge', () => {
     g.play('a', 'rg-w-wild4-1', { color: 'green' });
     expect(g.turnId).toBe('b');
     expect(g.penalty).toBe(4);
+    expect(g.color).toBe('green');
     expect(g.canChallenge('b')).toBe(true);
     expect(g.canChallenge('c')).toBe(false);
     const events = g.challenge('b');
     expect(events.find((e) => e.kind === 'rgchallenge')).toMatchObject({ playerId: 'b', targetId: 'a', guilty: true, count: 4 });
     expect(g.last).toMatchObject({ kind: 'challenge', targetId: 'a', guilty: true });
-    expect(g.hand('a')).toHaveLength(6);
+    // the +4 is back in a's hand, with the 4 picked: 2 left + the +4 + 4
+    expect(g.hand('a')).toHaveLength(7);
+    expect(ids(g.hand('a'))).toContain('rg-w-wild4-1');
+    // the pile and colour are as they were before the +4
+    expect(g.top()!.id).toBe('rg-red-5-1');
+    expect(g.pile).toHaveLength(1);
+    expect(g.color).toBe('red');
     expect(g.penalty).toBe(0);
     expect(g.turnId).toBe('b');
-    expect(ids(g.playable('b'))).toEqual(['rg-green-2-1']);
-    g.play('b', 'rg-green-2-1');
+    expect(ids(g.playable('b'))).toEqual(['rg-red-2-1']);
+    g.play('b', 'rg-red-2-1');
     expect(g.turnId).toBe('c');
   });
 

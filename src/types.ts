@@ -303,6 +303,8 @@ export interface RangView {
   dir: 1 | -1;
   /** cards the player on turn must pick because of +2 / +4 (0 = none) */
   penalty: number;
+  /** the +2/+4 cards that make up the penalty, oldest first (e.g. [2, 2, 4, 4] for 12) */
+  chain: number[];
   /** cards the player on turn has picked this turn, and the most allowed (config.rangPicks) */
   picks: number;
   maxPicks: number;

@@ -35,8 +35,9 @@ async function client(at = url): Promise<Client> {
 async function send(c: Client, event: string, payload: object = {}): Promise<Res> {
   for (let i = 0; ; i++) {
     const res: Res = await c.socket.timeout(2000).emitWithAck(event, payload);
-    if (res.error !== 'Too fast, slow down' || i >= 5) return res;
-    await new Promise((r) => setTimeout(r, 300));
+    if (res.error !== 'Too fast, slow down' || i >= 15) return res;
+    // the limit is per second: back off a little more each time
+    await new Promise((r) => setTimeout(r, 300 + 100 * i));
   }
 }
 

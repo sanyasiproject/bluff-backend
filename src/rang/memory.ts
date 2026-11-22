@@ -106,6 +106,8 @@ export class RangMemory {
           if (!e.guilty && four?.color && e.targetId !== this.meId) this.narrow(this.read(e.targetId), [four.color], []);
           const who = e.guilty ? e.targetId : e.playerId;
           if (who !== this.meId) this.read(who).fresh += e.count;
+          // a caught +4 goes back to its player: it leaves the pile
+          if (e.guilty && this.pile[this.pile.length - 1]?.value === 'wild4') this.pile.pop();
           break;
         }
         case 'rgshuffle':
