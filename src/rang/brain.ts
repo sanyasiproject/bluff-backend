@@ -108,10 +108,10 @@ function targets(v: RangSeatView, putDown = 1): { id: string; cardCount: number 
 
 /**
  * a doubles play of one number: every card of it I hold, a card that fits first and the one whose colour I hold most last;
- * null with fewer than two, not a number, or none that fits
+ * null with fewer than two, not a number, none that fits, or a top card of another number (doubles go only on the same number)
  */
-export function doublesPlay(hand: RangCard[], fits: (c: RangCard) => boolean, value: RangValue): RangCard[] | null {
-  if (!NUMBER_VALUES.includes(value)) return null;
+export function doublesPlay(hand: RangCard[], fits: (c: RangCard) => boolean, value: RangValue, top: RangCard | null): RangCard[] | null {
+  if (!NUMBER_VALUES.includes(value) || !top || top.value !== value) return null;
   const group = hand.filter((c) => c.value === value);
   if (group.length < 2) return null;
   const rest = hand.filter((c) => c.value !== value);
@@ -150,7 +150,7 @@ export function candidates(v: RangSeatView, mem?: RangMemory, me?: RangPersonali
       const card = r.hand.find((c) => c.id === id);
       if (!card || values.has(card.value)) continue;
       values.add(card.value);
-      const set = doublesPlay(r.hand, (c) => r.playable.includes(c.id), card.value);
+      const set = doublesPlay(r.hand, (c) => r.playable.includes(c.id), card.value, r.top);
       if (!set) continue;
       const base = { kind: 'play' as const, cardId: set[0].id, extra: set.slice(1).map((c) => c.id) };
       if (swaps(v, card, set.length)) for (const t of targets(v, set.length).slice(0, 2)) out.push({ ...base, targetId: t.id });
@@ -450,7 +450,7 @@ function quickMove(g: RangGame, id: string, rand: Rand): void {
   const legal = g.playable(id);
   if (legal.length > 0) {
     const c = quickCard(g, id, legal, rand);
-    const set = g.config.rangDoubles ? doublesPlay(g.hand(id), (x) => g.fits(x), c.value) : null;
+    const set = g.config.rangDoubles ? doublesPlay(g.hand(id), (x) => g.fits(x), c.value, g.top()) : null;
     return set ? playCard(g, id, set[0].id, undefined, undefined, set.slice(1).map((x) => x.id)) : playCard(g, id, c.id);
   }
   // keep looking for a card that fits for a pick or two, then stop

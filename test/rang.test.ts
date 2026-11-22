@@ -387,13 +387,17 @@ describe('rang: picking and passing', () => {
     expect(h.turnId).toBe('b');
   });
 
-  it('at the limit a card that fits must be played', () => {
-    const g = table({ a: [rc('blue', '1')], b: [rc('red', '4')] }, [rc('red', '3')], 'a', { deck: [rc('red', '9')] });
+  it('after a pick the player may pass, even when the picked card fits; no more picks at the limit', () => {
+    const g = table({ a: [rc('blue', '1')], b: [rc('red', '4'), rc('red', '6')] }, [rc('red', '3')], 'a', { deck: [rc('red', '9')] });
+    expect(g.canPass('a')).toBe(false);
     g.pick('a');
     expect(g.turnId).toBe('a');
-    expect(g.canPass('a')).toBe(false);
-    expect(() => g.pass('a')).toThrow('Play a card that fits');
+    expect(ids(g.playable('a'))).toEqual(['rg-red-9-1']);
     expect(() => g.pick('a')).toThrow('You picked 1 this turn');
+    expect(g.canPass('a')).toBe(true);
+    expect(kinds(g.pass('a'))).toEqual(['rgpass']);
+    expect(g.turnId).toBe('b');
+    expect(g.hand('a')).toHaveLength(2);
   });
 
   it('a turn with nothing to play picks for the player (and passes) automatically', () => {
@@ -714,7 +718,7 @@ describe('rang: doubles', () => {
   const on = { rangDoubles: true };
 
   it('puts down every card of one number; the last one is on top and sets the colour', () => {
-    const g = table({ a: [rc('red', '5'), rc('blue', '5'), rc('green', '5'), rc('green', '1')], b: [rc('green', '4'), rc('green', '6')] }, [rc('red', '3')], 'a', { config: on, stepwise: true });
+    const g = table({ a: [rc('red', '5'), rc('blue', '5'), rc('green', '5'), rc('green', '1')], b: [rc('green', '4'), rc('green', '6')] }, [rc('yellow', '5')], 'a', { config: on, stepwise: true });
     const events = g.play('a', 'rg-red-5-1', { extra: ['rg-green-5-1', 'rg-blue-5-1'] });
     expect(events[0]).toMatchObject({ kind: 'rgplay', card: { id: 'rg-blue-5-1' }, color: 'blue' });
     expect(events[0].kind === 'rgplay' && ids(events[0].cards!)).toEqual(['rg-red-5-1', 'rg-green-5-1', 'rg-blue-5-1']);
@@ -736,14 +740,26 @@ describe('rang: doubles', () => {
     expect(() => make().play('a', 'rg-red-5-1', { extra: ['rg-green-5-1'] })).toThrow('You do not have that card');
     expect(() => make().play('a', 'rg-red-5-1', { extra: ['rg-red-5-1'] })).toThrow(GameError);
     expect(() => make().play('a', 'rg-green-9-1', { extra: ['rg-blue-9-1'] })).toThrow(GameError);
-    // a fitting card may lead the others
-    expect(kinds(make().play('a', 'rg-red-5-1', { extra: ['rg-blue-5-1'] }))).toEqual(['rgplay']);
+    // more than one card only on the same number: on a red 3 the red 5 fits by colour, but goes alone
+    expect(() => make().play('a', 'rg-red-5-1', { extra: ['rg-blue-5-1'] })).toThrow('Put down more than one card only on the same number');
+    expect(kinds(make().play('a', 'rg-red-5-1'))).toEqual(['rgplay']);
+    // on a 5, every 5 goes down together
+    const five = table({ a: [...hand], b: [rc('green', '4')] }, [rc('yellow', '5')], 'a', { config: on, stepwise: true });
+    expect(kinds(five.play('a', 'rg-red-5-1', { extra: ['rg-blue-5-1'] }))).toEqual(['rgplay']);
+  });
+
+  it('on a green 8, a green 4 can go but not together with the other 4s', () => {
+    const g = table({ a: [rc('green', '4'), rc('red', '4'), rc('blue', '1')], b: [rc('green', '6')] }, [rc('green', '8')], 'a', { config: on, stepwise: true });
+    expect(() => g.play('a', 'rg-green-4-1', { extra: ['rg-red-4-1'] })).toThrow('Put down more than one card only on the same number');
+    g.play('a', 'rg-green-4-1');
+    expect(g.top()!.id).toBe('rg-green-4-1');
+    expect(g.hand('a')).toHaveLength(2);
   });
 
   it('a doubled 7 swaps once and a doubled 0 rotates once', () => {
     const g = table(
       { a: [rc('red', '7'), rc('blue', '7'), rc('green', '1')], b: [rc('green', '4'), rc('green', '6')], c: [rc('yellow', '1'), rc('yellow', '2'), rc('yellow', '3')] },
-      [rc('red', '3')],
+      [rc('yellow', '7')],
       'a',
       { config: { ...on, rangSwap: true }, stepwise: true },
     );
@@ -754,7 +770,7 @@ describe('rang: doubles', () => {
     expect(g.hand('a')).toHaveLength(3);
     const z = table(
       { a: [rc('red', '0'), rc('blue', '0'), rc('green', '1')], b: [rc('green', '4'), rc('green', '6')], c: [rc('yellow', '1')] },
-      [rc('red', '3')],
+      [rc('yellow', '0')],
       'a',
       { config: { ...on, rangSwap: true }, stepwise: true },
     );
@@ -765,7 +781,7 @@ describe('rang: doubles', () => {
   });
 
   it('doubles that empty the hand win (a 7 needs no target then)', () => {
-    const g = table({ a: [rc('red', '7'), rc('blue', '7')], b: [rc('green', '4')] }, [rc('red', '3')], 'a', { config: { ...on, rangSwap: true }, state: { called: new Set(['a']) } });
+    const g = table({ a: [rc('red', '7'), rc('blue', '7')], b: [rc('green', '4')] }, [rc('yellow', '7')], 'a', { config: { ...on, rangSwap: true }, state: { called: new Set(['a']) } });
     expect(kinds(g.play('a', 'rg-red-7-1', { extra: ['rg-blue-7-1'] }))).toEqual(['rgplay', 'finish', 'gameOver']);
     expect(g.winners()).toEqual(['a']);
   });

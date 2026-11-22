@@ -302,9 +302,10 @@ export class RangGame implements TableGame<RangCard> {
     return this.penalty > 0 || (this.picks < this.maxPicks() && this.canDraw());
   }
 
-  /** Pass only stops picking early: after at least one pick, while more picks are still allowed */
+  /** Pass ends the turn after at least one pick (also when the picked card fits); never while a +2/+4 waits */
   canPass(id: string): boolean {
-    return !this.over && this.turnId === id && !this.autoDue && this.penalty === 0 && this.picks > 0 && this.picks < this.maxPicks() && this.canDraw();
+    // after any pick you may stop, even when the picked card fits
+    return !this.over && this.turnId === id && !this.autoDue && this.penalty === 0 && this.picks > 0;
   }
 
   /** with one card left, or on your turn with two (said before playing the second-last) */
@@ -342,7 +343,7 @@ export class RangGame implements TableGame<RangCard> {
     return [...events, ...put.events, ...(put.next && !this.over ? this.startTurn(put.next) : [])];
   }
 
-  /** the other cards of a doubles play: doubles on, each card in the hand once, all number cards of the same number */
+  /** the other cards of a doubles play: doubles on, on a top card of that same number, each card in the hand once, all number cards of that number */
   private doubles(hand: RangCard[], card: RangCard, extra: string[]): RangCard[] {
     if (extra.length === 0) return [];
     if (!this.config.rangDoubles) throw new GameError('Doubles are off in this room');
@@ -351,6 +352,9 @@ export class RangGame implements TableGame<RangCard> {
     if (more.some((c) => !c)) throw new GameError('You do not have that card');
     const all = [card, ...(more as RangCard[])];
     if (!all.every((c) => NUMBERS.includes(c.value) && c.value === card.value)) throw new GameError('Only number cards of the same number go together');
+    // more than one card only on the same number: on a green 8, a green 4 goes alone, never with the other 4s
+    const top = this.top();
+    if (!top || isWild(top) || top.value !== card.value) throw new GameError('Put down more than one card only on the same number');
     return more as RangCard[];
   }
 

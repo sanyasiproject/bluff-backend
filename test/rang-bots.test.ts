@@ -242,15 +242,23 @@ describe('rang bots', () => {
       challengeable: null,
     });
     expect(g.partnerOf('a')).toBe('c');
-    const v = viewFor(g, 'a');
-    const plays = candidates(v).filter((a) => a.kind === 'play');
-    // single red 5, and both 5s with the blue one (the colour held most) on top
+    const playsOn = (top: ReturnType<typeof rc>) => {
+      g.pile = [top];
+      g.color = top.color;
+      return candidates(viewFor(g, 'a')).filter((a) => a.kind === 'play');
+    };
+    // on a red 2 the red 5 and 7 fit by colour, but go alone: doubles only on the same number
+    expect(playsOn(rc('red', '2')).every((a) => a.kind === 'play' && !a.extra)).toBe(true);
+    // on a 5: the single red 5, and both 5s with the blue one (the colour held most) on top
+    let plays = playsOn(rc('yellow', '5', 2));
     expect(plays).toContainEqual({ kind: 'play', cardId: 'rg-red-5-1' });
     expect(plays).toContainEqual({ kind: 'play', cardId: 'rg-red-5-1', extra: ['rg-blue-5-1'] });
-    // 7s: the partner (not far fewer cards) is not a target; the doubled 7s swap once
-    const sevens = plays.filter((a) => a.kind === 'play' && a.cardId === 'rg-red-7-1');
+    // on a 7: the partner (not far fewer cards) is not a target; the doubled 7s swap once
+    plays = playsOn(rc('yellow', '7', 2));
+    const sevens = plays.filter((a) => a.kind === 'play' && (a.cardId === 'rg-red-7-1' || a.cardId === 'rg-green-7-1'));
     expect(sevens.every((a) => a.kind === 'play' && a.targetId !== 'c')).toBe(true);
-    expect(sevens).toContainEqual({ kind: 'play', cardId: 'rg-red-7-1', extra: ['rg-green-7-1'], targetId: 'd' });
+    // both 7s together, in either order, swapping once with d
+    expect(sevens.some((a) => a.kind === 'play' && a.extra?.length === 1 && a.targetId === 'd')).toBe(true);
     for (const a of plays) if (a.kind === 'play') expect(() => RangGame.fromState(g.state()).play('a', a.cardId, { color: a.color, targetId: a.targetId, extra: a.extra })).not.toThrow();
   });
 
