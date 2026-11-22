@@ -4,7 +4,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { istDay } from '../src/days.js';
 import type { Collections, RankedDoc, UserDoc } from '../src/db/documents.js';
 import type { GameRecord, GameRecordPlayer, MemberAccount } from '../src/models.js';
-import { DEFAULT_RATING } from '../src/rating.js';
+import { Game } from '../src/game.js';
+import { DEFAULT_RATING, rate } from '../src/rating.js';
 import { Room } from '../src/rooms.js';
 import { createBluffServer } from '../src/server.js';
 import { nextStanding, rankBadgeOf, ranksOf, rankViewOf, seasonsPlayed, seasonStartPoints, standingIn } from '../src/services/ranked.js';
@@ -44,8 +45,33 @@ describe('rank points from a rated game', () => {
     expect(ranksOf([{ won: true, place: 1 }, { won: false, place: 2 }, { won: false, place: null }])).toEqual([1, 3, 4]);
     // 2v2: both winners share rank 1, whatever their places
     expect(ranksOf([{ won: true, place: 1 }, { won: false, place: 2 }, { won: true, place: 3 }, { won: false, place: null }])).toEqual([1, 3, 1, 5]);
-    // End game or walk-outs: the ones still holding cards tie
+    // walk-outs have no place: they tie last
     expect(ranksOf([{ won: true, place: 1 }, { won: false, place: null }, { won: false, place: null }])).toEqual([1, 3, 3]);
+  });
+
+  it('End game: points step down by place, those still holding cards ranked by card value left; equal values move equally', () => {
+    const c = (rank: 'Q' | 'K' | '6' | '7' | '8' | '9', suit = 'S' as const) => ({ id: `${rank}${suit}${Math.random()}`, rank, suit });
+    const q = c('Q');
+    const g = new Game(['a', 'b', 'c', 'd', 'e'], parseConfig({ decks: 1, bluffRule: 'all', ranked: true }));
+    // b K + Q = 25, c 6, d 7 + 8 = 15, e 9 + 6 = 15
+    const hands = { a: [q], b: [c('K'), c('Q')], c: [c('6')], d: [c('7'), c('8')], e: [c('9'), c('6')] };
+    for (const [id, h] of Object.entries(hands)) g.hands.set(id, h);
+    g.turnId = 'a';
+    g.play('a', [q.id], 'Q');
+    for (const id of ['b', 'c', 'd', 'e']) g.pass(id);
+    g.endEarly();
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    const seats = ids.map((id) => ({ won: g.winners().includes(id), place: g.placeOf(id) }));
+    expect(seats.map((s) => s.place)).toEqual([1, 5, 2, 3, 3]);
+    // everyone level going in, all in Silver on 500
+    const after = rate(ids.map(() => [{ ...DEFAULT_RATING }]), ranksOf(seats)).map((t) => t[0]);
+    const points = ids.map((id, i) => nextStanding(standing({ points: 500, floor: 300 }), 1, DEFAULT_RATING, after[i], seats[i].won, DAY).doc.points);
+    const [pa, pb, pc, pd, pe] = points;
+    expect(pa).toBeGreaterThan(pc);
+    expect(pc).toBeGreaterThan(pd);
+    expect(pd).toBe(pe);
+    expect(pd).toBeGreaterThan(pb);
+    expect(pb).toBeLessThan(500);
   });
 
   it('starts a season at 0 and moves points by 40 x the change in skill', () => {

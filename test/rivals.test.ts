@@ -274,14 +274,14 @@ describe.skipIf(!MONGO)('rivals and Dosti (MongoDB)', () => {
     const [a, b, c, d] = await people(4);
     await circle(a, b, c, d);
     const [q1, q2] = [card('Q'), card('Q', 'H')];
-    const g = deal({ a: [q1], b: [q2], c: [card('K'), card('3')], d: [card('5'), card('6')] });
+    const g = deal({ a: [q1], b: [q2], c: [card('5', 'H'), card('6', 'H')], d: [card('5'), card('6')] });
     g.play('a', ids(q1), 'Q');
     g.play('b', ids(q2));
     g.pass('c');
     g.pass('d');
     // the host ends it with c and d still holding cards
     g.endEarly();
-    expect([g.places, g.winners(), g.losers()]).toEqual([['a', 'b'], ['a'], ['b', 'c', 'd']]);
+    expect([g.places, g.winners(), g.losers()]).toEqual([['a', 'b'], ['a'], ['c', 'd']]);
     await save(g, { a, b, c, d });
     expect(await scores(a, b, c, d)).toEqual(['1: 1-0', '1: 1-0', '1: 1-0']);
     expect(await scores(b, c, d)).toEqual(['1: 1-0', '1: 1-0']);

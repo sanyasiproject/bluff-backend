@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { buildDeck, secureRandom, shuffle, sortHand, type RandomInt } from './cards.js';
+import { lastPlaced, standingsOf } from './standings.js';
 import { emptyHabits, noteBotCall, noteBotPlay, notePass, notePlay } from './habits.js';
 import type { BetResult, GameEvent, Habits, LoggedPlay, PlayerStats, PlayRecord } from './models.js';
-import { backsClaim, claimsAllowed, MAX_BLUFF_CALLS_IN_A_ROW, RANKS, type Card, type GameConfig, type LieRecap, type PlayerPlays, type Rank, type RevealView } from './types.js';
+import { backsClaim, claimsAllowed, handValue, MAX_BLUFF_CALLS_IN_A_ROW, RANKS, type Card, type GameConfig, type LieRecap, type PlayerPlays, type Rank, type RevealView } from './types.js';
 
 /** how many uncaught lies the game-over reveal lists */
 const LIE_RECAP_MAX = 6;
@@ -339,15 +340,28 @@ export class Game {
     return this.places.slice(0, 1);
   }
 
-  /** the last player holding cards plus anyone who walked out; everyone but the winners when the host ended it or teams played */
+  /** once over: finishing order, then lowest value of cards left (A 1 … K 13); walk-outs, removed players and 2v2 seats that didn't finish get none */
+  placeOf(id: string): number | null {
+    return this.standings().get(id) ?? null;
+  }
+
+  private standings(): Map<string, number> {
+    if (!this.over || this.aborted || this.teams) return standingsOf(this.places, [], () => 0);
+    const still = this.order.filter((id) => !this.kicked.has(id) && !this.forfeited.has(id));
+    return standingsOf(this.places, still, (id) => handValue(this.hand(id)));
+  }
+
+  /** the last place plus anyone who walked out; 2v2: everyone but the winning team */
   losers(): string[] {
     if (this.aborted) return [];
-    // closed with bots still holding cards: they never finished, and anyone who walked out lost
-    if (this.closed) return [...this.forfeited, ...this.order.filter((id) => this.hand(id).length > 0 && !this.kicked.has(id))];
-    if (this.endedEarly || this.teams) {
+    if (this.teams) {
+      // closed with bots still holding cards: they never finished, and anyone who walked out lost
+      if (this.closed) return [...this.forfeited, ...this.order.filter((id) => this.hand(id).length > 0 && !this.kicked.has(id))];
       const won = this.winners();
       return won.length === 0 ? [] : this.order.filter((id) => !won.includes(id) && !this.kicked.has(id));
     }
+    // the host ended it or only bots were left: whoever holds the highest value is last
+    if (this.endedEarly || this.closed) return [...this.forfeited, ...lastPlaced(this.standings(), this.places)];
     const out = [...this.forfeited];
     if (this.loserId && !out.includes(this.loserId)) out.push(this.loserId);
     return out;
@@ -403,8 +417,9 @@ export class Game {
     return this.teamOf(id)?.find((p) => p !== id) ?? null;
   }
 
-  /** calls left in a row; a player's last cards can always be called */
+  /** calls left in a row; a player's last cards can always be called; no limit once only two players hold cards */
   bluffCallsLeft(playerId: string): number {
+    if (this.order.filter((id) => this.hand(id).length > 0 || id === this.goingOut()).length <= 2) return MAX_BLUFF_CALLS_IN_A_ROW;
     const left = Math.max(0, MAX_BLUFF_CALLS_IN_A_ROW - (this.callStreak.get(playerId) ?? 0));
     return left === 0 && this.goingOut() ? 1 : left;
   }

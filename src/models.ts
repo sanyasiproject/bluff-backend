@@ -291,6 +291,8 @@ export interface TableGame {
   aborted: boolean;
   closed: boolean;
   hand(id: string): Card[];
+  /** finishing place; once over, everyone still in is ranked by fewest cards left */
+  placeOf(id: string): number | null;
   winners(): string[];
   losers(): string[];
   leave(id: string): GameEvent[];

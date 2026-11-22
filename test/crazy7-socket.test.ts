@@ -108,7 +108,12 @@ describe('crazy 7 over sockets', () => {
     await until(() => people.every((p) => p.state!.phase === 'over'));
     const v = people[0].state!;
     expect(v.winnerIds).toHaveLength(1);
-    expect(v.loserIds).toHaveLength(2);
+    // the rest are ranked by card value left (A 1 … K 13): the highest is last and loses
+    const rest = v.players.filter((p) => !v.winnerIds.includes(p.id));
+    const value = (p: (typeof rest)[number]) => p.handValue!;
+    const most = Math.max(...rest.map(value));
+    expect([...v.loserIds].sort()).toEqual(rest.filter((p) => value(p) === most).map((p) => p.id).sort());
+    expect(rest.every((p) => p.place === 2 + rest.filter((o) => value(o) < value(p)).length)).toBe(true);
     expect(people.find((p) => p.state!.meId === v.winnerIds[0])!.state!.hand).toHaveLength(0);
     expect(people[0].notes.some((n) => n.kind === 'play' && / played /.test(n.text))).toBe(true);
     expect(people[0].notes.some((n) => n.kind === 'over' && / wins$/.test(n.text))).toBe(true);

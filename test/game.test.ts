@@ -178,7 +178,7 @@ describe('bluff rule: caller picks one card', () => {
 });
 
 describe('host ends the game after a winner', () => {
-  it('needs a winner first; then 1st place wins and everyone else loses', () => {
+  it('needs a winner first; then 1st place wins and the highest card value left loses', () => {
     const q = card('Q');
     const g = setup(['a', 'b', 'c'], { a: [q], b: [card('2'), card('3')], c: [card('4'), card('5')] });
     expect(() => g.endEarly()).toThrow('Nobody has won yet');
@@ -190,8 +190,74 @@ describe('host ends the game after a winner', () => {
 
     expect(g.endEarly()).toEqual([{ kind: 'gameOver', loserId: null }]);
     expect(g).toMatchObject({ over: true, endedEarly: true, turnId: null });
-    expect(g.losers()).toEqual(['b', 'c']);
+    // b holds 2 + 3 = 5, c holds 4 + 5 = 9
+    expect(g.losers()).toEqual(['c']);
     expect(() => g.endEarly()).toThrow('Game is over');
+  });
+});
+
+describe('final ranking by cards left', () => {
+  it('host End game: 1st wins, the rest by lowest card value left (A 1 … K 13), only last place loses', () => {
+    const q = card('Q');
+    // one King (13) is worse than three small cards (2 + 3 + 4 = 9) or 5 + 6 = 11
+    const g = setup(['a', 'b', 'c', 'd'], { a: [q], b: [card('K')], c: [card('2'), card('3'), card('4')], d: [card('5'), card('6')] });
+    g.play('a', ids(q), 'Q');
+    g.pass('b');
+    g.pass('c');
+    g.pass('d');
+    // still playing: only finishers have a place
+    expect(['a', 'b', 'c', 'd'].map((id) => g.placeOf(id))).toEqual([1, null, null, null]);
+    g.endEarly();
+    expect(['a', 'b', 'c', 'd'].map((id) => g.placeOf(id))).toEqual([1, 4, 2, 3]);
+    expect(g.winners()).toEqual(['a']);
+    expect(g.losers()).toEqual(['b']);
+  });
+
+  it('a walk-out gets no place and still loses beside last place', () => {
+    const q = card('Q');
+    const g = setup(['a', 'b', 'c', 'd'], { a: [q], b: [card('2'), card('3')], c: [card('A')], d: [card('6'), card('7'), card('8')] });
+    g.play('a', ids(q), 'Q');
+    g.pass('b');
+    g.pass('c');
+    g.pass('d');
+    g.leave('d');
+    g.endEarly();
+    expect(['a', 'b', 'c', 'd'].map((id) => g.placeOf(id))).toEqual([1, 3, 2, null]);
+    expect(g.losers()).toEqual(['d', 'b']);
+  });
+});
+
+describe('two players left: no bluff call limit', () => {
+  it('a 2-player game never locks calls', () => {
+    const qs = [card('Q', 'S'), card('Q', 'H'), card('Q', 'D'), card('Q', 'C')];
+    const g = setup(['a', 'b'], { a: [...qs, card('9')], b: [card('2'), card('3')] });
+    // b calls a's real Queens three times in a row
+    for (const q of qs.slice(0, 3)) {
+      g.play('a', ids(q), 'Q');
+      expect(g.bluffCallsLeft('b')).toBe(2);
+      g.callBluff('b', g.lastPlay!.id);
+    }
+    expect(g.bluffCallsLeft('b')).toBe(2);
+  });
+
+  it('a bigger game drops the limit once only two still hold cards', () => {
+    const qs = [card('Q', 'S'), card('Q', 'H'), card('Q', 'D')];
+    const lastQ = card('Q', 'C');
+    const g = setup(['a', 'b', 'c'], { a: [...qs, card('9')], b: [lastQ], c: [card('2'), card('3')] });
+    // c wrongly calls a's real Queens twice and is locked
+    g.play('a', ids(qs[0]), 'Q');
+    g.callBluff('c', g.lastPlay!.id);
+    g.play('a', ids(qs[1]), 'Q');
+    g.callBluff('c', g.lastPlay!.id);
+    expect(g.bluffCallsLeft('c')).toBe(0);
+    // b puts down their last card: three are still in, so c is still locked (but may call those last cards)
+    g.play('a', ids(qs[2]), 'Q');
+    g.play('b', ids(lastQ));
+    expect(g.bluffCallsLeft('c')).toBe(1);
+    // a calls it wrongly and b finishes: only a and c hold cards, so c may call freely again
+    g.callBluff('a', g.lastPlay!.id);
+    expect(g.places).toEqual(['b']);
+    expect(g.bluffCallsLeft('c')).toBe(2);
   });
 });
 

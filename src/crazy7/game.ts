@@ -1,7 +1,8 @@
 import { buildDeck, secureRandom, shuffle, type RandomInt } from '../cards.js';
+import { lastPlaced, standingsOf } from '../standings.js';
 import { GameError } from '../game.js';
 import type { BetResult, GameEvent, PlayerStats, TableGame } from '../models.js';
-import { CRAZY7_MAX_PICKS, RANKS, SEVEN_PENALTY, type Card, type Crazy7Move, type GameConfig, type Suit } from '../types.js';
+import { CRAZY7_MAX_PICKS, handValue, RANKS, SEVEN_PENALTY, type Card, type Crazy7Move, type GameConfig, type Suit } from '../types.js';
 
 /** everything needed to copy a game; bots simulate from copies */
 export interface Crazy7State {
@@ -360,12 +361,22 @@ export class Crazy7Game implements TableGame {
     return this.places.slice(0, 1);
   }
 
-  /** everyone but the winner; closed games: whoever walked out or still held cards */
+  /** once over: the winner, then everyone still in by lowest value of cards left (A 1 … K 13); walk-outs and removed players get none */
+  placeOf(id: string): number | null {
+    return this.standings().get(id) ?? null;
+  }
+
+  private standings(): Map<string, number> {
+    if (!this.over || this.aborted) return standingsOf(this.places, [], () => 0);
+    const still = this.order.filter((id) => !this.kicked.has(id) && !this.forfeited.has(id));
+    return standingsOf(this.places, still, (id) => handValue(this.hand(id)));
+  }
+
+  /** the last place (highest value of cards left) plus anyone who walked out */
   losers(): string[] {
     if (this.aborted) return [];
-    if (this.closed) return [...this.forfeited, ...this.order.filter((id) => this.hand(id).length > 0 && !this.kicked.has(id))];
-    const won = this.winners();
-    return won.length === 0 ? [] : this.order.filter((id) => !won.includes(id) && !this.kicked.has(id));
+    if (this.closed) return [...this.forfeited, ...lastPlaced(this.standings(), this.places)];
+    return this.winners().length === 0 ? [] : [...this.forfeited, ...lastPlaced(this.standings(), this.places)];
   }
 
   private drop(id: string, kicked: boolean): GameEvent[] {

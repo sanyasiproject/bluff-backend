@@ -31,6 +31,7 @@ import {
   TURN_TIMER,
   ROOM_CHAT_MAX,
   type RoomMessage,
+  handValue,
 } from './types.js';
 
 /** why a stake is too high for the bots at the table, for players to read */
@@ -630,7 +631,7 @@ export class Room {
         memberId: id,
         userId: member(id)?.userId ?? null,
         name: member(id)?.name ?? 'Someone',
-        place: g.places.indexOf(id) + 1 || null,
+        place: g.placeOf(id),
         loser: status === 'finished' && g.losers().includes(id),
         won: status === 'finished' && g.winners().includes(id),
         kicked: g.kicked.has(id),
@@ -790,7 +791,8 @@ export class Room {
         table: m.table,
         connected: m.bot || m.socketId !== null,
         cardCount: g?.hands.get(m.id)?.length ?? 0,
-        place: g ? g.places.indexOf(m.id) + 1 || null : null,
+        handValue: g?.over ? handValue(g.hands.get(m.id) ?? []) : null,
+        place: g ? g.placeOf(m.id) : null,
         registered: m.userId !== null,
         coins: m.coins,
         username: m.username,

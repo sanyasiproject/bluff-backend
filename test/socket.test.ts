@@ -270,7 +270,7 @@ describe('socket server', () => {
     expect(await send(a, 'room:plays', { playerId: 'nope' })).toEqual({ ok: false, error: 'Invalid player' });
   });
 
-  it('lets the host end the game once someone has won, and everyone else loses', async () => {
+  it('lets the host end the game once someone has won; the rest are ranked by card value left', async () => {
     const [a, b, c] = [await client(), await client(), await client()];
     const { code } = await send(a, 'room:create', { name: 'Host' });
     await send(b, 'room:join', { code, name: 'Bee' });
@@ -278,21 +278,26 @@ describe('socket server', () => {
     await send(a, 'room:start');
     await until(() => c.state?.phase === 'playing');
     expect(await send(a, 'room:end')).toEqual({ ok: false, error: 'Nobody has won yet. Use Stop game instead' });
+    // card values stay hidden while the game runs
+    expect(c.state!.players.every((p) => p.handValue === null)).toBe(true);
 
     // Bee empties their hand and finishes 1st
     const room = server.rooms.get(code!);
     const beeId = b.state!.meId;
     room.game!.hands.set(beeId, []);
     room.game!.places.push(beeId);
+    // Host keeps 3 cards (39 at most), Cee 17 (45 at least), so Host is 2nd and Cee is last
+    room.game!.hands.set(a.state!.meId, room.game!.hand(a.state!.meId).slice(0, 3));
     expect(await send(c, 'room:end')).toEqual({ ok: false, error: 'Only the host can do that' });
     expect(await send(a, 'room:end')).toEqual({ ok: true });
     await until(() => c.state?.phase === 'over');
     expect(c.state!.endedEarly).toBe(true);
-    expect([...c.state!.loserIds].sort()).toEqual([a.state!.meId, c.state!.meId].sort());
-    expect(room.snapshot('finished')!.players.map((p) => [p.name, p.place, p.loser])).toEqual([
-      ['Host', null, true],
-      ['Bee', 1, false],
-      ['Cee', null, true],
+    expect(c.state!.loserIds).toEqual([c.state!.meId]);
+    expect(c.state!.players.map((p) => p.place)).toEqual([2, 1, 3]);
+    expect(room.snapshot('finished')!.players.map((p) => [p.name, p.place, p.won, p.loser])).toEqual([
+      ['Host', 2, false, false],
+      ['Bee', 1, true, false],
+      ['Cee', 3, false, true],
     ]);
     await until(() => a.notes.at(-1)?.text === 'The host ended the game. Bee wins');
   });

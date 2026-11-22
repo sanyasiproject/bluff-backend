@@ -268,14 +268,30 @@ describe('crazy 7: last card', () => {
 });
 
 describe('crazy 7: ending', () => {
-  it('ends the moment someone plays their last card: they win, everyone else loses', () => {
+  it('ranks the rest by lowest card value left once someone wins: only the highest value loses', () => {
+    // b 5 + 6 + 8 = 19, c K = 13, d Q + J = 23
+    const g = table({ a: [c('9', 'H')], b: [c('5', 'C'), c('6', 'C'), c('8', 'C')], c: [c('K', 'S')], d: [c('Q', 'S'), c('J', 'S')] }, [c('2', 'H')], 'a');
+    g.called.add('a');
+    expect(g.placeOf('a')).toBeNull();
+    g.play('a', '9H1');
+    expect(['a', 'b', 'c', 'd'].map((id) => g.placeOf(id))).toEqual([1, 3, 2, 4]);
+    expect(g.losers()).toEqual(['d']);
+    // equal values share a place, and both are last
+    const tie = table({ a: [c('9', 'H')], b: [c('5', 'C'), c('6', 'C')], c: [c('4', 'S'), c('7', 'S')] }, [c('2', 'H')], 'a');
+    tie.called.add('a');
+    tie.play('a', '9H1');
+    expect(['a', 'b', 'c'].map((id) => tie.placeOf(id))).toEqual([1, 2, 2]);
+    expect(tie.losers()).toEqual(['b', 'c']);
+  });
+
+  it('ends the moment someone plays their last card: they win, the highest card value left loses', () => {
     const g = table({ a: [c('9', 'H')], b: [c('5', 'C')], c: [c('K', 'S')] }, [c('2', 'H')], 'a');
     g.called.add('a');
     const events = g.play('a', '9H1');
     expect(kinds(events)).toEqual(['c7play', 'finish', 'gameOver']);
     expect(g.over).toBe(true);
     expect(g.winners()).toEqual(['a']);
-    expect(g.losers()).toEqual(['b', 'c']);
+    expect(g.losers()).toEqual(['c']);
   });
 
   it('shuffles the pile back into the deck when it runs out', () => {

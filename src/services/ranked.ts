@@ -27,7 +27,7 @@ export interface RankedSeat {
   memberId: string;
   userId: ObjectId;
   won: boolean;
-  /** finishing place, or null when they didn't finish (the last player, a walk-out) */
+  /** final place (still-in players ranked by fewest cards left), or null for a walk-out or removed player */
   place: number | null;
 }
 
@@ -143,7 +143,7 @@ export function rankBadgeOf(doc: RankedDoc | undefined, season = rankedSeasonNow
   return { division: shownDivision(r?.points ?? 0, r?.floor ?? 0).id, points: r?.points ?? 0 };
 }
 
-/** finishing order as ranks (1 is best): winners 1, then 1 + place, and everyone who didn't finish tied last */
+/** finishing order as ranks (1 is best): winners 1, then 1 + place (still-in players are placed by cards left), and walk-outs tied last */
 export function ranksOf(seats: Pick<RankedSeat, 'won' | 'place'>[]): number[] {
   const last = Math.max(0, ...seats.map((s) => s.place ?? 0)) + 2;
   return seats.map((s) => (s.won ? 1 : s.place !== null ? 1 + s.place : last));

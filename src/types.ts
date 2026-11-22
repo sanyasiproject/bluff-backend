@@ -2,6 +2,11 @@
 export const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'] as const;
 export type Rank = (typeof RANKS)[number];
 
+/** a card's value for the final ranking: A 1, 2 2 … 10 10, J 11, Q 12, K 13 */
+export const cardValue = (c: { rank: Rank }): number => RANKS.indexOf(c.rank) + 1;
+/** total value of a hand; less is better */
+export const handValue = (cards: { rank: Rank }[]): number => cards.reduce((n, c) => n + cardValue(c), 0);
+
 /** a card backs up a claim when it is the claimed rank, or the game's Kismat rank (wild) */
 export const backsClaim = (card: { rank: Rank }, claim: Rank, kismat: Rank | null): boolean => card.rank === claim || (kismat !== null && card.rank === kismat);
 
@@ -550,6 +555,8 @@ export interface PublicPlayer {
   /** their table theme (TABLE_THEMES id): everyone sees their seat box in it */
   table: string;
   cardCount: number;
+  /** game over: total value of the cards still held (A 1 … K 13), which ranks those who didn't finish; null while playing */
+  handValue: number | null;
   connected: boolean;
   place: number | null;
   /** logged in (can play staked games) */
