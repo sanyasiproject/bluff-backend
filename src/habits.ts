@@ -36,6 +36,34 @@ export const HABIT_KEYS = [
 
 export const emptyHabits = (): Habits => Object.fromEntries(HABIT_KEYS.map((k) => [k, 0])) as unknown as Habits;
 
+/** each saved game first shrinks the old totals by this much, so the last ~25 games carry most of the weight (old : new about 24 : 1) */
+export const HABIT_DECAY = 0.96;
+/** totals are scaled down once they hold more turns than this, so a long history (10k games) can't drown out recent play */
+export const HABIT_TURN_LIMIT = 1000;
+/** the turns a set of habits holds: every play and every pass */
+const TURN_KEYS = ['openPlays', 'followPlays', 'pushes', 'passNone', 'passHeld'] as const;
+
+/** old totals faded by HABIT_DECAY plus this game's counts, scaled to HABIT_TURN_LIMIT turns at most; ratios are kept */
+export function mergeHabits(old: Partial<Habits> | null | undefined, game: Habits): Habits {
+  const out = emptyHabits();
+  for (const k of HABIT_KEYS) out[k] = Math.max(0, Number(old?.[k]) || 0) * HABIT_DECAY + game[k];
+  const turns = TURN_KEYS.reduce((n, k) => n + out[k], 0);
+  const scale = turns > HABIT_TURN_LIMIT ? HABIT_TURN_LIMIT / turns : 1;
+  for (const k of HABIT_KEYS) out[k] = Math.round(out[k] * scale * 1000) / 1000;
+  return out;
+}
+
+/** mergeHabits as one MongoDB update pipeline on users.habits, so games saved at the same time never overwrite each other */
+export function habitsPipeline(game: Habits): Record<string, unknown>[] {
+  const faded = (k: string) => ({ $add: [{ $multiply: [{ $max: [0, { $ifNull: [`$habits.${k}`, 0] }] }, HABIT_DECAY] }, game[k as keyof Habits]] });
+  const turns = { $add: TURN_KEYS.map((k) => `$habits.${k}`) };
+  const scale = { $cond: [{ $gt: [turns, HABIT_TURN_LIMIT] }, { $divide: [HABIT_TURN_LIMIT, turns] }, 1] };
+  return [
+    { $set: Object.fromEntries(HABIT_KEYS.map((k) => [`habits.${k}`, faded(k)])) },
+    { $set: Object.fromEntries(HABIT_KEYS.map((k) => [`habits.${k}`, { $round: [{ $multiply: [`$habits.${k}`, scale] }, 3] }])) },
+  ];
+}
+
 /** saved habits with zeros for counts an older account doesn't have yet; null when there are none */
 export function habitsFrom(saved: Partial<Habits> | null | undefined): Habits | null {
   if (!saved) return null;

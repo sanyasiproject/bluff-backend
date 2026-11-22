@@ -153,7 +153,7 @@ export class BotDriver {
       this.clear(seat, 'turn');
       // anyone's play can be called at any moment, not only on your turn
       const play = g.lastPlay;
-      if (play && play.playerId !== seat.id && seat.considered !== play.id && g.bluffCallsLeft(seat.id) > 0 && g.partnerOf(seat.id) !== play.playerId) {
+      if (play && !play.shielded && play.playerId !== seat.id && seat.considered !== play.id && g.bluffCallsLeft(seat.id) > 0 && g.partnerOf(seat.id) !== play.playerId) {
         seat.considered = play.id;
         this.clear(seat, 'call');
         seat.callTimer = setTimeout(() => this.maybeCall(room, seat, g, play.id), this.reactMs(seat, g.hand(play.playerId).length === 0));

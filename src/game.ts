@@ -3,7 +3,7 @@ import { buildDeck, secureRandom, shuffle, sortHand, type RandomInt } from './ca
 import { lastPlaced, standingsOf } from './standings.js';
 import { emptyHabits, noteBotCall, noteBotPlay, notePass, notePlay } from './habits.js';
 import type { BetResult, GameEvent, Habits, LoggedPlay, PlayerStats, PlayRecord } from './models.js';
-import { backsClaim, claimsAllowed, handValue, MAX_BLUFF_CALLS_IN_A_ROW, RANKS, type Card, type GameConfig, type LieRecap, type PlayerPlays, type Rank, type RevealView } from './types.js';
+import { backsClaim, claimsAllowed, handValue, MAX_BLUFF_CALLS_IN_A_ROW, RANKS, SHIELD_MAX_CARDS, type Card, type GameConfig, type LieRecap, type PlayerPlays, type Rank, type RevealView } from './types.js';
 
 /** how many uncaught lies the game-over reveal lists */
 const LIE_RECAP_MAX = 6;
@@ -48,6 +48,7 @@ export class Game {
   /** bluff calls each player made since their last play or pass */
   private callStreak = new Map<string, number>();
   private peeksUsed = new Map<string, number>();
+  private shieldsUsed = new Map<string, number>();
   /** the team whose partners both finished first (or that the host's End game crowned) */
   private winningTeam: string[] | null = null;
   /** seats the server plays; people's habits note how they treat bots' plays */
@@ -96,7 +97,8 @@ export class Game {
     return cards;
   }
 
-  play(playerId: string, cardIds: string[], rank?: Rank): GameEvent[] {
+  /** shield: 🔒 nobody can call or peek at this play (up to SHIELD_MAX_CARDS, never the cards that empty the hand) */
+  play(playerId: string, cardIds: string[], rank?: Rank, shield = false): GameEvent[] {
     this.assertTurn(playerId);
     const hand = this.hand(playerId);
     const picked = new Set(cardIds);
@@ -112,6 +114,12 @@ export class Game {
     // following without a rank (older apps): the same rank
     const claim = rank ?? this.roundRank;
     if (!claim || !RANKS.includes(claim)) throw new GameError('Choose a rank to start the round');
+    if (shield) {
+      if ((this.config.shields ?? 0) === 0) throw new GameError('Card Shields are off in this room');
+      if (this.shieldsLeft(playerId) === 0) throw new GameError('No Card Shields left this game');
+      if (cards.length > SHIELD_MAX_CARDS) throw new GameError(`A Card Shield covers up to ${SHIELD_MAX_CARDS} cards`);
+      if (cards.length === hand.length) throw new GameError("Your last cards can't be shielded");
+    }
 
     const events = this.settleLastPlay();
     if (this.over) return events;
@@ -122,8 +130,8 @@ export class Game {
     if (lie) this.stat(playerId).bluffs++;
     this.stat(playerId).plays++;
     // saved with the game for the bots' read on this player; nobody sees it while the game runs (cards claimed as this rank this round so far).
-    // Not from Seedhi games: there a pass or a "push" doesn't mean what it means in the classic game
-    if (!this.config.seedhi) notePlay(
+    // Not from Seedhi games: there a pass or a "push" doesn't mean what it means in the classic game; nor shielded plays, which nobody could call
+    if (!this.config.seedhi && !shield) notePlay(
       this.habits(playerId),
       hand,
       cards,
@@ -136,18 +144,19 @@ export class Game {
       this.kismat,
     );
     this.hands.set(playerId, hand.filter((c) => !picked.has(c.id)));
-    // everyone still in who may challenge this play had a chance to call it
+    // everyone still in who may challenge this play had a chance to call it (a shielded one gives nobody a chance)
     for (const id of this.order) {
-      if (id !== playerId && this.hand(id).length > 0 && this.partnerOf(id) !== playerId) this.stat(id).chances++;
+      if (!shield && id !== playerId && this.hand(id).length > 0 && this.partnerOf(id) !== playerId) this.stat(id).chances++;
     }
     this.pile.push(...cards);
     this.pileBy.push(...cards.map(() => playerId));
     this.roundRank = claim;
     this.roundClaims.push({ rank: claim, n: cards.length });
-    this.lastPlay = { id: randomUUID(), playerId, cards, rank: claim };
+    if (shield) this.shieldsUsed.set(playerId, (this.shieldsUsed.get(playerId) ?? 0) + 1);
+    this.lastPlay = { id: randomUUID(), playerId, cards, rank: claim, ...(shield && { shielded: true }) };
     this.playLog.push({ playId: this.lastPlay.id, playerId, rank: claim, cards, called: false, caught: false, settled: false });
     // a bot's play that doesn't empty its hand: how people treat it is saved for the bots, once each person has had their chance at it
-    if (this.bots.has(playerId) && hand.length > cards.length) {
+    if (this.bots.has(playerId) && hand.length > cards.length && !shield) {
       const people = this.order.filter((id) => !this.bots.has(id) && this.hand(id).length > 0 && this.partnerOf(id) !== playerId && this.bluffCallsLeft(id) > 0);
       this.botWatch = people.length > 0 ? { playId: this.lastPlay.id, lie, people } : null;
     }
@@ -155,7 +164,7 @@ export class Game {
     this.passed.clear();
     this.reveal = null;
     this.turnId = this.nextActive(playerId) ?? playerId;
-    events.push({ kind: 'play', playerId, count: cards.length, rank: claim });
+    events.push({ kind: 'play', playerId, count: cards.length, rank: claim, ...(shield && { shielded: true }) });
     return events;
   }
 
@@ -179,11 +188,16 @@ export class Game {
     const play = this.lastPlay;
     if (!play || play.id !== playId) throw new GameError('Too late, that play is closed');
     if (play.playerId === playerId) throw new GameError('Those are your own cards');
+    if (play.shielded) throw new GameError('That play has a Card Shield 🔒');
     if (this.hand(playerId).length === 0) throw new GameError('You are already out');
     if (this.peeksLeft(playerId) === 0) throw new GameError(this.config.peeks > 0 ? 'No peeks left this game' : 'Peeks are off in this room');
     if (!Number.isInteger(cardIndex) || cardIndex < 0 || cardIndex >= play.cards.length) throw new GameError('Pick one of the played cards');
     this.peeksUsed.set(playerId, (this.peeksUsed.get(playerId) ?? 0) + 1);
     return play.cards[cardIndex];
+  }
+
+  shieldsLeft(playerId: string): number {
+    return Math.max(0, (this.config.shields ?? 0) - (this.shieldsUsed.get(playerId) ?? 0));
   }
 
   peeksLeft(playerId: string): number {
@@ -196,6 +210,7 @@ export class Game {
     const play = this.lastPlay;
     if (!play || play.id !== playId) throw new GameError('Too late, that play is closed');
     if (play.playerId === callerId) throw new GameError('You cannot call bluff on yourself');
+    if (play.shielded) throw new GameError("That play has a Card Shield 🔒 You can't call it");
     if (this.hand(callerId).length === 0) throw new GameError('You are already out');
     if (this.partnerOf(callerId) === play.playerId) throw new GameError("You can't call bluff on your partner");
     if (bet > 0 && !this.config.bets) throw new GameError('Bets are off in this room');

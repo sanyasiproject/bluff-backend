@@ -6,6 +6,7 @@ import {
   CRAZY7_HAND_SIZES,
   CRAZY7_MAX_PICKS,
   GIFT_STEPS,
+  MAX_CARD_SHIELDS,
   MAX_PEEKS,
   QUICK_MESSAGES,
   RANKS,
@@ -73,13 +74,14 @@ export function parseConfig(p: Payload): GameConfig {
   const kismat = p.kismat === undefined ? false : typeof p.kismat === 'boolean' ? p.kismat : null;
   const seedhi = p.seedhi === undefined ? false : typeof p.seedhi === 'boolean' ? p.seedhi : null;
   const turnTimer = p.turnTimer === undefined ? false : typeof p.turnTimer === 'boolean' ? p.turnTimer : null;
+  const shields = p.shields === undefined ? 0 : Number.isInteger(p.shields) && (p.shields as number) >= 0 && (p.shields as number) <= MAX_CARD_SHIELDS ? (p.shields as number) : null;
   const turnSec = p.turnSec === undefined ? TURN_TIMER.turnSec : (TURN_SECONDS as readonly unknown[]).includes(p.turnSec) ? (p.turnSec as TurnSeconds) : null;
   if (!decks || !bluffRule || stake === null || peeks === null || bets === null || teams === null) throw new GameError('Invalid settings');
-  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null || ranked === null || voice === null || kismat === null || seedhi === null || turnTimer === null || turnSec === null) {
+  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null || ranked === null || voice === null || kismat === null || seedhi === null || turnTimer === null || turnSec === null || shields === null) {
     throw new GameError('Invalid settings');
   }
   // Bluff's extras are kept while Crazy 7 is picked (it ignores them), so switching back keeps them; bets need coins at stake
-  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked, voice, kismat, seedhi, turnTimer, turnSec };
+  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked, voice, kismat, seedhi, turnTimer, turnSec, shields };
 }
 
 // only the browsers' own push services: the server never posts to any other address a client sends
@@ -155,6 +157,13 @@ export function parseRank(value: unknown): Rank | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'string' || !(RANKS as readonly string[]).includes(value)) throw new GameError('Invalid rank');
   return value as Rank;
+}
+
+/** 🔒 Card Shield on a play: only true turns it on (older apps don't send it) */
+export function parseShield(value: unknown): boolean {
+  if (value === undefined || value === null || value === false) return false;
+  if (value !== true) throw new GameError('Invalid play');
+  return true;
 }
 
 export function parsePlayId(value: unknown): string {

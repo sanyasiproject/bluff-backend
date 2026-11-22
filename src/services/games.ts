@@ -1,13 +1,14 @@
 import { ObjectId, type AnyBulkWriteOperation } from 'mongodb';
 import { istDay } from '../days.js';
 import type { CatchDoc, Collections, GameDoc, GamePlayerDoc, UserDoc } from '../db/documents.js';
-import { HABIT_KEYS } from '../habits.js';
+import { HABIT_KEYS, habitsPipeline } from '../habits.js';
 import type { GameRecord } from '../models.js';
 import {
   DAILY_GAME_REWARDS,
   levelOf,
   MIN_REWARD_GAME_SEC,
   PASS_XP,
+  REPLAY_KEEP_DAYS,
   missionOf,
   SECRET_XP,
   xpOf,
@@ -19,6 +20,7 @@ import {
 import type { LeagueService } from './league.js';
 import type { MissionCounts, MissionDone, MissionService } from './missions.js';
 import type { RankedService } from './ranked.js';
+import type { RivalService } from './rivals.js';
 import type { SeasonPassService } from './seasonPass.js';
 import { boostOf } from './shop.js';
 import { statsOf } from './users.js';
@@ -50,6 +52,7 @@ export class GameRecorder {
     private readonly league: LeagueService,
     private readonly ranked: RankedService,
     private readonly pass?: SeasonPassService,
+    private readonly rivals?: RivalService,
   ) {}
 
   async save(record: GameRecord): Promise<CoinResult[]> {
@@ -85,7 +88,7 @@ export class GameRecorder {
     if (finished) await this.settleBets(players, record.bets);
     if (counts) await this.payDailyGameRewards(players, (p) => boostOfP(p).coins, addBoostCoins);
 
-    await this.cols.games.insertOne({
+    const doc: GameDoc = {
       _id: new ObjectId(),
       roomCode: record.roomCode,
       config: record.config,
@@ -108,7 +111,11 @@ export class GameRecorder {
       })),
       // the step-by-step replay, when the room recorded one
       ...(record.replay && record.replay.steps.length > 0 ? { replay: record.replay } : {}),
-    });
+      // games that count go into the head-to-head totals right away
+      ...(counts && { rivalsCounted: true }),
+    };
+    await this.cols.games.insertOne(doc);
+    if (counts) await this.rivals?.count(doc).catch((err: Error) => console.error('[rivals] could not count a game:', err.message));
 
     // a secret mission card done pays bonus XP, only in a game that counts for a logged-in player who wasn't removed
     const secretDone = new Set(record.players.filter((p) => p.secret?.done).map((p) => p.memberId));
@@ -400,15 +407,22 @@ export class GameRecorder {
     return new Set(links.map((f) => f.pair));
   }
 
-  /** adds this game's true plays to each account's habits (server only; the bots read them at the next join or deal) */
+  /** adds this game's true plays to each account's habits, older games fading (server only; the bots read them at the next join or deal) */
   private async addHabits(players: GamePlayerDoc[]): Promise<void> {
     const updates: AnyBulkWriteOperation<UserDoc>[] = players.flatMap((p) => {
       const h = p.stats.habits;
-      if (!p.userId || !h) return [];
-      const inc = Object.fromEntries(HABIT_KEYS.filter((k) => h[k] > 0).map((k) => [`habits.${k}`, h[k]]));
-      return Object.keys(inc).length > 0 ? [{ updateOne: { filter: { _id: p.userId }, update: { $inc: inc } } }] : [];
+      // a game with nothing to learn from (Seedhi, no turns) leaves the old ones as they were
+      if (!p.userId || !h || !HABIT_KEYS.some((k) => h[k] > 0)) return [];
+      return [{ updateOne: { filter: { _id: p.userId }, update: habitsPipeline(h) } }];
     });
     if (updates.length > 0) await this.cols.users.bulkWrite(updates);
+  }
+
+  /** drops the replay of games older than REPLAY_KEEP_DAYS (the result stays); walks only games still holding one, oldest first */
+  async clearOldReplays(now = new Date()): Promise<number> {
+    const before = new Date(now.getTime() - REPLAY_KEEP_DAYS * 86_400_000);
+    const res = await this.cols.games.updateMany({ replay: { $exists: true }, endedAt: { $lt: before } }, { $unset: { replay: '' } });
+    return res.modifiedCount;
   }
 
   /** a saved game's replay for someone who played in it (or an admin); null when it isn't theirs or has none */

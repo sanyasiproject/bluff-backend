@@ -103,7 +103,8 @@ export class FriendService {
         {
           _id: { $ne: me },
           blocked: { $ne: true },
-          $or: [{ username: { $regex: `^${q}` } }, { displayName: { $regex: q, $options: 'i' } }],
+          // both from the start, along their indexes: the username, or the display name or one of its words
+          $or: [{ username: { $regex: `^${q}` } }, { nameWords: { $regex: `^${q}` } }],
         },
         { projection: { username: 1, displayName: 1, stats: 1, avatar: 1, lastSeenAt: 1, lastLoginAt: 1 } },
       )

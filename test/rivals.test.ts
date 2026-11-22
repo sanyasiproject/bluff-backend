@@ -190,6 +190,8 @@ describe.skipIf(!MONGO)('rivals and Dosti (MongoDB)', () => {
       ...(opts.catches ? { catches: opts.catches } : {}),
     }));
     await games.insertMany(docs);
+    // games saved before the running totals existed are added by the backfill
+    await store.rivals.backfill();
   }
 
   /** my record against a friend by username, from the service */
@@ -209,6 +211,23 @@ describe.skipIf(!MONGO)('rivals and Dosti (MongoDB)', () => {
     await save(g, { a, b });
     expect(await vs(a, b)).toMatchObject({ games: 1, ahead: 1, behind: 0, iCaught: 0, theyCaught: 0, tag: null });
     expect(await scores(b, a)).toEqual(['1: 0-1']);
+  });
+
+  it('keeps running totals: a saved game counts once, old games are added once, and the backfill never counts twice', async () => {
+    const [a, b] = await people(2);
+    await befriend(a, b);
+    const q = card('Q');
+    const g = deal({ a: [q], b: [card('K'), card('2')] });
+    g.play('a', ids(q), 'Q');
+    g.pass('b');
+    await save(g, { a, b });
+    // two older games from before the totals, b ahead in both
+    await insertGames(2, [{ who: a, place: 2 }, { who: b, won: true, place: 1 }]);
+    expect(await scores(a, b)).toEqual(['3: 1-2']);
+    // running it again (or after a restart) adds nothing
+    expect(await store.rivals.backfill()).toBe(0);
+    await store.rivals.backfillOnce();
+    expect(await scores(a, b)).toEqual(['3: 1-2']);
   });
 
   it('3+ players: a win beats everyone, then the better place, and finishing beats being left with cards', async () => {

@@ -43,12 +43,18 @@ export async function createStore(uri: string, names: DbNames, opts: UserService
   const ranked = new RankedService(cols, settings);
   const pass = new SeasonPassService(cols, settings);
   const friends = new FriendService(cols);
+  const rivals = new RivalService(cols);
+  const users = new UserService(cols, opts);
+  // accounts from before name search used nameWords get them, in the background
+  void users.backfillNameWords().catch((err: Error) => console.error('[users] name words backfill failed:', err.message));
+  // games saved before the head-to-head totals existed are added once, in the background
+  void rivals.backfillOnce().catch((err: Error) => console.error('[rivals] backfill failed:', err.message));
   return {
-    users: new UserService(cols, opts),
-    games: new GameRecorder(cols, missions, league, ranked, pass),
+    users,
+    games: new GameRecorder(cols, missions, league, ranked, pass, rivals),
     missions,
     league,
-    rivals: new RivalService(cols),
+    rivals,
     ranked,
     friends,
     messages: new MessageService(cols, friends),

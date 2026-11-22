@@ -1,12 +1,12 @@
-import type { Document, ObjectId } from 'mongodb';
-import type { Collections, UserDoc } from '../db/documents.js';
+import type { AnyBulkWriteOperation, ObjectId } from 'mongodb';
+import type { Collections, GameDoc, GamePlayerDoc, RivalTallyDoc, UserDoc } from '../db/documents.js';
 import { levelOf, MIN_REWARD_GAME_SEC, RIVAL_MIN_GAMES, type RivalRecord, type RivalsResponse } from '../types.js';
 import { avatarOf, statsOf } from './users.js';
 
 /** a friendship's key: both user ids sorted and joined, as in services/friends.ts */
 const pairOf = (a: ObjectId, b: ObjectId) => [a.toHexString(), b.toHexString()].sort().join('_');
 
-/** my games together with one opponent, as the aggregation sums them up */
+/** my games together with one opponent, from the running totals */
 interface Tally {
   _id: ObjectId;
   games: number;
@@ -20,36 +20,47 @@ interface Tally {
 type Shown = Pick<UserDoc, '_id' | 'username' | 'displayName' | 'avatar' | 'stats'>;
 const SHOWN = { username: 1, displayName: 1, avatar: 1, stats: 1 } as const;
 
-/** a seat that counts: a logged-in person the host didn't remove (bots and guests have no userId) */
-const person = (seat: string): Document => ({ [`${seat}.kicked`]: { $ne: true }, [`${seat}.bot`]: { $ne: true } });
-const won = (seat: string): Document => ({ $eq: [`$${seat}.won`, true] });
-const placed = (seat: string): Document => ({ $isNumber: `$${seat}.place` });
+type Seat = Pick<GamePlayerDoc, 'userId' | 'won' | 'place' | 'kicked' | 'bot'>;
 
-/** one game for me against one opponent: 1 when I finished ahead, -1 behind, 0 when neither was */
-const AHEAD: Document = {
-  $switch: {
-    branches: [
-      // a win beats not winning
-      { case: { $ne: [won('mine'), won('them')] }, then: { $cond: [won('mine'), 1, -1] } },
-      // both finished: the better place is ahead
-      { case: { $and: [placed('mine'), placed('them')] }, then: { $cmp: ['$them.place', '$mine.place'] } },
-      // finishing beats not finishing
-      { case: { $ne: [placed('mine'), placed('them')] }, then: { $cond: [placed('mine'), 1, -1] } },
-    ],
-    default: 0,
-  },
-};
+/** one game for x against y: 1 when x finished ahead, -1 behind, 0 when neither was */
+export function aheadOf(x: Seat, y: Seat): number {
+  // a win beats not winning
+  if (!!x.won !== !!y.won) return x.won ? 1 : -1;
+  const px = typeof x.place === 'number';
+  const py = typeof y.place === 'number';
+  // both placed: the better place is ahead; placed beats not placed
+  if (px && py) return Math.sign(y.place! - x.place!);
+  if (px !== py) return px ? 1 : -1;
+  return 0;
+}
 
-/** times `by` caught `of` lying in this game; older games have no catches */
-const caught = (by: unknown, of: unknown): Document => ({
-  $sum: {
-    $map: {
-      input: { $filter: { input: { $ifNull: ['$catches', []] }, as: 'c', cond: { $and: [{ $eq: ['$$c.by', by] }, { $eq: ['$$c.of', of] }] } } },
-      as: 'c',
-      in: '$$c.n',
-    },
-  },
-});
+/** what one saved game adds to each pair of accounts in it: finished, a minute or more, both seated as people */
+export function tallyOps(game: Pick<GameDoc, 'status' | 'durationSec' | 'players' | 'catches'>): AnyBulkWriteOperation<RivalTallyDoc>[] {
+  if (game.status !== 'finished' || game.durationSec < MIN_REWARD_GAME_SEC) return [];
+  const people = game.players.filter((p) => p.userId && !p.kicked && !p.bot);
+  const caught = (by: ObjectId, of: ObjectId) =>
+    (game.catches ?? []).reduce((n, c) => (c.by.equals(by) && c.of.equals(of) ? n + c.n : n), 0);
+  const ops: AnyBulkWriteOperation<RivalTallyDoc>[] = [];
+  for (let i = 0; i < people.length; i++) {
+    for (let j = i + 1; j < people.length; j++) {
+      const [x, y] = people[i].userId!.toHexString() < people[j].userId!.toHexString() ? [people[i], people[j]] : [people[j], people[i]];
+      const [a, b] = [x.userId!, y.userId!];
+      if (a.equals(b)) continue;
+      const ahead = aheadOf(x, y);
+      ops.push({
+        updateOne: {
+          filter: { _id: pairOf(a, b) },
+          update: {
+            $setOnInsert: { a, b },
+            $inc: { games: 1, aAhead: ahead === 1 ? 1 : 0, bAhead: ahead === -1 ? 1 : 0, aCaught: caught(a, b), bCaught: caught(b, a) },
+          },
+          upsert: true,
+        },
+      });
+    }
+  }
+  return ops;
+}
 
 /** a tag once enough games had one of us ahead: nemesis when they were ahead in 60% or more, rival when 40% to 60%; never one for being ahead */
 export function rivalTag(ahead: number, behind: number): RivalRecord['tag'] {
@@ -111,33 +122,54 @@ export class RivalService {
     return t ? recordOf(them, t) : null;
   }
 
-  /** my finished games with each of these accounts where we both played as people, summed up per opponent */
+  /** my running totals against each of these accounts (kept up to date as games are saved) */
   private async tally(me: ObjectId, opponents: ObjectId[]): Promise<Tally[]> {
     if (opponents.length === 0) return [];
-    return this.cols.games
-      .aggregate<Tally>([
-        // my finished games with at least one of them (indexed on players.userId)
-        // finished games of a minute or more, like the league and missions
-        { $match: { status: 'finished', durationSec: { $gte: MIN_REWARD_GAME_SEC }, $and: [{ 'players.userId': me }, { 'players.userId': { $in: opponents } }] } },
-        { $project: { catches: 1, 'players.userId': 1, 'players.won': 1, 'players.place': 1, 'players.kicked': 1, 'players.bot': 1 } },
-        // my own seat: a game the host removed me from doesn't count
-        { $set: { mine: { $arrayElemAt: [{ $filter: { input: '$players', as: 'p', cond: { $eq: ['$$p.userId', me] } } }, 0] } } },
-        { $match: person('mine') },
-        { $unwind: '$players' },
-        { $project: { catches: 1, mine: 1, them: '$players' } },
-        { $match: { 'them.userId': { $in: opponents }, ...person('them') } },
-        { $set: { ahead: AHEAD, iCaught: caught(me, '$them.userId'), theyCaught: caught('$them.userId', me) } },
+    const docs = await this.cols.rivals.find({ _id: { $in: opponents.map((o) => pairOf(me, o)) } }).toArray();
+    return docs.flatMap((d) => {
+      if (d.games <= 0) return [];
+      const iAmA = d.a.equals(me);
+      return [
         {
-          $group: {
-            _id: '$them.userId',
-            games: { $sum: 1 },
-            ahead: { $sum: { $cond: [{ $eq: ['$ahead', 1] }, 1, 0] } },
-            behind: { $sum: { $cond: [{ $eq: ['$ahead', -1] }, 1, 0] } },
-            iCaught: { $sum: '$iCaught' },
-            theyCaught: { $sum: '$theyCaught' },
-          },
+          _id: iAmA ? d.b : d.a,
+          games: d.games,
+          ahead: iAmA ? d.aAhead : d.bAhead,
+          behind: iAmA ? d.bAhead : d.aAhead,
+          iCaught: iAmA ? d.aCaught : d.bCaught,
+          theyCaught: iAmA ? d.bCaught : d.aCaught,
         },
-      ])
-      .toArray();
+      ];
+    });
+  }
+
+  /** adds one saved game to the pairs' totals */
+  async count(game: Pick<GameDoc, 'status' | 'durationSec' | 'players' | 'catches'>): Promise<void> {
+    const ops = tallyOps(game);
+    if (ops.length > 0) await this.cols.rivals.bulkWrite(ops, { ordered: false });
+  }
+
+  /** adds every game not counted yet (games saved before the totals existed); each game is claimed first, so none counts twice */
+  async backfill(): Promise<number> {
+    let added = 0;
+    const cursor = this.cols.games.find(
+      { status: 'finished', durationSec: { $gte: MIN_REWARD_GAME_SEC }, rivalsCounted: { $ne: true } },
+      { projection: { status: 1, durationSec: 1, players: 1, catches: 1 } },
+    );
+    for await (const g of cursor) {
+      const claimed = await this.cols.games.updateOne({ _id: g._id, rivalsCounted: { $ne: true } }, { $set: { rivalsCounted: true } });
+      if (claimed.modifiedCount === 0) continue;
+      await this.count(g);
+      added++;
+    }
+    return added;
+  }
+
+  /** the backfill once per database: skipped for good once it has finished */
+  async backfillOnce(): Promise<void> {
+    const s = await this.cols.settings.findOne({ _id: 'app' }, { projection: { rivalsBackfilled: 1 } });
+    if (s?.rivalsBackfilled) return;
+    const added = await this.backfill();
+    await this.cols.settings.updateOne({ _id: 'app' }, { $set: { rivalsBackfilled: true } });
+    if (added > 0) console.log(`[rivals] added ${added} older games to the head-to-head totals`);
   }
 }

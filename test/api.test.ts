@@ -5,7 +5,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBluffServer } from '../src/server.js';
 import { istDay, istWeek } from '../src/days.js';
-import { emptyHabits } from '../src/habits.js';
+import { emptyHabits, mergeHabits } from '../src/habits.js';
 import type { GameRecord } from '../src/models.js';
 import { createStore, type Store } from '../src/services/store.js';
 import type {
@@ -1089,9 +1089,9 @@ describe.skipIf(!MONGO)('accounts API (MongoDB)', () => {
     await store.games.save(record('ended_early'));
     await store.games.save(record('finished'));
     await store.games.save(record('finished', 'crazy7'));
-    expect((await store.users.getAccounts([userId])).get(userId)!.habits).toMatchObject({
-      followPlays: 10, followLies: 6, lies: 8, lieCards: 12, slotLast: 4, fakeLast: 4, overPlays: 4, overLies: 2, botCalls: 6, heldKept: 2,
-    });
+    // two Bluff games: the first one faded a little, then the second added
+    expect((await store.users.getAccounts([userId])).get(userId)!.habits).toEqual(mergeHabits(mergeHabits(null, habits), habits));
+    expect((await store.users.getAccounts([userId])).get(userId)!.habits).toMatchObject({ followPlays: 9.8, followLies: 5.88, botCalls: 5.88 });
     // players, friends and admins never see it
     const auth = bearer(reg.body.token);
     for (const res of [await api().get('/api/me').set(auth), await api().get('/api/players/habit_hal').set(auth), await api().get('/api/me/games').set(auth)]) {

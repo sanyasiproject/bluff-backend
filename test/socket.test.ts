@@ -52,7 +52,7 @@ describe('socket server', () => {
     const code = created.code!;
     // new rooms start on the "pick one card" bluff rule
     await until(() => a.state !== null);
-    expect(a.state!.config).toEqual({ game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false, voice: true, kismat: false, seedhi: false, turnTimer: false, turnSec: 30 });
+    expect(a.state!.config).toEqual({ game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false, voice: true, kismat: false, seedhi: false, turnTimer: false, turnSec: 30, shields: 0 });
     expect(await send(b, 'room:join', { code: code.toLowerCase(), name: 'Ravi' })).toMatchObject({ ok: true });
     expect(await send(c, 'room:join', { code, name: 'ravi' })).toEqual({ ok: false, error: 'That name is taken in this room' });
     expect(await send(c, 'room:join', { code, name: 'Meena' })).toMatchObject({ ok: true });
@@ -245,6 +245,26 @@ describe('socket server', () => {
     await until(() => b.state?.phase === 'lobby');
     expect(b.state!.sazaPick).toBe(null);
     expect(b.state!.players.find((p) => p.id === loserId)!.saza).toBe('kachua');
+  });
+
+  it('Card Shield: a shielded play shows 🔒 to everyone and nobody can call it', async () => {
+    const [a, b] = [await client(), await client()];
+    const { code } = await send(a, 'room:create', { name: 'Host' });
+    await send(b, 'room:join', { code, name: 'Guest' });
+    expect(await send(a, 'room:config', { decks: 1, bluffRule: 'all', shields: 4 })).toEqual({ ok: false, error: 'Invalid settings' });
+    expect(await send(a, 'room:config', { decks: 1, bluffRule: 'all', shields: 2 })).toEqual({ ok: true });
+    await send(a, 'room:start');
+    await until(() => b.state?.phase === 'playing');
+    const game = server.rooms.get(code!).game!;
+    const [mover, other] = game.turnId === a.state!.meId ? [a, b] : [b, a];
+    expect([mover.state!.shieldsLeft, other.state!.shieldsLeft]).toEqual([2, 2]);
+    const two = mover.state!.hand.slice(0, 2).map((c) => c.id);
+    expect(await send(mover, 'game:play', { cardIds: two, rank: 'K', shield: 'yes' })).toEqual({ ok: false, error: 'Invalid play' });
+    expect(await send(mover, 'game:play', { cardIds: two, rank: 'K', shield: true })).toEqual({ ok: true });
+    await until(() => other.state?.lastPlay?.shielded === true && mover.state?.shieldsLeft === 1);
+    expect(other.state!.shieldsLeft).toBe(2);
+    expect(await send(other, 'game:bluff', { playId: other.state!.lastPlay!.id })).toEqual({ ok: false, error: "That play has a Card Shield 🔒 You can't call it" });
+    await until(() => other.notes.some((n) => / played two Kings with a Card Shield 🔒$/.test(n.text)));
   });
 
   it('shows a player\'s every play and leftover cards only once the game is over', async () => {

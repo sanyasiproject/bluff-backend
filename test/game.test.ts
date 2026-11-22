@@ -261,6 +261,52 @@ describe('two players left: no bluff call limit', () => {
   });
 });
 
+describe('Card Shield', () => {
+  it('locks a play of up to 2 cards: nobody can call or peek at it, and it stands', () => {
+    const [k1, five] = [card('K'), card('5')];
+    const g = setup(['a', 'b', 'c'], { a: [k1, five, card('9')], b: [card('2'), card('3')], c: [card('4'), card('6')] }, { shields: 2, peeks: 1 });
+    expect(g.shieldsLeft('a')).toBe(2);
+    // a lie under a shield
+    g.play('a', ids(k1, five), 'K', true);
+    expect(g.lastPlay).toMatchObject({ playerId: 'a', shielded: true });
+    expect(g.shieldsLeft('a')).toBe(1);
+    expect(() => g.callBluff('b', g.lastPlay!.id)).toThrow('Card Shield');
+    expect(() => g.peek('c', g.lastPlay!.id, 0)).toThrow('Card Shield');
+    // nobody had a chance to call it
+    expect(g.stats.get('b')!.chances).toBe(0);
+    g.pass('b');
+    g.pass('c');
+    // the round ends and the lie stands
+    expect(g.hand('a')).toHaveLength(1);
+    expect(g.pile).toEqual([]);
+  });
+
+  it('only when on, while shields last, up to 2 cards, and never on the cards that empty the hand', () => {
+    const cs = [card('2'), card('3'), card('4'), card('5')];
+    const off = setup(['a', 'b'], { a: [...cs], b: [card('9')] });
+    expect(off.shieldsLeft('a')).toBe(0);
+    expect(() => off.play('a', ids(cs[0]), '2', true)).toThrow('Card Shields are off');
+
+    const g = setup(['a', 'b'], { a: [...cs], b: [card('9'), card('8'), card('7')] }, { shields: 1 });
+    expect(() => g.play('a', ids(cs[0], cs[1], cs[2]), '2', true)).toThrow('up to 2 cards');
+    // a refused play uses no shield
+    expect(g.shieldsLeft('a')).toBe(1);
+    g.play('a', ids(cs[0]), '2', true);
+    g.pass('b');
+    // the shield is spent
+    expect(() => g.play('a', ids(cs[1]), '3', true)).toThrow('No Card Shields left');
+
+    const last = setup(['a', 'b'], { a: [cs[0], cs[1]], b: [card('9')] }, { shields: 3 });
+    expect(() => last.play('a', ids(cs[0], cs[1]), '2', true)).toThrow("last cards can't be shielded");
+    // leaving one card behind is fine; that last card can be called as usual
+    last.play('a', ids(cs[0]), '2', true);
+    last.pass('b');
+    last.play('a', ids(cs[1]), '7');
+    expect(last.goingOut()).toBe('a');
+    expect(last.callBluff('b', last.lastPlay!.id)[0]).toMatchObject({ kind: 'bluff', bluff: true, loserId: 'a' });
+  });
+});
+
 describe('peek power', () => {
   it('shows one card of the last play to the player who peeks, up to the limit', () => {
     const [q, five] = [card('Q'), card('5')];

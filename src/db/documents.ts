@@ -17,6 +17,8 @@ export interface DbNames {
   seasons?: string;
   /** private messages between friends; messages by default */
   messages?: string;
+  /** running head-to-head totals per pair of accounts; rival_tallies by default */
+  rivals?: string;
 }
 
 export interface UserDoc {
@@ -24,6 +26,8 @@ export interface UserDoc {
   /** lowercase, unique */
   username: string;
   displayName: string;
+  /** player search: the display name and each of its words, lower case (set with the name; older accounts get it at startup) */
+  nameWords?: string[];
   /** scrypt$N$r$p$salt$hash */
   passwordHash: string;
   role: Role;
@@ -206,6 +210,8 @@ export interface GameDoc {
   awards: { emoji: string; title: string; names: string[]; detail: string }[];
   /** who caught whom lying, between logged-in players (games saved since rivals came in) */
   catches?: CatchDoc[];
+  /** already added to rival_tallies (set when saved, or by the one-time backfill) */
+  rivalsCounted?: boolean;
   /** step-by-step replay (games saved since replays came in) */
   replay?: GameReplay;
 }
@@ -263,6 +269,8 @@ export interface SettingsDoc {
   rankedSeasonStartedAt?: Date;
   /** when the next season starts, once an admin asked for it; null or missing otherwise */
   nextSeasonAt?: Date | null;
+  /** every older game has been added to rival_tallies */
+  rivalsBackfilled?: boolean;
   updatedBy: ObjectId | null;
   updatedAt: Date;
 }
@@ -277,6 +285,7 @@ export interface Collections {
   push: Collection<PushSubscriptionDoc>;
   seasons: Collection<SeasonDoc>;
   messages: Collection<MessageDoc>;
+  rivals: Collection<RivalTallyDoc>;
 }
 
 /** one private message between two friends; the newest DM_KEEP per pair are kept */
@@ -306,4 +315,18 @@ export interface SeasonDoc {
 export interface Actor {
   userId: ObjectId | null;
   via: 'admin' | 'api_key';
+}
+
+/** one pair of accounts' games together (finished, a minute or more, both seated as people); a is the lower id */
+export interface RivalTallyDoc {
+  /** both ids sorted and joined, like a friendship's pair */
+  _id: string;
+  a: ObjectId;
+  b: ObjectId;
+  games: number;
+  aAhead: number;
+  bAhead: number;
+  /** times a caught b lying, and b caught a */
+  aCaught: number;
+  bCaught: number;
 }

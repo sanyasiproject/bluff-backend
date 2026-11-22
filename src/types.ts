@@ -89,6 +89,10 @@ export const MIN_REWARD_GAME_SEC = 60;
 
 /** most peeks a room can allow per player per game */
 export const MAX_PEEKS = 3;
+/** most Card Shields a room can allow per player per game */
+export const MAX_CARD_SHIELDS = 3;
+/** a Card Shield covers a play of up to this many cards */
+export const SHIELD_MAX_CARDS = 2;
 
 /** coins a caller can bet on a bluff call (never more than the room's stake) */
 export const BET_STEPS = [50, 100, 250, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000] as const;
@@ -155,6 +159,8 @@ export interface GameConfig {
   turnTimer: boolean;
   /** turn timer: seconds a turn shows, one of TURN_SECONDS (older apps don't send it: 30) */
   turnSec: TurnSeconds;
+  /** Bluff: Card Shields per player per game (0 = off): a shielded play of up to SHIELD_MAX_CARDS can't be called or peeked (older apps don't send it: 0) */
+  shields: number;
 }
 
 /** one lie nobody caught, turned face-up when the game ends */
@@ -628,6 +634,8 @@ export interface LastPlayView {
   playerId: string;
   count: number;
   rank: Rank;
+  /** 🔒 Card Shield: nobody can call or peek at it */
+  shielded: boolean;
 }
 
 export interface RevealView {
@@ -685,6 +693,8 @@ export interface RoomView {
   bluffCallsLeft: number;
   /** peeks I have left this game */
   peeksLeft: number;
+  /** Card Shields I have left this game */
+  shieldsLeft: number;
   /** most I can bet on a bluff call right now (0 when bets are off) */
   betLimit: number;
   /** 2v2 partners by member id (in the lobby: who would pair up), or null */
@@ -1405,6 +1415,8 @@ export interface ShopLook {
 
 /** steps kept per game; later moves overwrite the last step so the end still shows */
 export const REPLAY_MAX_STEPS = 800;
+/** a saved game keeps its replay this many days; then only the result stays */
+export const REPLAY_KEEP_DAYS = 30;
 
 /** one seat in a replay, in table order */
 export interface ReplayPlayer {

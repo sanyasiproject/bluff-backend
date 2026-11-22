@@ -71,7 +71,7 @@ export const DEFAULT_ROOM_LIMITS: RoomLimits = { createsPerIp: 10, liveRoomsPerI
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false, voice: true, kismat: false, seedhi: false, turnTimer: false, turnSec: 30 };
+  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false, voice: true, kismat: false, seedhi: false, turnTimer: false, turnSec: 30, shields: 0 };
   /** game over with Saza on: the loser's new badge, which the winner may swap until the room goes back to the lobby */
   sazaPick: { loserId: string; winnerId: string } | null = null;
   /** a Bluff game */
@@ -824,7 +824,7 @@ export class Room {
       kismat: b?.kismat ?? null,
       pileCount: g?.pile.length ?? 0,
       pileTopBy: b ? b.pileBy.slice(-7) : [],
-      lastPlay: lp ? { id: lp.id, playerId: lp.playerId, count: lp.cards.length, rank: lp.rank } : null,
+      lastPlay: lp ? { id: lp.id, playerId: lp.playerId, count: lp.cards.length, rank: lp.rank, shielded: !!lp.shielded } : null,
       passedIds: b ? [...b.passed] : [],
       reveal: b?.reveal ?? null,
       hand: [...(g?.hands.get(meId) ?? [])],
@@ -844,6 +844,7 @@ export class Room {
       stopped: g?.aborted ?? false,
       bluffCallsLeft: b && seatedIds.has(meId) ? b.bluffCallsLeft(meId) : 0,
       peeksLeft: b && seatedIds.has(meId) ? b.peeksLeft(meId) : 0,
+      shieldsLeft: b && seatedIds.has(meId) ? b.shieldsLeft(meId) : 0,
       betLimit: me && b?.config.bets && seatedIds.has(meId) ? Math.min(b.config.stake, this.betRoom(me)) : 0,
       // in the lobby, show who would pair up if the game started now
       teams: g ? g.teams : lobbySlots && !lobbySlots.includes(null) ? [[lobbySlots[0]!, lobbySlots[2]!], [lobbySlots[1]!, lobbySlots[3]!]] : null,
@@ -970,7 +971,7 @@ export class Room {
     if (this.c7) return this.describeCrazy7(e, n);
     switch (e.kind) {
       case 'play':
-        return ['play', `${n(e.playerId)} played ${describeClaim(e.count, e.rank)}`];
+        return ['play', `${n(e.playerId)} played ${describeClaim(e.count, e.rank)}${e.shielded ? ' with a Card Shield 🔒' : ''}`];
       case 'pass':
         return ['pass', `${n(e.playerId)} passed`];
       case 'bluff':

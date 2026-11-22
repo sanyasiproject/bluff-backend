@@ -41,6 +41,7 @@ import {
   parseName,
   parsePlayId,
   parseRank,
+  parseShield,
   parseRtcSignal,
   parseSaza,
   parseSlot,
@@ -771,7 +772,7 @@ export function registerHandlers(
     on('game:play', (p) => {
       const { room, member } = current();
       room.markActive(member.id);
-      afterMove(room, room.requireGame().play(member.id, parseCardIds(p.cardIds), parseRank(p.rank)));
+      afterMove(room, room.requireGame().play(member.id, parseCardIds(p.cardIds), parseRank(p.rank), parseShield(p.shield)));
     });
 
     on('game:pass', () => {

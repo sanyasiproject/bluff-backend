@@ -1,5 +1,5 @@
 import { shopWearOf } from './shop.js';
-import { MongoServerError, ObjectId, type Filter, type WithId } from 'mongodb';
+import { MongoServerError, ObjectId, type AnyBulkWriteOperation, type Filter, type WithId } from 'mongodb';
 import { hashPassword, verifyPassword } from '../auth/passwords.js';
 import { hashToken, newToken } from '../auth/tokens.js';
 import { istDay } from '../days.js';
@@ -130,6 +130,12 @@ function objectId(id: string): ObjectId {
 }
 
 /** accounts, login sessions, coins and admin role */
+/** a display name for player search: the whole name and each word, lower case ("Asha Rani" → "asha rani", "asha", "rani") */
+export function nameWordsOf(name: string): string[] {
+  const full = name.trim().toLowerCase().replace(/\s+/g, ' ');
+  return full ? [...new Set([full, ...full.split(' ')])] : [];
+}
+
 export class UserService {
   // hashed once so a login for an unknown username takes as long as a wrong password
   private dummyHash = hashPassword('not-a-real-password');
@@ -139,11 +145,28 @@ export class UserService {
     private readonly opts: UserServiceOptions,
   ) {}
 
+  /** accounts from before name search used nameWords get them; after the first run this finds nothing, along the index */
+  async backfillNameWords(): Promise<number> {
+    let done = 0;
+    let batch: AnyBulkWriteOperation<UserDoc>[] = [];
+    for await (const u of this.cols.users.find({ nameWords: { $exists: false } }, { projection: { displayName: 1 } })) {
+      batch.push({ updateOne: { filter: { _id: u._id }, update: { $set: { nameWords: nameWordsOf(u.displayName ?? '') } } } });
+      if (batch.length === 500) {
+        await this.cols.users.bulkWrite(batch, { ordered: false });
+        done += batch.length;
+        batch = [];
+      }
+    }
+    if (batch.length > 0) await this.cols.users.bulkWrite(batch, { ordered: false });
+    return done + batch.length;
+  }
+
   async register(username: string, password: string, displayName: string): Promise<AuthResponse> {
     // sign-up counts as the first login of the day
     const doc: Omit<UserDoc, '_id'> = {
       username,
       displayName,
+      nameWords: nameWordsOf(displayName),
       passwordHash: await hashPassword(password),
       role: 'user',
       coins: this.opts.defaultCoins + LOGIN_BONUS,
@@ -423,7 +446,7 @@ export class UserService {
       user.role === 'admin' ? { _id: userId } : { _id: userId, $or: [{ nameChangedAt: { $exists: false } }, { nameChangedAt: { $lte: since } }] };
     const updated = await this.cols.users.findOneAndUpdate(
       guard,
-      { $set: { displayName: name, nameChangedAt: now } },
+      { $set: { displayName: name, nameWords: nameWordsOf(name), nameChangedAt: now } },
       { returnDocument: 'after' },
     );
     if (!updated) throw new ApiError(409, 'Your name was just changed. Try again later');

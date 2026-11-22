@@ -305,10 +305,12 @@ export interface PlayRecord {
   playerId: string;
   cards: Card[];
   rank: Rank;
+  /** 🔒 Card Shield: can't be called or peeked at */
+  shielded?: boolean;
 }
 
 export type GameEvent =
-  | { kind: 'play'; playerId: string; count: number; rank: Rank }
+  | { kind: 'play'; playerId: string; count: number; rank: Rank; shielded?: boolean }
   | { kind: 'pass'; playerId: string }
   | { kind: 'bluff'; callerId: string; playerId: string; bluff: boolean; loserId: string; pileCount: number; bet: number }
   | { kind: 'newRound'; starterId: string }

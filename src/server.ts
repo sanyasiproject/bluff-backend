@@ -15,6 +15,8 @@ import { MAX_CONNECTIONS_PER_IP, registerHandlers, type OnlineAlertTimes } from 
 
 /** how often the server checks whether a booked ranked season is due */
 const SEASON_CHECK_MS = 60_000;
+/** how often old replays are cleared */
+const REPLAY_SWEEP_MS = 6 * 60 * 60_000;
 
 export interface ServerDeps {
   /** MongoDB-backed accounts, coins, friends and game history; omit for guest-only */
@@ -98,6 +100,11 @@ export function createBluffServer(deps: ServerDeps = {}) {
   void startDueSeason();
   const seasonTimer = setInterval(() => void startDueSeason(), SEASON_CHECK_MS);
   seasonTimer.unref();
+  // replays older than REPLAY_KEEP_DAYS are dropped at start and every 6 hours, so saved games don't grow the database forever
+  const clearReplays = () => void store?.games.clearOldReplays().catch((err: Error) => console.error('[games] could not clear old replays:', err.message));
+  clearReplays();
+  const replayTimer = setInterval(clearReplays, REPLAY_SWEEP_MS);
+  replayTimer.unref();
 
   const rooms = new RoomManager({ ...DEFAULT_ROOM_LIMITS, ...deps.limits });
   const handlers = registerHandlers(
@@ -143,6 +150,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
     app,
     close: () => {
       clearInterval(seasonTimer);
+      clearInterval(replayTimer);
       handlers.stop();
       io.close();
     },

@@ -302,7 +302,7 @@ function whimPeek(s: Situation, hit: number): number | null {
 export function decideCall(s: Situation, onTurn: boolean, peek: Peek): { cardIndex?: number } | null {
   const v = s.view;
   const play = v.lastPlay;
-  if (!play || play.playerId === v.meId || v.bluffCallsLeft === 0 || v.hand.length === 0 || partnerIn(v, v.meId) === play.playerId) return null;
+  if (!play || play.shielded || play.playerId === v.meId || v.bluffCallsLeft === 0 || v.hand.length === 0 || partnerIn(v, v.meId) === play.playerId) return null;
   const skill = skillIn(s);
   const one = v.config.bluffRule === 'one';
   // their last cards: if the play stands they're out, so it's always called

@@ -273,3 +273,24 @@ describe('the Kismat card', () => {
     expect(calls(false)).toBeGreaterThanOrEqual(18);
   });
 });
+
+describe('bots and the Card Shield', () => {
+  it('never call or peek at a shielded play, even an impossible claim', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const rand = seeded(seed);
+      const { room, g, ids } = table(3, { shields: 1, peeks: 2 }, (max) => Math.floor(rand() * max));
+      const [person, bot] = ids;
+      g.turnId = person;
+      // two fakes claimed as the round's rank: a sure call without the shield
+      const fakes = [card('2'), card('3')];
+      g.hands.set(person, [...fakes, card('9')]);
+      g.play(person, fakes.map((c) => c.id), 'K', true);
+      const me = makePersonality(BOT_STYLES[seed % BOT_STYLES.length], rand);
+      const sit: Situation = { view: room.view(bot), mem: new BotMemory(bot, new Map(), new Map()), me, rand };
+      let peeked = 0;
+      expect(decideCall(sit, false, () => (peeked++, null))).toBeNull();
+      expect(decideCall(sit, true, () => (peeked++, null))).toBeNull();
+      expect(peeked).toBe(0);
+    }
+  });
+});
