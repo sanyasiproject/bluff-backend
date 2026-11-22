@@ -5,6 +5,7 @@ import { TurnClock } from './turnClock.js';
 import { Crazy7Bots } from './crazy7/driver.js';
 import { RangAuto } from './rang/auto.js';
 import { RangBots } from './rang/driver.js';
+import { RangClock } from './rang/clock.js';
 import { rankPlural } from './cards.js';
 import { GameError } from './game.js';
 import type { AccountInfo, GameEvent, GameRecord, Member, MemberAccount, PlayerLook, SocketHooks, SocketUser, WatchRequest } from './models.js';
@@ -126,6 +127,7 @@ export function registerHandlers(
     c7auto.wake(room);
     rangbots.wake(room);
     rangauto.wake(room);
+    rangclock.wake(room);
   };
 
   const publish = (room: Room, notes: Announcement[]) => {
@@ -181,6 +183,7 @@ export function registerHandlers(
     c7auto.forget(room);
     rangbots.forget(room);
     rangauto.forget(room);
+    rangclock.forget(room);
     clock.forget(room);
     rooms.dropIfEmpty(room);
   };
@@ -206,6 +209,9 @@ export function registerHandlers(
 
   // Crazy 7's automatic picks and passes, one at a time at a pace people can follow
   const c7auto = new Crazy7Auto((room, events) => afterMove(room, events), (room) => rooms.isOpen(room), botSpeed);
+
+  // Rang's game time: ends the game when it runs out
+  const rangclock = new RangClock((room, events) => afterMove(room, events), (room) => rooms.isOpen(room));
 
   // Rang's automatic picks and passes, and its bots, the same way
   const rangauto = new RangAuto((room, events) => afterMove(room, events), (room) => rooms.isOpen(room), botSpeed);
@@ -986,6 +992,7 @@ export function registerHandlers(
     c7auto.prune();
     rangbots.prune();
     rangauto.prune();
+    rangclock.prune();
     clock.prune();
   }, SWEEP_EVERY_MS);
   timer.unref();
@@ -997,6 +1004,7 @@ export function registerHandlers(
       c7auto.stop();
       rangbots.stop();
       rangauto.stop();
+      rangclock.stop();
       clock.stop();
     },
     /** a player changed their avatar, card back or table: their seat in any room shows it at once */

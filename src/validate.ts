@@ -10,6 +10,7 @@ import {
   RANG_MAX_PICKS,
   RANG_HAND_SIZES,
   RANG_MISSED_PENALTIES,
+  RANG_TIMES,
   MAX_PEEKS,
   QUICK_MESSAGES,
   RANKS,
@@ -91,14 +92,15 @@ export function parseConfig(p: Payload): GameConfig {
   const rangForce = bool(p.rangForce, false);
   const rangDoubles = bool(p.rangDoubles, false);
   const rangHand = p.rangHand === undefined ? 7 : (RANG_HAND_SIZES as readonly unknown[]).includes(p.rangHand) ? (p.rangHand as 5 | 7 | 10) : null;
+  const rangTime = p.rangTime === undefined ? 0 : (RANG_TIMES as readonly unknown[]).includes(p.rangTime) ? (p.rangTime as 0 | 3 | 5) : null;
   const rangMissed = p.rangMissed === undefined ? 2 : (RANG_MISSED_PENALTIES as readonly unknown[]).includes(p.rangMissed) ? (p.rangMissed as 1 | 2 | 4) : null;
   const turnSec = p.turnSec === undefined ? TURN_TIMER.turnSec : (TURN_SECONDS as readonly unknown[]).includes(p.turnSec) ? (p.turnSec as TurnSeconds) : null;
   if (!decks || !bluffRule || stake === null || peeks === null || bets === null || teams === null) throw new GameError('Invalid settings');
-  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null || ranked === null || voice === null || kismat === null || seedhi === null || turnTimer === null || turnSec === null || shields === null || c7Power === null || rangPicks === null || rangStack === null || rangChallenge === null || rangSwap === null || rangForce === null || rangDoubles === null || rangHand === null || rangMissed === null) {
+  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null || ranked === null || voice === null || kismat === null || seedhi === null || turnTimer === null || turnSec === null || shields === null || c7Power === null || rangPicks === null || rangStack === null || rangChallenge === null || rangSwap === null || rangForce === null || rangDoubles === null || rangHand === null || rangMissed === null || rangTime === null) {
     throw new GameError('Invalid settings');
   }
   // Bluff's extras are kept while Crazy 7 is picked (it ignores them), so switching back keeps them; bets need coins at stake
-  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked, voice, kismat, seedhi, turnTimer, turnSec, shields, c7Power, rangPicks, rangStack, rangChallenge, rangSwap, rangForce, rangHand, rangMissed, rangDoubles };
+  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked, voice, kismat, seedhi, turnTimer, turnSec, shields, c7Power, rangPicks, rangStack, rangChallenge, rangSwap, rangForce, rangHand, rangMissed, rangDoubles, rangTime };
 }
 
 // only the browsers' own push services: the server never posts to any other address a client sends

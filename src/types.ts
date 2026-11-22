@@ -141,6 +141,8 @@ export interface RangCard {
 /** Rang: cards dealt to each player by default, and the sizes the host can pick (config.rangHand) */
 export const RANG_HAND_SIZE = 7;
 export const RANG_HAND_SIZES = [5, 7, 10] as const;
+/** Rang: game time in minutes, the choices (config.rangTime); 0 = no limit */
+export const RANG_TIMES = [0, 3, 5] as const;
 /** Rang: cards picked for forgetting "last card", the choices (config.rangMissed) */
 export const RANG_MISSED_PENALTIES = [1, 2, 4] as const;
 /** Rang: the most cards a player may pick in one turn while looking for one that fits (the room setting goes from 1 to this) */
@@ -205,6 +207,8 @@ export interface GameConfig {
   rangHand: 5 | 7 | 10;
   /** Rang: cards picked for forgetting "last card", one of RANG_MISSED_PENALTIES (older apps don't send it: 2) */
   rangMissed: 1 | 2 | 4;
+  /** Rang: game time in minutes (0 = no limit); when it runs out everyone is ranked by the points they hold, fewest first (older apps don't send it: 0) */
+  rangTime: 0 | 3 | 5;
   /** Rang: put down 2 or more number cards of the same number in one go; the first must fit, the last one's colour is next (older apps don't send it: off) */
   rangDoubles: boolean;
   /** Bluff: Card Shields per player per game (0 = off): a shielded play of up to SHIELD_MAX_CARDS can't be called or peeked (older apps don't send it: 0) */
@@ -305,6 +309,10 @@ export interface RangView {
   penalty: number;
   /** the +2/+4 cards that make up the penalty, oldest first (e.g. [2, 2, 4, 4] for 12) */
   chain: number[];
+  /** game time on: ms left when this view was made; null with no limit */
+  msLeft: number | null;
+  /** the game ended because its time ran out */
+  timedOut: boolean;
   /** cards the player on turn has picked this turn, and the most allowed (config.rangPicks) */
   picks: number;
   maxPicks: number;

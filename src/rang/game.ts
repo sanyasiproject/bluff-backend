@@ -38,7 +38,7 @@ export interface RangState {
   dir: 1 | -1;
   topBy: string | null;
   /** the +4 on top that may still be challenged: who played it and whether they held the colour in play */
-  /** the unstacked +4 on top that may still be challenged, and the colour and player before it (a caught +4 is undone) */
+  /** the unstacked +4 on top that may still be challenged, and who played the card under it (a caught +4 goes back; its colour stays) */
   challengeable: { by: string; guilty: boolean; color?: RangColor | null; topBy?: string | null } | null;
 }
 
@@ -127,6 +127,10 @@ export class RangGame implements TableGame<RangCard> {
   challengeable: { by: string; guilty: boolean; color?: RangColor | null; topBy?: string | null } | null = null;
   /** ended because nobody could play and nothing was left to pick */
   stalled = false;
+  /** the game time ran out: everyone is ranked by the points they still hold */
+  timedOut = false;
+  /** game time on: when it runs out (ms since 1970, set by the room); null with no limit */
+  endsAt: number | null = null;
   /** turns in a row that passed by themselves without picking anything (a stuck table) */
   private idle = 0;
   /** cards the player on turn has picked this turn */
@@ -523,16 +527,15 @@ export class RangGame implements TableGame<RangCard> {
   challenge(id: string): GameEvent[] {
     this.assertTurn(id);
     if (!this.canChallenge(id)) throw new GameError('Only a +4 played on you can be challenged');
-    const { by, guilty, color, topBy } = this.challengeable!;
+    const { by, guilty, topBy } = this.challengeable!;
     const events = this.closeWindow(id);
     this.challengeable = null;
     this.penalty = 0;
     if (guilty) {
-      // caught: the +4 goes back to its player and the table is as it was before it; they also pick 4
+      // caught: the +4 goes back to its player, who also picks 4; the colour they named stays in play
       const four = this.pile.pop()!;
       this.hand(by).push(four);
       byColor(this.hand(by));
-      this.color = color ?? null;
       this.topBy = topBy ?? null;
       const s = this.stat(by);
       s.wilds = Math.max(0, (s.wilds ?? 0) - 1);
@@ -570,6 +573,7 @@ export class RangGame implements TableGame<RangCard> {
   /** the first one out, or both partners of their team */
   winners(): string[] {
     if (this.aborted || !this.over) return [];
+    if (this.timedOut) return this.timeWinners();
     if (this.teams) return [...((this.places[0] ? this.teamOf(this.places[0]) : this.winningTeam) ?? [])];
     return this.places.slice(0, 1);
   }
@@ -590,9 +594,35 @@ export class RangGame implements TableGame<RangCard> {
     return standingsOf(this.places, still, (id) => rangHandPoints(this.hand(id)));
   }
 
+  /** time up: the fewest points win, equal points share it; 2v2: the team with fewer points between them (both on a tie) */
+  private timeWinners(): string[] {
+    const still = this.order.filter((id) => !this.kicked.has(id) && !this.forfeited.has(id));
+    if (this.teams) {
+      const total = (team: string[]) => team.filter((id) => still.includes(id)).reduce((n, id) => n + rangHandPoints(this.hand(id)), 0);
+      const [a, b] = this.teams.map(total);
+      return a === b ? [...this.teams[0], ...this.teams[1]] : [...this.teams[a < b ? 0 : 1]];
+    }
+    const best = Math.min(...still.map((id) => rangHandPoints(this.hand(id))));
+    return still.filter((id) => rangHandPoints(this.hand(id)) === best);
+  }
+
+  /** the game time ran out before anyone went out: the game ends and everyone is ranked by points held */
+  timeUp(): GameEvent[] {
+    if (this.over) return [];
+    this.timedOut = true;
+    this.finishGame();
+    return [{ kind: 'gameOver', loserId: null }];
+  }
+
   /** the last place (most points left) plus anyone who walked out */
   losers(): string[] {
     if (this.aborted) return [];
+    if (this.timedOut) {
+      // everyone tied shares first: nobody loses
+      const won = this.winners();
+      if (this.teams) return this.order.filter((id) => !won.includes(id) && !this.kicked.has(id));
+      return [...this.forfeited, ...lastPlaced(this.standings(), this.places).filter((id) => !won.includes(id))];
+    }
     if (this.teams) {
       const won = this.winners();
       return won.length === 0 ? [] : this.order.filter((id) => !won.includes(id) && !this.kicked.has(id));

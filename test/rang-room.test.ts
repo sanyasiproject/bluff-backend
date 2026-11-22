@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { RangClock } from '../src/rang/clock.js';
 import { Room } from '../src/rooms.js';
 import { RANG_HAND_SIZE } from '../src/types.js';
 import { parseConfig } from '../src/validate.js';
@@ -92,5 +93,41 @@ describe('Rang in a room', () => {
     r.backToLobby(people[0].id);
     expect(r.rang).toBeNull();
     expect(r.view(people[0].id).rang).toBeNull();
+  });
+
+  describe('game time', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('sets the end with the deal, shows time left, and the clock ends the game when it runs out', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-22T10:00:00Z'));
+      const r = new Room('TIME');
+      const [asha, ravi] = [r.addMember('Asha'), r.addMember('Ravi')];
+      asha.hasRang = ravi.hasRang = true;
+      r.setConfig(asha.id, { ...RANG, rangTime: 3 });
+      r.start(asha.id);
+      expect(r.rang!.endsAt).toBe(Date.now() + 180_000);
+      expect(r.view(asha.id).rang!.msLeft).toBe(180_000);
+      const moves: string[][] = [];
+      const clock = new RangClock(
+        (room, events) => moves.push(room.announce(events).map((a) => a.text)),
+        () => true,
+      );
+      clock.wake(r);
+      vi.advanceTimersByTime(179_000);
+      expect(r.rang!.over).toBe(false);
+      vi.advanceTimersByTime(1_000);
+      expect(r.rang!.over).toBe(true);
+      expect(r.view(asha.id).rang!.timedOut).toBe(true);
+      expect(moves[0][0]).toMatch(/^Time's up! .+ (wins with|share first with) \d+ points$/);
+      clock.stop();
+    });
+
+    it('no limit by default', () => {
+      const { r, people } = room(['Asha', 'Ravi']);
+      expect(r.rang!.endsAt).toBeNull();
+      expect(r.view(people[0].id).rang!.msLeft).toBeNull();
+      expect(() => parseConfig({ decks: 1, bluffRule: 'one', game: 'rang', rangTime: 4 })).toThrow('Invalid settings');
+    });
   });
 });

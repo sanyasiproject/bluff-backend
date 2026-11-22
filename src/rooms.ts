@@ -27,6 +27,7 @@ import {
   type RangCard,
   type RangView,
   type Suit,
+  rangHandPoints,
   type GameConfig,
   type Phase,
   type PlayerPlays,
@@ -93,7 +94,7 @@ const SUIT_WORDS: Record<Suit, string> = { S: 'spades', H: 'hearts', D: 'diamond
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false, voice: true, kismat: false, seedhi: false, turnTimer: false, turnSec: 30, shields: 0, c7Power: false, rangPicks: 1, rangStack: true, rangChallenge: true, rangSwap: false, rangForce: false, rangHand: 7, rangMissed: 2, rangDoubles: false };
+  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false, voice: true, kismat: false, seedhi: false, turnTimer: false, turnSec: 30, shields: 0, c7Power: false, rangPicks: 1, rangStack: true, rangChallenge: true, rangSwap: false, rangForce: false, rangHand: 7, rangMissed: 2, rangDoubles: false, rangTime: 0 };
   /** game over with Saza on: the loser's new badge, which the winner may swap until the room goes back to the lobby */
   sazaPick: { loserId: string; winnerId: string } | null = null;
   /** a Bluff game */
@@ -595,6 +596,8 @@ export class Room {
       // 2v2 plays in slot order, so the teams alternate turns
       const seats = this.teamGame ? (this.slotIds().filter((id) => id !== null) as string[]) : this.players().map((m) => m.id);
       this.rang = new RangGame(seats, this.config, secureRandom, true, true);
+      // game time: when it runs out the room ends the game (RangClock in socket.ts)
+      this.rang.endsAt = this.config.rangTime ? Date.now() + this.config.rangTime * 60_000 : null;
       this.dealSecretCards();
       this.startReplay();
       return;
@@ -1080,6 +1083,8 @@ export class Room {
       dir: r.dir,
       penalty: r.penalty,
       chain: penaltyChain(r.pile, r.penalty),
+      msLeft: r.endsAt !== null && !r.over ? Math.max(0, r.endsAt - Date.now()) : null,
+      timedOut: r.timedOut,
       picks: r.picks,
       maxPicks: r.maxPicks(),
       playable: seated ? r.playable(meId).map((c) => c.id) : [],
@@ -1133,6 +1138,12 @@ export class Room {
         return e.auto && !this.isBot(e.playerId) ? ['room', `${n(e.playerId)} had no match and passed`] : null;
       case 'gameOver':
         if (r.aborted) return ['over', r.teams ? 'Game stopped, a team lost a player. No coins moved' : 'Game stopped, not enough players left. No coins moved'];
+        if (r.timedOut) {
+          const won = r.winners();
+          const pts = won.length > 0 ? rangHandPoints(r.hand(won[0])) : 0;
+          if (r.teams) return ['over', `Time's up! ${won.map(n).join(' and ')} ${won.length > 2 ? 'all share it' : 'win'} with the fewest points`];
+          return ['over', won.length > 1 ? `Time's up! ${won.map(n).join(' and ')} share first with ${pts} points` : `Time's up! ${n(won[0] ?? null)} wins with ${pts} points`];
+        }
         // 2v2: the first player out wins for both partners
         if (r.teams && r.winners().length > 0) return ['over', `Game over. ${r.winners().map(n).join(' and ')} win`];
         if (r.closed) return ['over', 'Game over. Only bots are left playing'];

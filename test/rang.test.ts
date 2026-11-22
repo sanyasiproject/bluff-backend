@@ -250,6 +250,32 @@ describe('rang: +2 and +4', () => {
   });
 });
 
+describe('rang: game time runs out', () => {
+  it('ranks everyone by points held, fewest first; equal points share the place, and a tie for first wins together', () => {
+    // a 3 + 9 = 12, b a Skip = 20, c 5 + 7 = 12, d a wild = 50
+    const g = table({ a: [rc('red', '3'), rc('blue', '9')], b: [rc('green', 'skip')], c: [rc('green', '5'), rc('yellow', '7')], d: [w('wild')] }, [rc('red', '1')], 'a', { stepwise: true });
+    expect(g.timeUp()).toEqual([{ kind: 'gameOver', loserId: null }]);
+    expect(g.over).toBe(true);
+    expect(g.timedOut).toBe(true);
+    expect(g.winners()).toEqual(['a', 'c']);
+    expect(['a', 'b', 'c', 'd'].map((id) => g.placeOf(id))).toEqual([1, 3, 1, 4]);
+    expect(g.losers()).toEqual(['d']);
+    expect(g.timeUp()).toEqual([]);
+  });
+
+  it('everyone level shares first and nobody loses; 2v2 goes by the team total', () => {
+    const level = table({ a: [rc('red', '4')], b: [rc('blue', '4')] }, [rc('red', '1')], 'a', { stepwise: true });
+    level.timeUp();
+    expect(level.winners()).toEqual(['a', 'b']);
+    expect(level.losers()).toEqual([]);
+    // teams a+c = 1 + 9 = 10, b+d = 3 + 4 = 7
+    const t = table({ a: [rc('red', '1')], b: [rc('blue', '3')], c: [rc('green', '9')], d: [rc('yellow', '4')] }, [rc('red', '2')], 'a', { config: { teams: true }, stepwise: true });
+    t.timeUp();
+    expect(t.winners()).toEqual(['b', 'd']);
+    expect(t.losers()).toEqual(['a', 'c']);
+  });
+});
+
 describe('rang: a long stack', () => {
   it('+2, +2, +4, +4 makes the next player pick 12', () => {
     const g = table(
@@ -279,9 +305,9 @@ describe('rang: a long stack', () => {
 describe('rang: +4 challenge', () => {
   const deck = () => Array.from({ length: 10 }, (_, i) => rc('yellow', String(i) as RangValue, 2));
 
-  it('guilty: the +4 goes back to its player, the table is as before it, they pick 4, and the challenger plays on', () => {
+  it('guilty: the +4 goes back to its player, who picks 4; the colour they named stays, and the challenger plays on', () => {
     const g = table(
-      { a: [rc('red', '3'), w('wild4'), rc('blue', '1')], b: [rc('red', '2'), rc('blue', '4')], c: [rc('red', '4'), rc('red', '6')] },
+      { a: [rc('red', '3'), w('wild4'), rc('blue', '1')], b: [rc('green', '2'), rc('blue', '4')], c: [rc('green', '4'), rc('red', '6')] },
       [rc('red', '5')],
       'a',
       { deck: deck(), config: { rangStack: false } },
@@ -298,14 +324,14 @@ describe('rang: +4 challenge', () => {
     // the +4 is back in a's hand, with the 4 picked: 2 left + the +4 + 4
     expect(g.hand('a')).toHaveLength(7);
     expect(ids(g.hand('a'))).toContain('rg-w-wild4-1');
-    // the pile and colour are as they were before the +4
+    // the +4 left the pile, but the colour a named (green) stays in play
     expect(g.top()!.id).toBe('rg-red-5-1');
     expect(g.pile).toHaveLength(1);
-    expect(g.color).toBe('red');
+    expect(g.color).toBe('green');
     expect(g.penalty).toBe(0);
     expect(g.turnId).toBe('b');
-    expect(ids(g.playable('b'))).toEqual(['rg-red-2-1']);
-    g.play('b', 'rg-red-2-1');
+    expect(ids(g.playable('b'))).toEqual(['rg-green-2-1']);
+    g.play('b', 'rg-green-2-1');
     expect(g.turnId).toBe('c');
   });
 
