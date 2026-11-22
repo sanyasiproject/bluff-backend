@@ -1,7 +1,11 @@
 import type { Crazy7Game } from './crazy7/game.js';
 import type { Game } from './game.js';
+import type { RangGame } from './rang/game.js';
 import type { GameEvent, TableGame } from './models.js';
-import { REPLAY_MAX_STEPS, type GameKind, type GameReplay, type Rank, type ReplayClaim, type ReplayPlayer, type ReplayStep } from './types.js';
+import { REPLAY_MAX_STEPS, type Card, type RangCard, type GameKind, type GameReplay, type Rank, type ReplayClaim, type ReplayPlayer, type ReplayStep } from './types.js';
+
+/** whichever game is on: Bluff and Crazy 7 use playing cards, Rang its own */
+type AnyTable = TableGame<Card> | TableGame<RangCard>;
 
 /** Records a game step by step while it runs; only public facts, plus Bluff's real cards when lies are shown */
 export class ReplayRecorder {
@@ -22,12 +26,12 @@ export class ReplayRecorder {
   ) {}
 
   /** the deal: card counts and whose turn it is */
-  start(table: TableGame, bluff: Game | null, c7: Crazy7Game | null, lines: string[] = []): void {
+  start(table: AnyTable, bluff: Game | null, c7: Crazy7Game | null, rang: RangGame | null = null, lines: string[] = []): void {
     this.steps.length = 0;
     this.ended = false;
     this.wild = bluff?.kismat ?? null;
     this.claim = null;
-    this.push(this.stepOf(table, bluff, c7, lines, []), false);
+    this.push(this.stepOf(table, bluff, c7, lines, [], rang), false);
   }
 
   /** the deal's opening lines once they're known */
@@ -36,10 +40,10 @@ export class ReplayRecorder {
   }
 
   /** one move: what was said and the table right after */
-  record(table: TableGame, bluff: Game | null, c7: Crazy7Game | null, lines: string[], events: GameEvent[]): void {
+  record(table: AnyTable, bluff: Game | null, c7: Crazy7Game | null, lines: string[], events: GameEvent[], rang: RangGame | null = null): void {
     if (this.steps.length === 0 || this.ended) return;
     this.ended = table.over;
-    this.push(this.stepOf(table, bluff, c7, lines, events), table.over);
+    this.push(this.stepOf(table, bluff, c7, lines, events, rang), table.over);
   }
 
   get length(): number {
@@ -67,7 +71,7 @@ export class ReplayRecorder {
     if (last) this.steps[this.max - 1] = step;
   }
 
-  private stepOf(table: TableGame, bluff: Game | null, c7: Crazy7Game | null, lines: string[], events: GameEvent[]): ReplayStep {
+  private stepOf(table: AnyTable, bluff: Game | null, c7: Crazy7Game | null, lines: string[], events: GameEvent[], rang: RangGame | null = null): ReplayStep {
     const step: ReplayStep = {
       lines: [...lines],
       turnId: table.over ? null : table.turnId,
@@ -76,6 +80,11 @@ export class ReplayRecorder {
     };
     if (c7) {
       step.top = c7.top() ? { ...c7.top()! } : null;
+      return step;
+    }
+    if (rang) {
+      step.rangTop = rang.top() ? { ...rang.top()! } : null;
+      step.rangColor = rang.color;
       return step;
     }
     const call = events.find((e) => e.kind === 'bluff');

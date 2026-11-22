@@ -98,7 +98,7 @@ export const SHIELD_MAX_CARDS = 2;
 export const BET_STEPS = [50, 100, 250, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000] as const;
 
 /** which game a room plays */
-export type GameKind = 'bluff' | 'crazy7';
+export type GameKind = 'bluff' | 'crazy7' | 'rang';
 
 /** how well Bluff bots play; the host picks it in the lobby (Crazy 7 bots always play their best) */
 export const BOT_LEVELS = ['normal', 'hard', 'expert'] as const;
@@ -111,7 +111,7 @@ export const BOT_STAKE_CAPS: Record<BotLevel, number> = { normal: 0, hard: 100, 
 
 /** the bot level that sets a table's stake cap: Crazy 7 bots always play their best, so they count as expert */
 export const stakeLevelOf = (config: { game?: GameKind; botLevel?: BotLevel }): BotLevel =>
-  config.game === 'crazy7' ? 'expert' : (config.botLevel ?? 'expert');
+  config.game === 'crazy7' || config.game === 'rang' ? 'expert' : (config.botLevel ?? 'expert');
 
 /** the most a table with bots may stake */
 export const botStakeCap = (config: { game?: GameKind; botLevel?: BotLevel }): number => BOT_STAKE_CAPS[stakeLevelOf(config)] ?? BOT_STAKE_CAPS.expert;
@@ -122,6 +122,36 @@ export const CRAZY7_HAND_SIZES = [5, 7] as const;
 export const CRAZY7_MAX_PICKS = 7;
 /** Crazy 7: cards the next player must pick for each 7 */
 export const SEVEN_PENALTY = 2;
+/** Crazy 7 with power cards: cards the next player must pick for each 2 (answered by a 2 or a 7 with Stack 7s on) */
+export const TWO_PENALTY = 2;
+/** Crazy 7 with power cards: J changes the suit (wild), 8 skips the next player, A reverses the direction, 2 makes the next player pick 2 */
+export const C7_POWER_RANKS = ['J', '8', 'A', '2'] as const;
+
+/** Rang: our own colour-card game. Four colours, numbers 0–9 and action cards */
+export const RANG_COLORS = ['red', 'blue', 'green', 'yellow'] as const;
+export type RangColor = (typeof RANG_COLORS)[number];
+export const RANG_VALUES = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'skip', 'reverse', 'draw2', 'wild', 'wild4'] as const;
+export type RangValue = (typeof RANG_VALUES)[number];
+/** a Rang card; wild and wild4 have no colour of their own */
+export interface RangCard {
+  id: string;
+  color: RangColor | null;
+  value: RangValue;
+}
+/** Rang: cards dealt to each player by default, and the sizes the host can pick (config.rangHand) */
+export const RANG_HAND_SIZE = 7;
+export const RANG_HAND_SIZES = [5, 7, 10] as const;
+/** Rang: cards picked for forgetting "last card", the choices (config.rangMissed) */
+export const RANG_MISSED_PENALTIES = [1, 2, 4] as const;
+/** Rang: the most cards a player may pick in one turn while looking for one that fits (the room setting goes from 1 to this) */
+export const RANG_MAX_PICKS = 7;
+/** Rang: cards picked for forgetting to say last card */
+export const RANG_MISSED_PENALTY = 2;
+/** Rang: a card's points for the final ranking: numbers their face value, Skip, Reverse and +2 20, wilds 50 (lower is better) */
+export const rangPoints = (c: Pick<RangCard, 'value'>): number =>
+  /^[0-9]$/.test(c.value) ? Number(c.value) : c.value === 'wild' || c.value === 'wild4' ? 50 : 20;
+/** Rang: total points of a hand; lower is better */
+export const rangHandPoints = (cards: Pick<RangCard, 'value'>[]): number => cards.reduce((n, c) => n + rangPoints(c), 0);
 
 export interface GameConfig {
   /** Bluff (default) or Crazy 7; older apps don't send it */
@@ -159,6 +189,24 @@ export interface GameConfig {
   turnTimer: boolean;
   /** turn timer: seconds a turn shows, one of TURN_SECONDS (older apps don't send it: 30) */
   turnSec: TurnSeconds;
+  /** Crazy 7: power cards J (change suit), 8 (skip), A (reverse) and 2 (pick 2) (older apps don't send it: off) */
+  c7Power: boolean;
+  /** Rang: most cards picked in one turn while looking for one that fits, 1 to RANG_MAX_PICKS (older apps don't send it: 1) */
+  rangPicks: number;
+  /** Rang: a +2 may be answered with a +2 or +4, and a +4 with a +4; the next player picks the total (older apps don't send it: on) */
+  rangStack: boolean;
+  /** Rang: the player hit by a +4 may challenge it; played while holding the colour in play, its player picks 4 instead; played fairly, the challenger picks 6 (older apps don't send it: on) */
+  rangChallenge: boolean;
+  /** Rang: a 7 swaps hands with a player of your choice, a 0 passes every hand on in the direction of play (older apps don't send it: off) */
+  rangSwap: boolean;
+  /** Rang: a picked card that fits is played at once (a wild names the colour held most, a 7 swaps with the fewest cards) (older apps don't send it: off) */
+  rangForce: boolean;
+  /** Rang: cards dealt to each player, one of RANG_HAND_SIZES (older apps don't send it: 7) */
+  rangHand: 5 | 7 | 10;
+  /** Rang: cards picked for forgetting "last card", one of RANG_MISSED_PENALTIES (older apps don't send it: 2) */
+  rangMissed: 1 | 2 | 4;
+  /** Rang: put down 2 or more number cards of the same number in one go; the first must fit, the last one's colour is next (older apps don't send it: off) */
+  rangDoubles: boolean;
   /** Bluff: Card Shields per player per game (0 = off): a shielded play of up to SHIELD_MAX_CARDS can't be called or peeked (older apps don't send it: 0) */
   shields: number;
 }
@@ -218,6 +266,69 @@ export type SazaBadge = (typeof SAZA_BADGES)[number]['id'];
 /** the catalog entry for a saza id, or null */
 export const sazaOf = (id: string | null | undefined) => SAZA_BADGES.find((b) => b.id === id) ?? null;
 
+/** one move at a Rang table, for seat labels and animations */
+export interface RangMove {
+  /** goes up by one with every move */
+  id: number;
+  kind: 'play' | 'pick' | 'penalty' | 'pass' | 'call' | 'missed' | 'shuffle' | 'challenge';
+  playerId: string | null;
+  /** the card played */
+  card: RangCard | null;
+  /** cards picked */
+  count: number;
+  /** play: the colour named with a wild; null otherwise */
+  color?: RangColor | null;
+  /** play with doubles: every card put down, in order (the last one is on top) */
+  cards?: RangCard[];
+  /** play: Force play put down the card just picked */
+  forced?: boolean;
+  /** play: the player skipped, or swapped with (7-0); challenge: who played the +4 */
+  targetId?: string | null;
+  /** challenge: the +4 was played while holding the colour in play */
+  guilty?: boolean;
+}
+
+/** the Rang table as one seat sees it */
+export interface RangView {
+  /** my cards (RoomView.hand stays empty in Rang) */
+  hand: RangCard[];
+  top: RangCard | null;
+  /** a few cards under the top, oldest first */
+  under: RangCard[];
+  /** the colour to match: the top card's, or the one named with a wild */
+  color: RangColor | null;
+  pileCount: number;
+  deckCount: number;
+  /** 1 clockwise (seat order), -1 after a Reverse */
+  dir: 1 | -1;
+  /** cards the player on turn must pick because of +2 / +4 (0 = none) */
+  penalty: number;
+  /** cards the player on turn has picked this turn, and the most allowed (config.rangPicks) */
+  picks: number;
+  maxPicks: number;
+  /** my cards that can go on the pile now; empty when it isn't my turn */
+  playable: string[];
+  canPick: boolean;
+  canPass: boolean;
+  canCall: boolean;
+  /** I was hit by a single +4 and may challenge it */
+  canChallenge: boolean;
+  /** cards I picked this turn */
+  picked: string[];
+  called: string[];
+  missed: string[];
+  atRisk: string | null;
+  last: RangMove | null;
+  /** goes up by one each time a turn starts */
+  turn: number;
+  /** something automatic is about to happen to the player on turn */
+  auto: boolean;
+  /** who put the top card down; null for the starting card */
+  topBy: string | null;
+  /** people without a seat see every hand; null for seated players */
+  watch: Record<string, RangCard[]> | null;
+}
+
 /** one move at a Crazy 7 table, for seat labels and animations */
 export interface Crazy7Move {
   /** goes up by one with every move */
@@ -265,6 +376,10 @@ export interface Crazy7View {
   auto: boolean;
   /** who put the top card down; null for the starting card */
   topBy: string | null;
+  /** power cards: the suit named with a J, which the next card must follow; null otherwise */
+  wish: Suit | null;
+  /** power cards: 1 in seat order, -1 after an A */
+  dir: 1 | -1;
 }
 
 export type Phase = 'lobby' | 'playing' | 'over';
@@ -716,6 +831,8 @@ export interface RoomView {
   leftPlayers: { id: string; name: string; registered: boolean; level: number | null }[];
   /** the Crazy 7 table while a Crazy 7 game is on, else null */
   crazy7: Crazy7View | null;
+  /** the Rang table while a Rang game is on, else null */
+  rang: RangView | null;
   /** game over with Saza on: who wears the new badge, and the winner who may still swap it; null otherwise */
   sazaPick: { loserId: string; winnerId: string } | null;
   /** a Bluff game is over: its lies, unless the host keeps them secret; null otherwise (never while the game runs) */
@@ -744,6 +861,8 @@ export interface LifetimeStats {
   chances: number;
   /** of gamesPlayed, how many were Crazy 7 (Bluff bots read only Bluff games) */
   crazy7Games: number;
+  /** of gamesPlayed, how many were Rang (older accounts: missing) */
+  rangGames?: number;
   /** XP from missions and secret mission cards (older accounts: 0) */
   bonusXp: number;
 }
@@ -795,7 +914,10 @@ export type MissionCounter =
   /** Crazy 7: "last card" said in time */
   | 'lastCalls'
   /** Crazy 7: a waiting 7 answered with your own 7 */
-  | 'stacks';
+  | 'stacks'
+  /** Rang games finished, and won */
+  | 'rangGames'
+  | 'rangWins';
 
 export type MissionPeriod = 'daily' | 'weekly';
 
@@ -818,6 +940,7 @@ export const MISSIONS: readonly MissionDef[] = [
   { id: 'd-win1', period: 'daily', emoji: '🏆', title: 'Win a game', counter: 'wins', goal: 1, coins: 200, xp: 40, social: false },
   { id: 'd-catch2', period: 'daily', emoji: '🕵️', title: 'Catch 2 liars in Bluff', counter: 'goodCalls', goal: 2, coins: 150, xp: 30, social: false },
   { id: 'd-sneak3', period: 'daily', emoji: '😎', title: 'Get 3 lies past everyone in Bluff', counter: 'cleanBluffs', goal: 3, coins: 150, xp: 30, social: false },
+  { id: 'd-ranggames2', period: 'daily', emoji: '🌈', title: 'Finish 2 games of Rang', counter: 'rangGames', goal: 2, coins: 150, xp: 30, social: false },
   { id: 'd-c7games2', period: 'daily', emoji: '7️⃣', title: 'Finish 2 games of Crazy 7', counter: 'crazy7Games', goal: 2, coins: 150, xp: 30, social: false },
   { id: 'd-sevens3', period: 'daily', emoji: '🃏', title: 'Play 3 sevens in Crazy 7', counter: 'sevens', goal: 3, coins: 150, xp: 30, social: false },
   { id: 'd-secret1', period: 'daily', emoji: '🤫', title: 'Complete a secret mission', counter: 'secrets', goal: 1, coins: 150, xp: 30, social: false },
@@ -837,6 +960,7 @@ export const MISSIONS: readonly MissionDef[] = [
   { id: 'w-wins5', period: 'weekly', emoji: '🏆', title: 'Win 5 games', counter: 'wins', goal: 5, coins: 1_200, xp: 200, social: false },
   { id: 'w-catch10', period: 'weekly', emoji: '🕵️', title: 'Catch 10 liars in Bluff', counter: 'goodCalls', goal: 10, coins: 1_000, xp: 150, social: false },
   { id: 'w-sneak12', period: 'weekly', emoji: '😎', title: 'Get 12 lies past everyone in Bluff', counter: 'cleanBluffs', goal: 12, coins: 1_000, xp: 150, social: false },
+  { id: 'w-rangwins3', period: 'weekly', emoji: '🌈', title: 'Win 3 games of Rang', counter: 'rangWins', goal: 3, coins: 1_000, xp: 150, social: false },
   { id: 'w-c7wins3', period: 'weekly', emoji: '7️⃣', title: 'Win 3 games of Crazy 7', counter: 'crazy7Wins', goal: 3, coins: 1_000, xp: 150, social: false },
   { id: 'w-secret5', period: 'weekly', emoji: '🤫', title: 'Complete 5 secret missions', counter: 'secrets', goal: 5, coins: 1_000, xp: 150, social: false },
   { id: 'w-friend5', period: 'weekly', emoji: '👯', title: 'Finish 5 games with friends', counter: 'friendGames', goal: 5, coins: 1_200, xp: 200, social: true },
@@ -901,6 +1025,9 @@ export const SECRET_MISSIONS: readonly SecretMissionDef[] = [
   { id: 'sevens2', game: 'crazy7', emoji: '7️⃣', title: 'Play two 7s', how: 'Any two 7s; one that answers a 7 counts too', goal: 2 },
   { id: 'stack7', game: 'crazy7', emoji: '🔁', title: 'Answer a 7 with your own 7', how: 'When a 7 makes you pick, play your own 7 instead (only dealt with Stack 7s on)', goal: 1 },
   { id: 'lastCard', game: 'crazy7', emoji: '📢', title: 'Say last card in time', how: 'Tap 📢 Last card before anyone else moves', goal: 1 },
+  { id: 'rgStack', game: 'rang', emoji: '➕', title: 'Answer a +2 or +4 with your own', how: 'When a +2 or +4 makes you pick, stack your own instead (only dealt with stacking on)', goal: 1 },
+  { id: 'rgWilds', game: 'rang', emoji: '🌈', title: 'Play two wilds', how: 'Any two Wild or Wild +4 cards', goal: 2 },
+  { id: 'rgLast', game: 'rang', emoji: '📢', title: 'Say last card in time', how: 'Tap 📢 Last card before anyone else moves', goal: 1 },
 ];
 
 /** the catalogue entry for a secret mission id, or null */
@@ -1151,6 +1278,8 @@ export interface MyGameStats {
   goodCalls: number;
   wrongCalls: number;
   pickedUp: number;
+  /** Crazy 7 and Rang: cards picked from the deck (older games: missing) */
+  picks?: number;
 }
 
 export interface GameSummary {
@@ -1452,6 +1581,9 @@ export interface ReplayStep {
   call?: { callerId: string; playerId: string; caught: boolean } | null;
   /** Crazy 7: the face-up card */
   top?: Card | null;
+  /** Rang: the face-up card and the colour to match */
+  rangTop?: RangCard | null;
+  rangColor?: RangColor | null;
 }
 
 /** a saved game's replay */

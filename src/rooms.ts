@@ -3,6 +3,8 @@ import { randomBytes, randomInt } from 'node:crypto';
 import { computeAwards } from './awards.js';
 import { cardName, describeClaim, ordinal, secureRandom } from './cards.js';
 import { Crazy7Game } from './crazy7/game.js';
+import { RangGame } from './rang/game.js';
+import { rangCardName, rangColorName } from './rang/names.js';
 import { Game, GameError } from './game.js';
 import type { GameEvent, GameRecord, Member, MemberAccount, TableGame, WatchRequest } from './models.js';
 import { dealSecrets, secretView } from './secrets.js';
@@ -21,6 +23,10 @@ import {
   type ChatKind,
   type CoinResult,
   type Crazy7View,
+  type Card,
+  type RangCard,
+  type RangView,
+  type Suit,
   type GameConfig,
   type Phase,
   type PlayerPlays,
@@ -68,16 +74,20 @@ export interface RoomLimits {
 
 export const DEFAULT_ROOM_LIMITS: RoomLimits = { createsPerIp: 10, liveRoomsPerIp: 5 };
 
+/** power cards: the suit a J names, spoken */
+const SUIT_WORDS: Record<Suit, string> = { S: 'spades', H: 'hearts', D: 'diamonds', C: 'clubs' };
+
 export class Room {
   members: Member[] = [];
   hostId = '';
-  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false, voice: true, kismat: false, seedhi: false, turnTimer: false, turnSec: 30, shields: 0 };
+  config: GameConfig = { game: 'bluff', decks: 1, bluffRule: 'one', stake: 0, peeks: 0, bets: false, teams: false, handSize: 7, maxPicks: 1, stack7: true, botLevel: 'expert', saza: false, secretLies: false, ranked: false, voice: true, kismat: false, seedhi: false, turnTimer: false, turnSec: 30, shields: 0, c7Power: false, rangPicks: 1, rangStack: true, rangChallenge: true, rangSwap: false, rangForce: false, rangHand: 7, rangMissed: 2, rangDoubles: false };
   /** game over with Saza on: the loser's new badge, which the winner may swap until the room goes back to the lobby */
   sazaPick: { loserId: string; winnerId: string } | null = null;
   /** a Bluff game */
   game: Game | null = null;
   /** a Crazy 7 game */
   c7: Crazy7Game | null = null;
+  rang: RangGame | null = null;
   /** the running game's steps for its replay; null in the lobby */
   replay: ReplayRecorder | null = null;
   startedAt: Date | null = null;
@@ -127,8 +137,8 @@ export class Room {
   }
 
   /** whichever game is on */
-  get table(): TableGame | null {
-    return this.game ?? this.c7;
+  get table(): TableGame<Card> | TableGame<RangCard> | null {
+    return this.game ?? this.c7 ?? this.rang;
   }
 
   get phase(): Phase {
@@ -178,6 +188,7 @@ export class Room {
       ready: false,
       hasReady: false,
       hasTwists: false,
+      hasRang: false,
       saza: null,
       shop: account?.shop ?? NO_WEAR,
       // logged-in people start a season at Bronze 0
@@ -390,7 +401,7 @@ export class Room {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Settings can only change in the lobby');
     // a ranked Bluff table is for people only (Crazy 7 keeps the setting but ignores it)
-    if (config.ranked && config.game !== 'crazy7' && this.hasBots) throw new GameError('Ranked tables are for people only. Remove the bots first');
+    if (config.ranked && (config.game ?? 'bluff') === 'bluff' && this.hasBots) throw new GameError('Ranked tables are for people only. Remove the bots first');
     // picking a stake above what the bots allow is refused; picking a lower bot level brings the stake down with it
     const sameBots = stakeLevelOf(config) === stakeLevelOf(this.config);
     if (this.hasBots && sameBots && config.stake > botStakeCap(config)) throw new GameError(botStakeText(config));
@@ -448,7 +459,7 @@ export class Room {
   /** a seated player in a 2v2 lobby */
   private teamLobbyMember(id: string): Member {
     if (this.phase !== 'lobby') throw new GameError('Teams can only change in the lobby');
-    if (!this.bluffTeams) throw new GameError('Turn on 2 vs 2 teams first');
+    if (!this.teamGame) throw new GameError('Turn on 2 vs 2 teams first');
     const m = this.member(id);
     if (m.watching) throw new GameError(`${m.name} is watching, not playing`);
     return m;
@@ -489,23 +500,28 @@ export class Room {
     if (this.phase !== 'lobby') throw new GameError('Game already started');
     if (this.players().length < 2) throw new GameError('Need at least 2 players');
     if (!this.players().some((m) => !m.bot)) throw new GameError('Someone has to play with the bots');
-    if (this.bluffTeams && this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
+    if (this.teamGame && this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
     if (this.rankedTable) {
       if (this.players().some((m) => m.bot)) throw new GameError('Ranked tables are for people only. Remove the bots first');
       const guests = this.players().filter((m) => !m.bot && !m.userId);
       if (guests.length > 0) throw new GameError(`Ranked games need everyone logged in: ${guests.map((m) => m.name).join(', ')}`);
     }
     // older apps can't show the Kismat card or make Seedhi claims
-    if (this.config.game !== 'crazy7' && (this.config.kismat || this.config.seedhi)) {
+    if ((this.config.game ?? 'bluff') === 'bluff' && (this.config.kismat || this.config.seedhi)) {
       const old = this.players().filter((m) => !m.bot && !m.hasTwists);
       if (old.length > 0) throw new GameError(`${old.map((m) => m.name).join(', ')} must update the app (reload it) to play with twists`);
+    }
+    // Rang and Crazy 7's power cards need an app that knows them
+    if (this.config.game === 'rang' || (this.config.game === 'crazy7' && this.config.c7Power)) {
+      const old = this.players().filter((m) => !m.bot && !m.hasRang);
+      if (old.length > 0) throw new GameError(`${old.map((m) => m.name).join(', ')} must update the app (reload it) to play ${this.config.game === 'rang' ? 'Rang' : 'with power cards'}`);
     }
     const waiting = this.waitingFor();
     if (waiting.length > 0) throw new GameError(`Waiting for ${waiting.map((m) => m.name).join(', ')} to be ready`);
   }
 
-  /** 2v2 is on and the game is Bluff (Crazy 7 keeps the setting but ignores it) */
-  private get bluffTeams(): boolean {
+  /** 2v2 is on and the game plays in teams: Bluff or Rang (Crazy 7 keeps the setting but ignores it) */
+  private get teamGame(): boolean {
     return this.config.teams && this.config.game !== 'crazy7';
   }
 
@@ -516,7 +532,7 @@ export class Room {
 
   /** a rated table: ranked is on and the game is Bluff (Crazy 7 keeps the setting but ignores it) */
   private get rankedTable(): boolean {
-    return this.config.ranked && this.config.game !== 'crazy7';
+    return this.config.ranked && (this.config.game ?? 'bluff') === 'bluff';
   }
 
   /** host swaps partners: the 1st player gets a different partner (the 2nd or the 4th seat, at random) */
@@ -524,7 +540,7 @@ export class Room {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Teams can only change in the lobby');
     const slots = this.slotIds();
-    if (!this.bluffTeams || slots.includes(null) || this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
+    if (!this.teamGame || slots.includes(null) || this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
     // partners hold slots 0 & 2; swapping slot 2 with slot 1 or 3 pairs slot 0 with someone new
     const a = this.member(slots[2]!);
     const b = this.member(slots[randomInt(2) === 0 ? 1 : 3]!);
@@ -559,6 +575,18 @@ export class Room {
     // every game starts with nobody away
     this.turnMisses.clear();
     this.turnClock = null;
+    if (this.config.game === 'rang') {
+      this.game = null;
+      this.c7 = null;
+      // stepwise like Crazy 7: automatic picks and passes come one at a time (RangAuto)
+      // 2v2 plays in slot order, so the teams alternate turns
+      const seats = this.teamGame ? (this.slotIds().filter((id) => id !== null) as string[]) : this.players().map((m) => m.id);
+      this.rang = new RangGame(seats, this.config, secureRandom, true, true);
+      this.dealSecretCards();
+      this.startReplay();
+      return;
+    }
+    this.rang = null;
     if (this.config.game === 'crazy7') {
       this.game = null;
       // stepwise: the automatic picks and passes come one at a time (Crazy7Auto), so people can follow them
@@ -580,22 +608,22 @@ export class Room {
     const g = this.table!;
     const name = (id: string) => this.members.find((m) => m.id === id)?.name ?? 'Someone';
     const players = g.order.map((id) => ({ id, name: name(id), bot: this.isBot(id) }));
-    this.replay = new ReplayRecorder(this.c7 ? 'crazy7' : 'bluff', players, !this.c7 && !this.config.secretLies);
-    this.replay.start(g, this.game, this.c7);
+    this.replay = new ReplayRecorder(this.c7 ? 'crazy7' : this.rang ? 'rang' : 'bluff', players, !!this.game && !this.config.secretLies);
+    this.replay.start(g, this.game, this.c7, this.rang);
   }
 
   /** one move for the replay: the lines the table heard and the table right after */
   recordStep(lines: string[], events: GameEvent[]): void {
     const g = this.table;
-    if (g && this.replay) this.replay.record(g, this.game, this.c7, lines, events);
+    if (g && this.replay) this.replay.record(g, this.game, this.c7, lines, events, this.rang);
   }
 
   /** every person at the new table gets a secret mission card for this game; bots get none, and no card the table's settings rule out */
   private dealSecretCards(): void {
     const order = this.table?.order ?? [];
     // Crazy 7 without Stack 7s can't answer a 7; with lies kept secret, cards that would show whether someone lied aren't dealt
-    const skip = this.c7 ? (this.config.stack7 ? [] : ['stack7']) : this.config.secretLies ? ['sneak2', 'bigLie', 'bait'] : [];
-    this.secretCards = dealSecrets(order.filter((id) => !this.isBot(id)), this.c7 ? 'crazy7' : 'bluff', secureRandom, skip);
+    const skip = this.rang ? (this.config.rangStack ? [] : ['rgStack']) : this.c7 ? (this.config.stack7 ? [] : ['stack7']) : this.config.secretLies ? ['sneak2', 'bigLie', 'bait'] : [];
+    this.secretCards = dealSecrets(order.filter((id) => !this.isBot(id)), this.rang ? 'rang' : this.c7 ? 'crazy7' : 'bluff', secureRandom, skip);
   }
 
   /** a person's secret card with live progress from their own game; null for bots, watchers and in the lobby */
@@ -661,6 +689,7 @@ export class Room {
     }
     this.game = null;
     this.c7 = null;
+    this.rang = null;
     this.replay = null;
     this.coinResults = null;
     this.sazaPick = null;
@@ -673,6 +702,7 @@ export class Room {
   endGame(by: string): GameEvent[] {
     this.assertHost(by);
     if (this.c7) throw new GameError('In Crazy 7 the first player out wins. Use Stop game instead');
+    if (this.rang) throw new GameError('In Rang the first player out wins. Use Stop game instead');
     return this.requireGame().endEarly();
   }
 
@@ -686,6 +716,11 @@ export class Room {
   requireGame(): Game {
     if (!this.game || this.game.over) throw new GameError('No game in progress');
     return this.game;
+  }
+
+  requireRang(): RangGame {
+    if (!this.rang || this.rang.over) throw new GameError('No Rang game in progress');
+    return this.rang;
   }
 
   requireCrazy7(): Crazy7Game {
@@ -770,12 +805,14 @@ export class Room {
     // g is whichever game is on; b only while it's Bluff
     const g = this.table;
     const b = this.game;
+    // the games played with playing cards (Rang has its own cards, in RoomView.rang)
+    const pc = this.game ?? this.c7;
     const lp = b?.lastPlay;
     // during a game the seats are that game's players; everyone else watches
     const seated = g ? g.order.flatMap((id) => this.members.filter((m) => m.id === id)) : this.players();
     const me = this.members.find((m) => m.id === meId);
     // 2v2 lobby: who sits in which team slot
-    const lobbySlots = !g && this.bluffTeams ? this.slotIds() : null;
+    const lobbySlots = !g && this.teamGame ? this.slotIds() : null;
     const seatedIds = new Set(seated.map((m) => m.id));
     return {
       code: this.code,
@@ -791,7 +828,7 @@ export class Room {
         table: m.table,
         connected: m.bot || m.socketId !== null,
         cardCount: g?.hands.get(m.id)?.length ?? 0,
-        handValue: g?.over ? handValue(g.hands.get(m.id) ?? []) : null,
+        handValue: g?.over && g.hands.has(m.id) ? g.handValueOf(m.id) : null,
         place: g ? g.placeOf(m.id) : null,
         registered: m.userId !== null,
         coins: m.coins,
@@ -827,16 +864,17 @@ export class Room {
       lastPlay: lp ? { id: lp.id, playerId: lp.playerId, count: lp.cards.length, rank: lp.rank, shielded: !!lp.shielded } : null,
       passedIds: b ? [...b.passed] : [],
       reveal: b?.reveal ?? null,
-      hand: [...(g?.hands.get(meId) ?? [])],
+      // Rang's cards are in RoomView.rang.hand
+      hand: [...(pc?.hands.get(meId) ?? [])],
       loserId: b?.loserId ?? null,
       loserIds: g?.over ? g.losers() : [],
       endedEarly: g?.endedEarly ?? false,
       awards: g?.over ? computeAwards(g.stats, g.config.game) : [],
       // only people without a seat see the cards; seated players never get this
       watch:
-        g && !seatedIds.has(meId)
+        pc && !seatedIds.has(meId)
           ? {
-              hands: Object.fromEntries(g.order.map((id) => [id, [...(g.hands.get(id) ?? [])]])),
+              hands: Object.fromEntries(pc.order.map((id) => [id, [...(pc.hands.get(id) ?? [])]])),
               lastPlayCards: lp ? [...lp.cards] : null,
             }
           : null,
@@ -864,6 +902,7 @@ export class Room {
           })
         : [],
       crazy7: this.c7 ? this.crazy7View(meId) : null,
+      rang: this.rang ? this.rangView(meId, seatedIds.has(meId)) : null,
       // set only at a Saza game's end, cleared back in the lobby
       sazaPick: this.sazaPick,
       // null until the game is over
@@ -876,7 +915,7 @@ export class Room {
 
   /** Saza is played: switched on, and the game is Bluff */
   private get sazaOn(): boolean {
-    return this.config.saza && this.config.game !== 'crazy7';
+    return this.config.saza && (this.config.game ?? 'bluff') === 'bluff';
   }
 
   /**
@@ -953,6 +992,8 @@ export class Room {
       turn: c.turnSeq,
       topBy: c.topBy,
       auto: c.autoDue,
+      wish: c.wish,
+      dir: c.dir,
     };
   }
 
@@ -971,6 +1012,7 @@ export class Room {
   private describe(e: GameEvent): [AnnounceKind, string] | null {
     const n = (id: string | null) => this.members.find((m) => m.id === id)?.name ?? 'Someone';
     if (this.c7) return this.describeCrazy7(e, n);
+    if (this.rang) return this.describeRang(e, n);
     switch (e.kind) {
       case 'play':
         return ['play', `${n(e.playerId)} played ${describeClaim(e.count, e.rank)}${e.shielded ? ' with a Card Shield 🔒' : ''}`];
@@ -1012,11 +1054,93 @@ export class Room {
     }
   }
 
+  private rangView(meId: string, seated: boolean): RangView {
+    const r = this.rang!;
+    const mine = seated ? (r.hands.get(meId) ?? []) : [];
+    return {
+      hand: [...mine],
+      top: r.top(),
+      under: r.pile.slice(-4, -1),
+      color: r.color,
+      pileCount: r.pile.length,
+      deckCount: r.deck.length,
+      dir: r.dir,
+      penalty: r.penalty,
+      picks: r.picks,
+      maxPicks: r.maxPicks(),
+      playable: seated ? r.playable(meId).map((c) => c.id) : [],
+      canPick: seated && r.canPick(meId),
+      canPass: seated && r.canPass(meId),
+      canCall: seated && r.canCall(meId),
+      canChallenge: seated && r.canChallenge(meId),
+      picked: seated && r.turnId === meId ? [...r.picked] : [],
+      called: [...r.called],
+      missed: [...r.missed],
+      atRisk: r.atRisk,
+      last: r.last ? { ...r.last } : null,
+      turn: r.turnSeq,
+      auto: r.autoDue,
+      topBy: r.topBy,
+      // only people without a seat see the cards; seated players never get this
+      watch: seated ? null : Object.fromEntries(r.order.map((id) => [id, [...(r.hands.get(id) ?? [])]])),
+    };
+  }
+
+  private describeRang(e: GameEvent, n: (id: string | null) => string): [AnnounceKind, string] | null {
+    const r = this.rang!;
+    switch (e.kind) {
+      case 'rgplay': {
+        // doubles: "played two red sevens"; Force play: the card just picked
+        const many = e.cards && e.cards.length > 1 ? `${e.cards.length === 2 ? 'two' : e.cards.length === 3 ? 'three' : e.cards.length} × ${rangCardName(e.card)}` : rangCardName(e.card);
+        const parts = [`${n(e.playerId)} played ${many}${e.forced ? ' (picked and played)' : ''}${e.targetId ? ` and swaps hands with ${n(e.targetId)}` : ''}`];
+        if (e.color && (e.card.value === 'wild' || e.card.value === 'wild4')) parts.push(`${rangColorName(e.color)} next`);
+        if (e.rotated) parts.push('Every hand moves on');
+        if (e.reversed && !e.skipped) parts.push('Play turns the other way');
+        if (e.skipped) parts.push(`${n(e.skipped)} is skipped`);
+        if (e.penalty > 0) parts.push(`Pick ${e.penalty}!`);
+        return ['play', parts.join('. ')];
+      }
+      case 'rgpenalty':
+        return ['pass', e.missed ? `${n(e.playerId)} picks ${e.count} and misses a turn` : `${n(e.playerId)} picks ${e.count}`];
+      case 'rgchallenge':
+        return [
+          'bluff',
+          e.guilty
+            ? `${n(e.playerId)} challenged the +4. Caught! ${n(e.targetId)} had the colour and picks ${e.count}`
+            : `${n(e.playerId)} challenged the +4, but it was fair. ${n(e.playerId)} picks ${e.count}`,
+        ];
+      case 'rgcall':
+        return ['round', `${n(e.playerId)}: last card!`];
+      case 'rgmissed':
+        return ['bluff', `Caught! ${n(e.playerId)} didn't say last card`];
+      case 'rgshuffle':
+        return ['room', 'The pile was shuffled into a new deck'];
+      case 'rgpass':
+        return e.auto && !this.isBot(e.playerId) ? ['room', `${n(e.playerId)} had no match and passed`] : null;
+      case 'gameOver':
+        if (r.aborted) return ['over', r.teams ? 'Game stopped, a team lost a player. No coins moved' : 'Game stopped, not enough players left. No coins moved'];
+        // 2v2: the first player out wins for both partners
+        if (r.teams && r.winners().length > 0) return ['over', `Game over. ${r.winners().map(n).join(' and ')} win`];
+        if (r.closed) return ['over', 'Game over. Only bots are left playing'];
+        if (r.stalled) return ['over', `Nobody can play and the deck is empty. ${n(r.places[0] ?? null)} wins with the fewest cards`];
+        return ['over', `Game over. ${n(r.places[0] ?? null)} wins`];
+      default:
+        return null;
+    }
+  }
+
   private describeCrazy7(e: GameEvent, n: (id: string | null) => string): [AnnounceKind, string] | null {
     const c = this.c7!;
     switch (e.kind) {
-      case 'c7play':
-        return ['play', `${n(e.playerId)} played ${cardName(e.card)}` + (e.penalty > 0 ? `. Pick ${e.penalty}!` : '')];
+      case 'c7play': {
+        const parts = [`${n(e.playerId)} played ${cardName(e.card)}`];
+        // power cards: the suit a J names, a reverse, a skip
+        if (e.wish) parts.push(`Next card must be ${SUIT_WORDS[e.wish]}`);
+        if (e.reversed && !e.skipped) parts.push('Play turns the other way');
+        if (e.skipped) parts.push(e.reversed ? `${n(e.playerId)} goes again` : `${n(e.skipped)} is skipped`);
+        if (e.penalty > 0) parts.push(`Pick ${e.penalty}!`);
+        return ['play', parts.join('. ')];
+      }
       case 'c7penalty':
         return ['pass', e.missed ? `${n(e.playerId)} picks ${e.count} and misses a turn` : `${n(e.playerId)} picks ${e.count}`];
       case 'c7call':

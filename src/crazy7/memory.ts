@@ -13,6 +13,8 @@ export class Crazy7Memory {
   readonly played = new Map<string, Card[]>();
   /** what each opponent can't be holding */
   readonly reads = new Map<string, OpponentRead>();
+  /** power cards: the suit named with the last J, until a card that isn't a J goes down */
+  wish: Suit | null = null;
 
   constructor(
     readonly meId: string,
@@ -33,6 +35,7 @@ export class Crazy7Memory {
       switch (e.kind) {
         case 'c7play': {
           this.pile.push(e.card);
+          this.wish = e.wish ?? null;
           const list = this.played.get(e.playerId) ?? [];
           list.push(e.card);
           this.played.set(e.playerId, list);
@@ -45,16 +48,17 @@ export class Crazy7Memory {
         case 'c7pick': {
           if (e.playerId === this.meId) break;
           const r = this.read(e.playerId);
-          // picked because nothing matched: no card of that suit or number in hand right then
-          if (e.forced && e.top) this.narrow(r, [e.top.suit], [e.top.rank]);
+          // picked because nothing matched: no card of that suit or number in hand right then (with power cards, no J either, and only the named suit counts after one)
+          if (e.forced && e.top && !this.config.c7Power) this.narrow(r, [e.top.suit], [e.top.rank]);
+          else if (e.forced && e.top) this.narrow(r, [this.wish ?? e.top.suit], this.wish ? ['J'] : [e.top.rank, 'J']);
           r.fresh += e.count;
           break;
         }
         case 'c7penalty': {
           if (e.playerId === this.meId) break;
           const r = this.read(e.playerId);
-          // took the pick without answering: no 7 in hand (only telling when stacking was allowed)
-          if (e.forced && !e.missed && this.config.stack7) this.narrow(r, [], ['7']);
+          // took the pick without answering: no 7 (or power 2) in hand (only telling when stacking was allowed)
+          if (e.forced && !e.missed && this.config.stack7) this.narrow(r, [], this.config.c7Power ? ['7', '2'] : ['7']);
           r.fresh += e.count;
           break;
         }
@@ -70,6 +74,7 @@ export class Crazy7Memory {
 
   /** lines memory up with the table: the top card shown is always the top of the pile */
   sync(c7: Crazy7View): void {
+    this.wish = c7.wish ?? null;
     const top = c7.top;
     if (top && this.pile[this.pile.length - 1]?.id !== top.id) {
       this.pile = this.pile.filter((c) => c.id !== top.id);

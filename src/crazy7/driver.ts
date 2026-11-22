@@ -157,7 +157,7 @@ export class Crazy7Bots {
       if (action.kind === 'play') {
         seat.forgot = g.hand(seat.id).length === 2 && this.rand() < (FORGET[seat.me.style] ?? 0.04);
         if (g.hand(seat.id).length === 2 && g.canCall(seat.id) && !seat.forgot) events.push(...g.call(seat.id));
-        events.push(...g.play(seat.id, action.cardId));
+        events.push(...g.play(seat.id, action.cardId, action.suit));
         if (g.atRisk === seat.id && g.canCall(seat.id) && !seat.forgot) events.push(...g.call(seat.id));
       } else if (action.kind === 'pick') {
         events.push(...g.pick(seat.id));
@@ -190,7 +190,7 @@ export class Crazy7Bots {
     };
     const anyBot = () => [...seats.keys()][Math.floor(this.rand() * seats.size)];
     for (const e of events) {
-      if (e.kind === 'c7play' && e.card.rank === '7') {
+      if (e.kind === 'c7play' && (e.card.rank === '7' || (room.config.c7Power && e.card.rank === '2'))) {
         say(e.playerId, e.penalty > 2 ? LINES.stacked : LINES.fired);
       } else if (e.kind === 'c7penalty' && !e.missed && e.count >= 2) {
         say(e.playerId, LINES.hit);
@@ -270,7 +270,7 @@ export class Crazy7Bots {
         const events: GameEvent[] = [];
         if (a.kind === 'play') {
           if (g.hand(id).length === 2 && g.canCall(id)) events.push(...g.call(id));
-          events.push(...g.play(id, a.cardId));
+          events.push(...g.play(id, a.cardId, a.suit));
           if (g.atRisk === id && g.canCall(id)) events.push(...g.call(id));
         } else if (a.kind === 'pick') events.push(...g.pick(id));
         else events.push(...g.pass(id));

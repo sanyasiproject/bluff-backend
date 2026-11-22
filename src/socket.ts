@@ -3,6 +3,8 @@ import { BotDriver } from './bots/driver.js';
 import { Crazy7Auto } from './crazy7/auto.js';
 import { TurnClock } from './turnClock.js';
 import { Crazy7Bots } from './crazy7/driver.js';
+import { RangAuto } from './rang/auto.js';
+import { RangBots } from './rang/driver.js';
 import { rankPlural } from './cards.js';
 import { GameError } from './game.js';
 import type { AccountInfo, GameEvent, GameRecord, Member, MemberAccount, PlayerLook, SocketHooks, SocketUser, WatchRequest } from './models.js';
@@ -41,6 +43,11 @@ import {
   parseName,
   parsePlayId,
   parseRank,
+  parseSuit,
+  parseRangCardId,
+  parseRangCardIds,
+  parseRangColor,
+  parseTargetId,
   parseShield,
   parseRtcSignal,
   parseSaza,
@@ -117,6 +124,8 @@ export function registerHandlers(
     bots.wake(room);
     c7bots.wake(room);
     c7auto.wake(room);
+    rangbots.wake(room);
+    rangauto.wake(room);
   };
 
   const publish = (room: Room, notes: Announcement[]) => {
@@ -152,6 +161,7 @@ export function registerHandlers(
     const over = all.some((e) => e.kind === 'gameOver');
     bots.observe(room, all);
     c7bots.observe(room, all);
+    rangbots.observe(room, all);
     const said = [...notes, ...room.announce(all), ...(over ? room.settleSaza() : [])];
     // the replay keeps each move with what the table heard
     if (all.length > 0 || said.length > 0) room.recordStep(said.map((a) => a.text), all);
@@ -169,6 +179,8 @@ export function registerHandlers(
     bots.forget(room);
     c7bots.forget(room);
     c7auto.forget(room);
+    rangbots.forget(room);
+    rangauto.forget(room);
     clock.forget(room);
     rooms.dropIfEmpty(room);
   };
@@ -189,11 +201,22 @@ export function registerHandlers(
     (room) => rooms.isOpen(room),
     botSpeed,
     // the same brain the bots use plays the turn
-    (room, id) => (room.c7 ? c7bots.playFor(room, id) : bots.playFor(room, id)),
+    (room, id) => (room.rang ? rangbots.playFor(room, id) : room.c7 ? c7bots.playFor(room, id) : bots.playFor(room, id)),
   );
 
   // Crazy 7's automatic picks and passes, one at a time at a pace people can follow
   const c7auto = new Crazy7Auto((room, events) => afterMove(room, events), (room) => rooms.isOpen(room), botSpeed);
+
+  // Rang's automatic picks and passes, and its bots, the same way
+  const rangauto = new RangAuto((room, events) => afterMove(room, events), (room) => rooms.isOpen(room), botSpeed);
+  const rangbots = new RangBots(
+    {
+      onMove: (room, events) => afterMove(room, events),
+      onChat: (room, chat) => io.to(room.code).emit('chat', chat),
+    },
+    (room) => rooms.isOpen(room),
+    botSpeed,
+  );
 
   // Crazy 7 bots: same table, their own brain
   const c7bots = new Crazy7Bots(
@@ -242,7 +265,7 @@ export function registerHandlers(
       } finally {
         room.starting = false;
       }
-    } else if (room.players().some((m) => m.bot) && room.config.game !== 'crazy7') {
+    } else if (room.players().some((m) => m.bot) && (room.config.game ?? 'bluff') === 'bluff') {
       // Bluff bots size people up from their latest record; staked games read it above with the balances
       if (room.starting) throw new GameError('Already starting');
       room.starting = true;
@@ -257,8 +280,9 @@ export function registerHandlers(
     const first = table.turnId ? room.member(table.turnId).name : 'Someone';
     const pot = stake > 0 ? `. Pot: ${formatCoins(stake * table.order.length)} coins` : '';
     // Crazy 7's first turn may already have picked a card for that player
-    const opening = room.c7?.opening ?? [];
+    const opening = room.c7?.opening ?? room.rang?.opening ?? [];
     c7bots.observe(room, opening);
+    rangbots.observe(room, opening);
     // the Kismat card is read out with the deal, so nobody misses it
     const kismat = room.game?.kismat;
     const wild = kismat ? [room.note('round', `🍀 Kismat card: ${rankPlural(kismat)} are wild this game`)] : [];
@@ -375,6 +399,8 @@ export function registerHandlers(
     socket.data.hasReady = (socket.handshake.auth as { ready?: unknown } | undefined)?.ready === true;
     // apps that show the Kismat card and Seedhi claims say so too
     socket.data.hasTwists = (socket.handshake.auth as { twists?: unknown } | undefined)?.twists === true;
+    // and apps with Rang and Crazy 7's power cards
+    socket.data.hasRang = (socket.handshake.auth as { rang?: unknown } | undefined)?.rang === true;
     next();
   });
 
@@ -449,6 +475,7 @@ export function registerHandlers(
       room.dropLive(member.id);
       member.hasReady = socket.data.hasReady === true;
       member.hasTwists = socket.data.hasTwists === true;
+      member.hasRang = socket.data.hasRang === true;
       socket.join(room.code);
       seat = next;
     };
@@ -789,11 +816,41 @@ export function registerHandlers(
       afterMove(room, game.callBluff(member.id, parsePlayId(p.playId), parseCardIndex(p.cardIndex), bet));
     });
 
+    // Rang: one card (a colour for a wild, a player for a 7 with 7-0 on), pick, end the turn, say last card, or challenge a +4
+    on('rang:play', (p) => {
+      const { room, member } = current();
+      room.markActive(member.id);
+      afterMove(room, room.requireRang().play(member.id, parseRangCardId(p.cardId), { color: parseRangColor(p.color), targetId: parseTargetId(p.targetId), extra: parseRangCardIds(p.extraIds) }));
+    });
+
+    on('rang:pick', () => {
+      const { room, member } = current();
+      room.markActive(member.id);
+      afterMove(room, room.requireRang().pick(member.id));
+    });
+
+    on('rang:pass', () => {
+      const { room, member } = current();
+      room.markActive(member.id);
+      afterMove(room, room.requireRang().pass(member.id));
+    });
+
+    on('rang:call', () => {
+      const { room, member } = current();
+      afterMove(room, room.requireRang().call(member.id));
+    });
+
+    on('rang:challenge', () => {
+      const { room, member } = current();
+      room.markActive(member.id);
+      afterMove(room, room.requireRang().challenge(member.id));
+    });
+
     // Crazy 7: one card on the pile, pick from the deck, end the turn, or say last card
     on('c7:play', (p) => {
       const { room, member } = current();
       room.markActive(member.id);
-      afterMove(room, room.requireCrazy7().play(member.id, parseCardId(p.cardId)));
+      afterMove(room, room.requireCrazy7().play(member.id, parseCardId(p.cardId), parseSuit(p.suit)));
     });
 
     on('c7:pick', () => {
@@ -927,6 +984,8 @@ export function registerHandlers(
     bots.prune();
     c7bots.prune();
     c7auto.prune();
+    rangbots.prune();
+    rangauto.prune();
     clock.prune();
   }, SWEEP_EVERY_MS);
   timer.unref();
@@ -936,6 +995,8 @@ export function registerHandlers(
       bots.stop();
       c7bots.stop();
       c7auto.stop();
+      rangbots.stop();
+      rangauto.stop();
       clock.stop();
     },
     /** a player changed their avatar, card back or table: their seat in any room shows it at once */

@@ -2,7 +2,7 @@ import { buildDeck, secureRandom, shuffle, type RandomInt } from '../cards.js';
 import { lastPlaced, standingsOf } from '../standings.js';
 import { GameError } from '../game.js';
 import type { BetResult, GameEvent, PlayerStats, TableGame } from '../models.js';
-import { CRAZY7_MAX_PICKS, handValue, RANKS, SEVEN_PENALTY, type Card, type Crazy7Move, type GameConfig, type Suit } from '../types.js';
+import { CRAZY7_MAX_PICKS, handValue, RANKS, SEVEN_PENALTY, TWO_PENALTY, type Card, type Crazy7Move, type GameConfig, type Suit } from '../types.js';
 
 /** everything needed to copy a game; bots simulate from copies */
 export interface Crazy7State {
@@ -20,11 +20,16 @@ export interface Crazy7State {
   atRisk: string | null;
   over: boolean;
   places: string[];
+  /** power cards: the suit named with a J, and the direction of play */
+  wish: Suit | null;
+  dir: 1 | -1;
 }
 
 // red and black alternate, so matching suits are easy to spot in a hand
 const SUIT_ORDER: Suit[] = ['S', 'H', 'C', 'D'];
 const SUIT_WORD: Record<Suit, string> = { S: 'spade', H: 'heart', D: 'diamond', C: 'club' };
+/** power cards never start the pile either */
+const NO_START_POWER: string[] = ['7', '2', '8', 'A', 'J'];
 
 const bySuit = (cards: Card[]) =>
   cards.sort((a, b) => SUIT_ORDER.indexOf(a.suit) - SUIT_ORDER.indexOf(b.suit) || RANKS.indexOf(a.rank) - RANKS.indexOf(b.rank));
@@ -81,6 +86,10 @@ export class Crazy7Game implements TableGame {
   turnSeq = 0;
   /** who put the top card down; null for the starting card */
   topBy: string | null = null;
+  /** power cards: the suit named with a J; null otherwise */
+  wish: Suit | null = null;
+  /** power cards: 1 in seat order, -1 after an A */
+  dir: 1 | -1 = 1;
   /** ended because nobody could play and nothing was left to pick */
   stalled = false;
   /** turns in a row that passed by themselves without picking anything (a stuck table) */
@@ -108,9 +117,10 @@ export class Crazy7Game implements TableGame {
     this.deck = shuffle(buildDeck(config.decks), rand);
     for (let i = 0; i < size; i++) for (const id of order) this.hand(id).push(this.deck.pop()!);
     for (const id of order) bySuit(this.hand(id));
-    // a 7 never starts the pile, so nobody is punished before anyone has played
+    // a 7 never starts the pile, so nobody is punished before anyone has played (nor a power card)
+    const bad = (card: Card) => (config.c7Power ? NO_START_POWER.includes(card.rank) : card.rank === '7');
     let first = this.deck.pop()!;
-    while (first.rank === '7') {
+    while (bad(first)) {
       this.deck.splice(rand(this.deck.length + 1), 0, first);
       first = this.deck.pop()!;
     }
@@ -133,6 +143,8 @@ export class Crazy7Game implements TableGame {
     g.atRisk = s.atRisk;
     g.over = s.over;
     g.places = [...s.places];
+    g.wish = s.wish ?? null;
+    g.dir = s.dir ?? 1;
     return g;
   }
 
@@ -152,6 +164,8 @@ export class Crazy7Game implements TableGame {
       atRisk: this.atRisk,
       over: this.over,
       places: [...this.places],
+      wish: this.wish,
+      dir: this.dir,
     };
   }
 
@@ -165,9 +179,16 @@ export class Crazy7Game implements TableGame {
     return this.pile[this.pile.length - 1] ?? null;
   }
 
-  /** the card may go on the pile now: same suit or number, or only a 7 while a penalty waits */
+  /** power cards are on: J, 8, A and 2 do something */
+  get power(): boolean {
+    return !!this.config.c7Power;
+  }
+
+  /** the card may go on the pile now: same suit or number, or only a 7 (or a power 2) while a penalty waits; a power J fits anything, and after it only the named suit or another J */
   fits(card: Card): boolean {
-    if (this.penalty > 0) return this.config.stack7 && card.rank === '7';
+    if (this.penalty > 0) return this.config.stack7 && (card.rank === '7' || (this.power && card.rank === '2'));
+    if (this.power && card.rank === 'J') return true;
+    if (this.power && this.wish) return card.suit === this.wish;
     const top = this.top();
     return !top || card.suit === top.suit || card.rank === top.rank;
   }
@@ -255,12 +276,14 @@ export class Crazy7Game implements TableGame {
     return n === 1 || (n === 2 && this.turnId === id);
   }
 
-  play(id: string, cardId: string): GameEvent[] {
+  /** suit: the suit named when the card is a J with power cards on */
+  play(id: string, cardId: string, suit?: Suit): GameEvent[] {
     this.assertTurn(id);
     const hand = this.hand(id);
     const card = hand.find((c) => c.id === cardId);
     if (!card) throw new GameError('You do not have that card');
     if (!this.fits(card)) throw new GameError(this.penaltyText() ?? this.matchText());
+    if (this.power && card.rank === 'J' && !suit) throw new GameError('Pick a suit for the J');
     const events = this.closeWindow(id);
     this.hands.set(id, hand.filter((c) => c !== card));
     this.pile.push(card);
@@ -272,10 +295,23 @@ export class Crazy7Game implements TableGame {
       if (this.penalty > 0) s.stacks = (s.stacks ?? 0) + 1;
       this.penalty += SEVEN_PENALTY;
       s.sevens = (s.sevens ?? 0) + 1;
+    } else if (this.power && card.rank === '2') {
+      const s = this.stat(id);
+      // a 2 answering a 7 or 2 that was waiting
+      if (this.penalty > 0) s.stacks = (s.stacks ?? 0) + 1;
+      this.penalty += TWO_PENALTY;
     }
     this.move('play', id, card, 0);
-    events.push({ kind: 'c7play', playerId: id, card, penalty: this.penalty });
     const left = this.hand(id).length;
+    let skipped: string | null = null;
+    if (!this.power) events.push({ kind: 'c7play', playerId: id, card, penalty: this.penalty });
+    else {
+      this.wish = card.rank === 'J' ? suit! : null;
+      // a last card wins straight away, whatever it is
+      const turn = left > 0 ? this.powerTurn(id, card) : { skipped: null, reversed: false };
+      skipped = turn.skipped;
+      events.push({ kind: 'c7play', playerId: id, card, penalty: this.penalty, wish: this.wish, skipped, reversed: turn.reversed });
+    }
     if (left === 0) {
       this.places.push(id);
       this.finishGame();
@@ -283,7 +319,7 @@ export class Crazy7Game implements TableGame {
     }
     if (left === 1 && !this.called.has(id)) this.atRisk = id;
     if (left > 1) this.called.delete(id);
-    return [...events, ...this.advance(id)];
+    return [...events, ...this.advance(skipped ?? id)];
   }
 
   /** takes the 7 penalty when one waits; otherwise picks one card (up to the room's limit per turn) */
@@ -361,6 +397,10 @@ export class Crazy7Game implements TableGame {
     return this.places.slice(0, 1);
   }
 
+  handValueOf(id: string): number {
+    return handValue(this.hand(id));
+  }
+
   /** once over: the winner, then everyone still in by lowest value of cards left (A 1 … K 13); walk-outs and removed players get none */
   placeOf(id: string): number | null {
     return this.standings().get(id) ?? null;
@@ -401,6 +441,15 @@ export class Crazy7Game implements TableGame {
     // a 7 aimed at them is gone with them
     this.penalty = 0;
     return this.startTurn(this.nextActive(id));
+  }
+
+  /** an 8 skips the next player; an A turns the direction round (with two players still in, it skips too) */
+  private powerTurn(id: string, card: Card): { skipped: string | null; reversed: boolean } {
+    if (card.rank === '8') return { skipped: this.nextActive(id), reversed: false };
+    if (card.rank !== 'A') return { skipped: null, reversed: false };
+    this.dir = this.dir === 1 ? -1 : 1;
+    const active = this.order.filter((p) => this.hand(p).length > 0);
+    return { skipped: active.length === 2 ? this.nextActive(id) : null, reversed: true };
   }
 
   private advance(fromId: string): GameEvent[] {
@@ -545,8 +594,9 @@ export class Crazy7Game implements TableGame {
 
   private nextActive(fromId: string): string | null {
     const start = this.order.indexOf(fromId);
-    for (let step = 1; step < this.order.length; step++) {
-      const id = this.order[(start + step) % this.order.length];
+    const n = this.order.length;
+    for (let step = 1; step < n; step++) {
+      const id = this.order[(((start + step * this.dir) % n) + n) % n];
       if (this.hand(id).length > 0) return id;
     }
     return null;
@@ -558,10 +608,12 @@ export class Crazy7Game implements TableGame {
 
   private penaltyText(): string | null {
     if (this.penalty === 0) return null;
-    return this.config.stack7 ? `Play a 7 or pick ${this.penalty} cards` : `Pick ${this.penalty} cards`;
+    if (!this.config.stack7) return `Pick ${this.penalty} cards`;
+    return this.power ? `Play a 7 or a 2 or pick ${this.penalty} cards` : `Play a 7 or pick ${this.penalty} cards`;
   }
 
   private matchText(): string {
+    if (this.power && this.wish) return `Play a ${SUIT_WORD[this.wish]} or a J`;
     const top = this.top()!;
     return `Play a ${SUIT_WORD[top.suit]} or a ${top.rank}`;
   }

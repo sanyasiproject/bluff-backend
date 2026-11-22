@@ -18,6 +18,12 @@ const RULES: AwardRule[] = [
   { emoji: '🧲', title: 'Card collector', score: (s) => s.pickedUp, detail: (n) => `picked up ${plural(n, 'card')}` },
 ];
 
+const RANG_RULES: AwardRule[] = [
+  { emoji: '➕', title: 'Stack attack', score: (s) => s.stacks ?? 0, detail: (n) => `answered ${plural(n, 'draw card')} with their own` },
+  { emoji: '🧲', title: 'Card collector', score: (s) => s.picks ?? 0, detail: (n) => `picked up ${plural(n, 'card')}` },
+  { emoji: '🙊', title: 'Forgot to call', score: (s) => s.missedCalls ?? 0, detail: (n) => `missed last card ${plural(n, 'time')}` },
+];
+
 const CRAZY7_RULES: AwardRule[] = [
   { emoji: '🎯', title: 'Sevens master', score: (s) => s.sevens ?? 0, detail: (n) => `played ${plural(n, 'seven')}` },
   { emoji: '🧲', title: 'Card collector', score: (s) => s.picks ?? 0, detail: (n) => `picked up ${plural(n, 'card')}` },
@@ -26,7 +32,7 @@ const CRAZY7_RULES: AwardRule[] = [
 
 /** highest score wins each award and ties share it; awards nobody earned are left out */
 export function computeAwards(stats: Map<string, PlayerStats>, game: GameKind = 'bluff'): Award[] {
-  return (game === 'crazy7' ? CRAZY7_RULES : RULES).flatMap((rule) => {
+  return (game === 'crazy7' ? CRAZY7_RULES : game === 'rang' ? RANG_RULES : RULES).flatMap((rule) => {
     const scored = [...stats].map(([id, s]) => ({ id, n: rule.score(s) }));
     const best = Math.max(0, ...scored.map((x) => x.n));
     if (best === 0) return [];

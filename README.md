@@ -95,6 +95,15 @@ XP, the daily ladder, kicks, leaving and Stop game work the same for both.
   nobody can play and nothing is left to pick, the fewest cards win.
 - Bluff's extras (bluff rule, peeks, bets, teams) stay in the settings but are ignored in Crazy 7; End game doesn't apply.
 - Lifetime stats count Crazy 7 games in `crazy7Games` (Bluff bots read only Bluff games); Crazy 7 picks don't count as cards picked up.
+- **Power cards** (`config.c7Power`, off by default): J goes on anything and names the next suit (`Crazy7Game.wish`; the next card follows it or is another J), 8 skips the next player, A reverses `dir` (a skip with 2 players), 2 makes the next player pick `TWO_PENALTY` (answered by a 2 or 7 with `stack7` on). The first pile card is never a power card. `c7:play` takes `suit` for a J.
+
+### Rang (third game, `config.game: 'rang'`, `src/rang/`)
+
+Our own colour-card game: 108 cards (`RangCard`: 4 colours × 0, two each of 1–9, Skip, Reverse, +2; 4 Wild, 4 Wild +4), 7 each, a number card starts the pile. Same rooms, seats, bots, coins, turn timer and tools as Crazy 7; the room holds `room.rang` (`RangGame`, stepwise like Crazy 7 with `RangAuto` for automatic steps) and the view `RoomView.rang` (`RangView`, my hand in `rang.hand`; `RoomView.hand` stays empty).
+- Match the colour in play (`RangGame.color`, set by a wild) or the value. Skip, Reverse (`dir`; a skip with 2 players), +2 and +4 as usual; a penalty means pick and lose the turn.
+- `rangPicks` (1–`RANG_MAX_PICKS`, default 1): keep picking until a card fits, up to the limit; Pass after a pick, like Crazy 7.
+- `rangStack` (default on): +2 answers +2, +4 answers either; the total grows. `rangChallenge` (default on): the player hit by a single +4 may challenge (`rang:challenge`): if its player held the colour in play they pick 4 and the challenger plays on, else the challenger picks 6. `rangSwap` (default off): a 7 swaps hands with a chosen player (`targetId`), a 0 passes every hand on; not on a last card.
+- Last card as in Crazy 7 (`rang:call`; missed: pick `RANG_MISSED_PENALTY`). First out wins; the rest are ranked by `rangHandPoints` (numbers face value, actions 20, wilds 50), the highest loses. Ranked, teams, Saza, Kismat/Seedhi, secret cards and habits are Bluff only.
 - Live games are stepwise: anything automatic (a pick when nothing matches, a turn that passes by itself, a 7's pick with stacking off,
   the missed-last-card penalty) happens one step at a time, about 1–1.5 s apart (`src/crazy7/auto.ts`, `RoomView.crazy7.auto` while one is
   due), so the table can follow it. Bots think at least 1.1 s (0.8 s after a pick). Simulations and rule tests keep the instant mode.
@@ -251,10 +260,15 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `game:pass` | – |
 | `game:bluff` | `{ playId, cardIndex?, bet? }` (`cardIndex` for the "pick one" rule; `bet` from `BET_STEPS`, at most the stake, coin games with bets on) |
 | `game:peek` | `{ playId, cardIndex }` → `{ card }` only to the player who peeks (rooms with peeks on) |
-| `c7:play` | `{ cardId }` (Crazy 7, your turn: one card of the top card's suit or number; only a 7 while a pick waits) |
+| `c7:play` | `{ cardId, suit? }` (Crazy 7, your turn: one card of the top card's suit or number; only a 7 while a pick waits) |
 | `c7:pick` | – (Crazy 7, your turn: pick one card, up to `maxPicks` a turn; while a 7's pick waits, take it) |
 | `c7:pass` | – (Crazy 7, your turn: stop picking early; only after a pick and while more picks are allowed) |
 | `c7:call` | – (Crazy 7: "last card", with one card left, or on your turn with two) |
+| `rang:play` | `{ cardId, color?, targetId? }` (Rang, your turn: a card that fits; `color` for a wild, `targetId` for a 7 with 7-0 on) |
+| `rang:pick` | – (Rang: pick one card, or take the waiting +2/+4) |
+| `rang:pass` | – (Rang: end the turn after picking) |
+| `rang:call` | – (Rang: "last card") |
+| `rang:challenge` | – (Rang: challenge the single +4 that hit you) |
 | `chat:send` | `{ kind: 'reaction' \| 'message', index, on? }` (`on: 'pile'`, reactions only, while a game is on: the emoji lands on the last play instead of floating up; a Quick Chat line also goes into the room's chat list) |
 | `room:say` | `{ text }` (1–`ROOM_CHAT_LENGTH` 200 characters, one line): a typed line for everyone in the room, sent to all as `room:msg` |
 | `room:messages` | → `{ messages }`: the room's chat list, oldest first (last `ROOM_CHAT_MAX` 500 lines, kept in memory only and gone when the room closes) |

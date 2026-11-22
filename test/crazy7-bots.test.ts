@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Crazy7Action, Crazy7Personality, Rand, SeatView } from '../src/crazy7/bot-models.js';
-import { candidates, CRAZY7_STYLES, makePersonality, seededRand, think } from '../src/crazy7/brain.js';
+import { candidates, CRAZY7_STYLES, fallback, makePersonality, seededRand, think } from '../src/crazy7/brain.js';
 import { Crazy7Game } from '../src/crazy7/game.js';
 import { Crazy7Memory } from '../src/crazy7/memory.js';
 import type { GameEvent } from '../src/models.js';
@@ -43,6 +43,8 @@ function viewFor(g: Crazy7Game, id: string): SeatView {
       missed: [...g.missed],
       atRisk: g.atRisk,
       last: g.last ? { ...g.last } : null,
+      wish: g.wish,
+      dir: g.dir,
     },
   };
 }
@@ -81,8 +83,10 @@ function playGame(config: GameConfig, kinds: Kind[], seed: number, limits: { bud
     if (action.kind === 'play') {
       const card = g.hand(id).find((c) => c.id === action.cardId)!;
       expect(g.fits(card)).toBe(true);
+      // a power J always names a suit
+      if (config.c7Power && card.rank === 'J') expect(action.suit).toBeTruthy();
       if (g.hand(id).length === 2 && g.canCall(id)) events.push(...g.call(id));
-      events.push(...g.play(id, action.cardId));
+      events.push(...g.play(id, action.cardId, action.suit));
       if (g.atRisk === id && g.canCall(id)) events.push(...g.call(id));
     } else if (action.kind === 'pick') {
       events.push(...g.pick(id));
@@ -120,6 +124,58 @@ describe('crazy 7 bots', () => {
     }
     expect(games).toBe(192);
   }, 120_000);
+
+  it('play whole games with power cards, making only legal moves', () => {
+    let games = 0;
+    let seed = 500;
+    let powerPlays = 0;
+    for (const stack7 of [true, false]) {
+      for (const maxPicks of [1, 3]) {
+        for (const decks of [1, 2] as const) {
+          for (const seats of [2, 3, 4, 5]) {
+            for (let k = 0; k < 2; k++) {
+              const config = { ...BASE, stack7, maxPicks, decks, c7Power: true };
+              const { g, missed } = playGame(config, Array(seats).fill('bot'), seed++, { budgetMs: 1, maxPlayouts: 2 });
+              expect(g.over).toBe(true);
+              expect(g.winners()).toHaveLength(1);
+              expect(missed).toEqual([]);
+              powerPlays += g.pile.filter((x) => ['J', '8', 'A', '2'].includes(x.rank)).length;
+              games++;
+            }
+          }
+        }
+      }
+    }
+    expect(games).toBe(64);
+    expect(powerPlays).toBeGreaterThan(0);
+  }, 120_000);
+
+  it('a J is offered once per suit, and the fallback names the suit held most', () => {
+    const g = Crazy7Game.fromState({
+      order: ['a', 'b'],
+      config: { ...BASE, c7Power: true },
+      hands: new Map([
+        ['a', [{ id: 'JS1', rank: 'J', suit: 'S' }, { id: '3D1', rank: '3', suit: 'D' }, { id: '4D1', rank: '4', suit: 'D' }, { id: '9C1', rank: '9', suit: 'C' }]],
+        ['b', [{ id: '5C1', rank: '5', suit: 'C' }]],
+      ]),
+      deck: [],
+      pile: [{ id: '6H1', rank: '6', suit: 'H' }],
+      turnId: 'a',
+      penalty: 0,
+      picks: 0,
+      picked: [],
+      called: new Set(),
+      missed: new Set(),
+      atRisk: null,
+      over: false,
+      places: [],
+      wish: null,
+      dir: 1,
+    });
+    const v = viewFor(g, 'a');
+    expect(candidates(v).filter((a) => a.kind === 'play').map((a) => (a.kind === 'play' ? a.suit : null))).toEqual(['S', 'H', 'D', 'C']);
+    expect(fallback(v)).toEqual({ kind: 'play', cardId: 'JS1', suit: 'D' });
+  });
 
   it('search bots beat simple players clearly', () => {
     const GAMES = 300;
@@ -190,5 +246,19 @@ describe('crazy 7 bots', () => {
     mem.observe([{ kind: 'c7play', playerId: 'x', card: { id: '9H1', rank: '9', suit: 'H' }, penalty: 0 }]);
     expect(x.fresh).toBe(0);
     expect(mem.pile.map((c) => c.id)).toEqual(['9H1']);
+  });
+});
+
+describe('crazy 7 bot memory with power cards', () => {
+  it('reads a forced pick after a J against the named suit, and rules out Js', () => {
+    const mem = new Crazy7Memory('me', { ...BASE, c7Power: true });
+    const jack = { id: 'JS1', rank: 'J' as const, suit: 'S' as const };
+    mem.observe([
+      { kind: 'c7play', playerId: 'y', card: jack, penalty: 0, wish: 'H', skipped: null, reversed: false },
+      { kind: 'c7pick', playerId: 'x', count: 1, forced: true, top: jack },
+    ]);
+    const x = mem.read('x');
+    expect([...x.voidSuits]).toEqual(['H']);
+    expect([...x.voidRanks]).toEqual(['J']);
   });
 });

@@ -44,7 +44,7 @@ function blend(prior: number, strength: number, evidence: Evidence[]): number {
 /** lifetime lie rate against the average, for accounts that have no saved habits yet */
 function lieLean(life: LifetimeStats | null | undefined): number {
   if (!life) return 1;
-  const games = life.gamesPlayed - (life.crazy7Games ?? 0);
+  const games = life.gamesPlayed - (life.crazy7Games ?? 0) - (life.rangGames ?? 0);
   if (games <= 0 || life.plays <= 0) return 1;
   const rate = (life.bluffs + PRIOR_LIES * 20) / (life.plays + 20);
   return clamp(rate / PRIOR_LIES, 0.3, 3.5);

@@ -1,5 +1,5 @@
 import { buildDeck } from '../cards.js';
-import type { Card, RoomView } from '../types.js';
+import { SUITS, type Card, type RoomView, type Suit } from '../types.js';
 import type { Crazy7Action, Crazy7Personality, Crazy7Style, OpponentRead, Rand, SeatView } from './bot-models.js';
 import { Crazy7Game, type Crazy7State } from './game.js';
 import { breaksRead, type Crazy7Memory } from './memory.js';
@@ -60,7 +60,28 @@ export function seatView(view: RoomView): SeatView | null {
   };
 }
 
-/** every different move open to me now (two identical cards from two decks count once) */
+/** a power J played now: it needs a suit named */
+const isWild = (v: { config: { c7Power?: boolean } }, c: Card | undefined) => !!v.config.c7Power && c?.rank === 'J';
+
+/** a card kept back as a shield against incoming picks: a 7, or a 2 with power cards on */
+const isShield = (power: boolean, c: Card | undefined) => c?.rank === '7' || (power && c?.rank === '2');
+
+/** the suit I hold most of, not counting Js (ties go to the first in SUITS); for naming with a J */
+export function longSuit(hand: Card[], skip?: Card): Suit {
+  const rest = hand.filter((c) => c !== skip && c.rank !== 'J');
+  let best: Suit = skip?.suit ?? SUITS[0];
+  let most = 0;
+  for (const s of SUITS) {
+    const n = count(rest, (c) => c.suit === s);
+    if (n > most) {
+      most = n;
+      best = s;
+    }
+  }
+  return best;
+}
+
+/** every different move open to me now (two identical cards from two decks count once); a power J once per suit */
 export function candidates(v: SeatView): Crazy7Action[] {
   const out: Crazy7Action[] = [];
   const seen = new Set<string>();
@@ -68,10 +89,12 @@ export function candidates(v: SeatView): Crazy7Action[] {
     const card = v.hand.find((c) => c.id === id);
     if (!card || seen.has(card.rank + card.suit)) continue;
     seen.add(card.rank + card.suit);
-    out.push({ kind: 'play', cardId: id });
+    if (isWild(v, card)) for (const suit of SUITS) out.push({ kind: 'play', cardId: id, suit });
+    else out.push({ kind: 'play', cardId: id });
   }
-  // picking or passing while a card fits only makes sense to keep a 7 back as a shield
-  const keepable = out.length === 0 || v.c7.penalty > 0 || v.c7.playable.every((id) => v.hand.find((c) => c.id === id)?.rank === '7');
+  // picking or passing while a card fits only makes sense to keep a 7 (or power 2) back as a shield
+  const power = !!v.config.c7Power;
+  const keepable = out.length === 0 || v.c7.penalty > 0 || v.c7.playable.every((id) => isShield(power, v.hand.find((c) => c.id === id)));
   if (v.c7.canPick && keepable) out.push({ kind: 'pick' });
   if (v.c7.canPass && keepable) out.push({ kind: 'pass' });
   if (out.length === 0 && v.c7.canPass) out.push({ kind: 'pass' });
@@ -80,7 +103,11 @@ export function candidates(v: SeatView): Crazy7Action[] {
 
 /** a move the rules always take: a matching card, else pick, else pass */
 export function fallback(v: SeatView): Crazy7Action {
-  if (v.c7.playable.length > 0) return { kind: 'play', cardId: v.c7.playable[0] };
+  if (v.c7.playable.length > 0) {
+    const cardId = v.c7.playable[0];
+    const card = v.hand.find((c) => c.id === cardId);
+    return isWild(v, card) ? { kind: 'play', cardId, suit: longSuit(v.hand, card) } : { kind: 'play', cardId };
+  }
   return v.c7.canPick ? { kind: 'pick' } : { kind: 'pass' };
 }
 
@@ -158,6 +185,8 @@ export function sample(v: SeatView, mem: Crazy7Memory, useReads: boolean, rand: 
     atRisk: v.c7.atRisk,
     over: false,
     places: [],
+    wish: v.c7.wish ?? null,
+    dir: v.c7.dir ?? 1,
   };
 }
 
@@ -168,25 +197,32 @@ const MIN_SAMPLES = 6;
 
 const count = (cards: Card[], ok: (c: Card) => boolean) => cards.reduce((n, c) => n + (ok(c) ? 1 : 0), 0);
 
-/** cards held by the next player still in */
+/** cards held by the next player still in (in the current direction) */
 function nextCount(g: Crazy7Game, id: string): number {
   const start = g.order.indexOf(id);
-  for (let step = 1; step < g.order.length; step++) {
-    const n = g.hand(g.order[(start + step) % g.order.length]).length;
+  const len = g.order.length;
+  for (let step = 1; step < len; step++) {
+    const n = g.hand(g.order[(((start + step * g.dir) % len) + len) % len]).length;
     if (n > 0) return n;
   }
   return 99;
 }
 
-/** a quick sensible move for any seat in a playout: keep your long suit alive, save 7s, fire them at a near-winner */
+/** a quick sensible move for any seat in a playout: keep your long suit alive, save 7s, fire them at a near-winner; power cards too */
 function quickCard(g: Crazy7Game, id: string, legal: Card[], rand: Rand): Card {
   const hand = g.hand(id);
   const next = nextCount(g, id);
+  const power = g.power;
+  const duel = g.order.filter((p) => g.hand(p).length > 0).length === 2;
   let best = legal[0];
   let bestScore = -Infinity;
   for (const c of legal) {
     let s = count(hand, (x) => x !== c && x.suit === c.suit) + 0.5 * count(hand, (x) => x !== c && x.rank === c.rank);
-    if (c.rank === '7') s += g.penalty > 0 ? 50 : next <= 2 ? 3 : -2.5;
+    if (isShield(power, c)) s += g.penalty > 0 ? 50 : next <= 2 ? 3 : -2.5;
+    // a J goes anywhere: keep it for when nothing else fits
+    else if (power && c.rank === 'J') s = count(hand, (x) => x !== c && x.suit === longSuit(hand, c)) - 2;
+    // a skip or reverse stops a near-winner, and with two players it's another turn
+    else if (power && (c.rank === '8' || c.rank === 'A')) s += (next <= 2 ? 2.5 : 0) + (duel ? 1 : 0);
     // with two cards left, a 7 kept as the last one answers any 7 aimed at you and wins
     else if (hand.length === 2 && hand.some((x) => x.rank === '7')) s += 2;
     s += rand() * 0.6;
@@ -198,15 +234,16 @@ function quickCard(g: Crazy7Game, id: string, legal: Card[], rand: Rand): Card {
   return best;
 }
 
-/** plays a card, saying "last card" with the second-last one (straight after, when a waiting 7 didn't allow it before) */
-function playCard(g: Crazy7Game, id: string, cardId: string): void {
+/** plays a card, saying "last card" with the second-last one (straight after, when a waiting 7 didn't allow it before); a power J names your longest suit unless told */
+function playCard(g: Crazy7Game, id: string, cardId: string, suit?: Suit): void {
   if (g.hand(id).length === 2 && g.canCall(id)) g.call(id);
-  g.play(id, cardId);
+  const card = g.hand(id).find((c) => c.id === cardId);
+  g.play(id, cardId, suit ?? (g.power && card?.rank === 'J' ? longSuit(g.hand(id), card) : undefined));
   if (g.atRisk === id && g.canCall(id)) g.call(id);
 }
 
 function apply(g: Crazy7Game, id: string, a: Crazy7Action): void {
-  if (a.kind === 'play') playCard(g, id, a.cardId);
+  if (a.kind === 'play') playCard(g, id, a.cardId, a.suit);
   else if (a.kind === 'pick') g.pick(id);
   else g.pass(id);
 }
@@ -244,11 +281,13 @@ export function playout(state: Crazy7State, first: Crazy7Action, meId: string, s
   return g.winners()[0] === meId ? 1 : 0.1 / (1 + g.hand(meId).length);
 }
 
-/** the next opponent still holding cards, by turn order */
+/** the next opponent still holding cards, by turn order (in the current direction) */
 function nextOpponent(v: SeatView): { id: string; cardCount: number } | null {
   const i = v.players.findIndex((p) => p.id === v.meId);
-  for (let step = 1; step < v.players.length; step++) {
-    const p = v.players[(i + step) % v.players.length];
+  const len = v.players.length;
+  const dir = v.c7.dir ?? 1;
+  for (let step = 1; step < len; step++) {
+    const p = v.players[(((i + step * dir) % len) + len) % len];
     if (p.cardCount > 0 && p.id !== v.meId) return p;
   }
   return null;
@@ -264,11 +303,19 @@ export function priors(v: SeatView, mem: Crazy7Memory, options: Crazy7Action[]):
   const k = next?.cardCount ?? 7;
   const read = next ? mem.reads.get(next.id) : undefined;
   const hasPlay = v.c7.playable.length > 0;
-  /** chance the next player holds nothing that answers this card */
-  const stuck = (c: Card): number => {
-    const answers = unknown.filter((x) => (c.rank === '7' ? x.rank === '7' : x.suit === c.suit || x.rank === c.rank));
+  const power = !!v.config.c7Power;
+  const duel = v.players.filter((p) => p.cardCount > 0).length === 2;
+  /** chance the next player holds nothing that answers this card (a J: the suit it names) */
+  const stuck = (c: Card, suit?: Suit): number => {
+    const shield = isShield(power, c);
+    const wild = power && c.rank === 'J';
+    const want = wild ? (suit ?? c.suit) : c.suit;
+    const answers = unknown.filter((x) =>
+      shield ? isShield(power, x) : (power && x.rank === 'J') || x.suit === want || (!wild && x.rank === c.rank),
+    );
     // what they surely lack makes them likelier to be stuck
-    const sure = !!read && read.fresh === 0 && (c.rank === '7' ? read.voidRanks.has('7') : read.voidSuits.has(c.suit) && read.voidRanks.has(c.rank));
+    const sure =
+      !!read && read.fresh === 0 && (shield ? read.voidRanks.has('7') : read.voidSuits.has(want) && (wild || read.voidRanks.has(c.rank)));
     const p = unknown.length > 0 ? (1 - answers.length / unknown.length) ** k : 0;
     return sure ? Math.max(p, 0.6) : p;
   };
@@ -278,10 +325,15 @@ export function priors(v: SeatView, mem: Crazy7Memory, options: Crazy7Action[]):
     const c = hand.find((x) => x.id === o.cardId);
     if (!c) return -5;
     if (v.c7.penalty > 0) return 5;
-    const sevens = count(hand, (x) => x.rank === '7');
-    let s = count(hand, (x) => x !== c && x.suit === c.suit) + 0.4 * count(hand, (x) => x !== c && x.rank === c.rank) + 3 * stuck(c);
-    // 7s are shields; fire one at a player about to go out, or when there are spares
-    if (c.rank === '7') s += k <= 2 ? 4 : sevens >= 2 ? -0.5 : -1.5;
+    const sevens = count(hand, (x) => isShield(power, x));
+    const suit = power && c.rank === 'J' ? (o.suit ?? c.suit) : c.suit;
+    let s = count(hand, (x) => x !== c && x.suit === suit) + 0.4 * count(hand, (x) => x !== c && x.rank === c.rank) + 3 * stuck(c, o.suit);
+    // 7s (and power 2s) are shields; fire one at a player about to go out, or when there are spares
+    if (isShield(power, c)) s += k <= 2 ? 4 : sevens >= 2 ? -0.5 : -1.5;
+    // a J fits anything: save it unless it's nearly the last card
+    else if (power && c.rank === 'J') s += hand.length <= 2 ? 1 : -1.5;
+    // a skip or reverse stops a near-winner, and with two players it's another turn
+    else if (power && (c.rank === '8' || c.rank === 'A')) s += (k <= 2 ? 2.5 : 0) + (duel ? 1 : 0);
     // with two cards left, keep the 7 as the last one: it answers any 7 aimed at you and wins
     else if (hand.length === 2 && sevens > 0) s += 1.5;
     return s;

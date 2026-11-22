@@ -1,4 +1,4 @@
-import type { Award, Card, CoinResult, GameConfig, GameReplay, InviteEvent, LifetimeStats, PlayReveal, Rank, RankDivisionId, SazaBadge, ShopLookKind } from './types.js';
+import type { Award, Card, CoinResult, GameConfig, GameReplay, InviteEvent, LifetimeStats, PlayReveal, Rank, RangCard, RangColor, RankDivisionId, SazaBadge, ShopLookKind, Suit } from './types.js';
 
 /** one of a player's plays this game with the true cards (server only); open: it never stood or was called (still waiting, or cut off by a walk-out or End game) */
 export interface LoggedPlay extends PlayReveal {
@@ -47,6 +47,8 @@ export interface Member {
   hasReady: boolean;
   /** their app knows the Bluff twists (Kismat card, Seedhi); a twist game waits for older apps to update */
   hasTwists: boolean;
+  /** their app has Rang and Crazy 7 power cards; such a game waits for older apps to update */
+  hasRang: boolean;
   /** Bluff's saza badge in this room: the last player wears it until they win a game here */
   saza: SazaBadge | null;
   /** shop looks they rent, each with the time it runs out (read at join and when they buy or switch) */
@@ -261,6 +263,8 @@ export interface PlayerStats {
   chances: number;
   /** Crazy 7: sevens played */
   sevens?: number;
+  /** Rang: wilds (and +4s) played */
+  wilds?: number;
   /** Crazy 7: times they forgot to say last card */
   missedCalls?: number;
   /** Crazy 7: cards picked (kept apart from Bluff's pickedUp, which feeds the Collector achievement) */
@@ -273,26 +277,28 @@ export interface PlayerStats {
   habits?: Habits;
 }
 
-/** what a room reads from whichever game is on (Bluff's Game or Crazy7Game) */
-export interface TableGame {
+/** what a room reads from whichever game is on (Bluff's Game, Crazy7Game or RangGame); C is that game's card */
+export interface TableGame<C extends { id: string } = Card> {
   readonly order: string[];
   readonly config: GameConfig;
-  readonly hands: Map<string, Card[]>;
+  readonly hands: Map<string, C[]>;
   readonly stats: Map<string, PlayerStats>;
   readonly kicked: Set<string>;
   readonly forfeited: Set<string>;
   readonly teams: [string[], string[]] | null;
   readonly bets: BetResult[];
   readonly endedEarly: boolean;
-  pile: Card[];
+  pile: C[];
   places: string[];
   turnId: string | null;
   over: boolean;
   aborted: boolean;
   closed: boolean;
-  hand(id: string): Card[];
+  hand(id: string): C[];
   /** finishing place; once over, everyone still in is ranked by fewest cards left */
   placeOf(id: string): number | null;
+  /** points of the cards a player still holds, for the final ranking (lower is better) */
+  handValueOf(id: string): number;
   winners(): string[];
   losers(): string[];
   leave(id: string): GameEvent[];
@@ -318,7 +324,8 @@ export type GameEvent =
   | { kind: 'finish'; playerId: string; place: number }
   | { kind: 'gameOver'; loserId: string | null }
   // Crazy 7
-  | { kind: 'c7play'; playerId: string; card: Card; penalty: number }
+  /** power cards: wish (the suit named with a J), skipped (by an 8, or an A with 2 players), reversed (by an A) */
+  | { kind: 'c7play'; playerId: string; card: Card; penalty: number; wish?: Suit | null; skipped?: string | null; reversed?: boolean }
   /** forced: picked automatically because nothing matched top */
   | { kind: 'c7pick'; playerId: string; count: number; forced: boolean; top: Card | null }
   /** missed: forgot last card; forced: had no 7 to answer with */
@@ -326,4 +333,15 @@ export type GameEvent =
   | { kind: 'c7pass'; playerId: string; auto: boolean }
   | { kind: 'c7call'; playerId: string }
   | { kind: 'c7missed'; playerId: string }
-  | { kind: 'c7shuffle'; count: number };
+  | { kind: 'c7shuffle'; count: number }
+  // Rang: color is the colour named with a wild; skipped by a Skip (or Reverse with 2 players); targetId swapped hands with a 7; rotated by a 0
+  // doubles: cards holds every card put down (card is the last, now on top); forced: played by Force play right after the pick
+  | { kind: 'rgplay'; playerId: string; card: RangCard; color: RangColor | null; penalty: number; skipped?: string | null; reversed?: boolean; targetId?: string | null; rotated?: boolean; cards?: RangCard[]; forced?: boolean }
+  | { kind: 'rgpick'; playerId: string; count: number; forced: boolean }
+  | { kind: 'rgpenalty'; playerId: string; count: number; missed: boolean; forced: boolean }
+  | { kind: 'rgpass'; playerId: string; auto: boolean }
+  | { kind: 'rgcall'; playerId: string }
+  | { kind: 'rgmissed'; playerId: string }
+  | { kind: 'rgshuffle'; count: number }
+  /** the hit player challenged a +4: guilty (played while holding the colour) means its player picks; else the challenger picks */
+  | { kind: 'rgchallenge'; playerId: string; targetId: string; guilty: boolean; count: number };

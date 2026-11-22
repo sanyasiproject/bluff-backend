@@ -371,3 +371,140 @@ describe('crazy 7 in a room', () => {
     expect(() => room.endGame(host.id)).toThrow('first player out wins');
   });
 });
+
+describe('crazy 7 power cards', () => {
+  const POWER = { c7Power: true };
+  const play = (events: GameEvent[]) => events.find((e) => e.kind === 'c7play') as Extract<GameEvent, { kind: 'c7play' }>;
+
+  it('J is wild: needs a suit, then only that suit or another J fits; any other card clears the wish', () => {
+    const g = table(
+      { a: [c('J', 'S'), c('5', 'C'), c('9', 'H')], b: [c('4', 'C'), c('J', 'D'), c('6', 'H')] },
+      [c('3', 'D')],
+      'a',
+      { config: POWER },
+    );
+    expect(ids(g.playable('a'))).toEqual(['JS1']);
+    expect(() => g.play('a', 'JS1')).toThrow('Pick a suit for the J');
+    expect(g.turnId).toBe('a');
+    expect(play(g.play('a', 'JS1', 'H'))).toMatchObject({ wish: 'H', skipped: null, reversed: false });
+    expect(g.wish).toBe('H');
+    expect(ids(g.playable('b'))).toEqual(['JD1', '6H1']);
+    expect(() => g.play('b', '4C1')).toThrow('Play a heart or a J');
+    // a J on a J names a new wish
+    g.play('b', 'JD1', 'C');
+    expect(g.wish).toBe('C');
+    expect(ids(g.playable('a'))).toEqual(['5C1']);
+    expect(play(g.play('a', '5C1')).wish).toBe(null);
+    expect(g.wish).toBe(null);
+  });
+
+  it('8 skips the next player', () => {
+    const g = table({ a: [c('8', 'H'), c('K', 'S')], b: [c('9', 'H'), c('2', 'S')], c: [c('5', 'H'), c('4', 'C')] }, [c('5', 'H')], 'a', {
+      config: POWER,
+    });
+    expect(play(g.play('a', '8H1'))).toMatchObject({ skipped: 'b', reversed: false });
+    expect(g.turnId).toBe('c');
+  });
+
+  it('A turns the direction round; with two players it acts as a skip', () => {
+    const g = table(
+      { a: [c('A', 'H'), c('K', 'H')], b: [c('9', 'H'), c('2', 'S')], c: [c('5', 'H'), c('4', 'H')] },
+      [c('5', 'H')],
+      'a',
+      { config: POWER },
+    );
+    expect(play(g.play('a', 'AH1'))).toMatchObject({ reversed: true, skipped: null });
+    expect(g.dir).toBe(-1);
+    expect(g.turnId).toBe('c');
+    g.play('c', '5H1');
+    expect(g.turnId).toBe('b');
+    // the copy keeps the direction for bots
+    expect(Crazy7Game.fromState(g.state()).dir).toBe(-1);
+
+    const duel = table({ a: [c('A', 'H'), c('K', 'H')], b: [c('9', 'H'), c('2', 'S')] }, [c('5', 'H')], 'a', { config: POWER });
+    expect(play(duel.play('a', 'AH1'))).toMatchObject({ reversed: true, skipped: 'b' });
+    expect(duel.turnId).toBe('a');
+  });
+
+  it('2 makes the next player pick 2; 2s and 7s stack on each other', () => {
+    const deck = [c('A', 'D'), c('Q', 'D'), c('J', 'D'), c('10', 'D'), c('9', 'D'), c('6', 'D'), c('5', 'D')];
+    const g = table(
+      { a: [c('2', 'H'), c('K', 'S'), c('3', 'C')], b: [c('7', 'C'), c('5', 'C'), c('6', 'S')], c: [c('2', 'C'), c('4', 'C'), c('9', 'S')] },
+      [c('5', 'H')],
+      'a',
+      { deck, config: POWER },
+    );
+    g.play('a', '2H1');
+    expect(g.penalty).toBe(2);
+    expect(ids(g.playable('b'))).toEqual(['7C1']);
+    expect(() => g.play('b', '5C1')).toThrow('Play a 7 or a 2 or pick 2 cards');
+    g.play('b', '7C1');
+    expect(g.penalty).toBe(4);
+    expect(g.stats.get('b')!.stacks).toBe(1);
+    g.play('c', '2C1');
+    expect(g.penalty).toBe(6);
+    expect(g.stats.get('c')!.stacks).toBe(1);
+    expect(g.pick('a').find((e) => e.kind === 'c7penalty')).toMatchObject({ playerId: 'a', count: 6 });
+    expect(g.turnId).toBe('b');
+  });
+
+  it('with stacking off, a 2 is picked for the next player who loses the turn', () => {
+    const g = table(
+      { a: [c('2', 'H'), c('K', 'S')], b: [c('2', 'C'), c('3', 'C')], c: [c('9', 'H'), c('4', 'C')] },
+      [c('5', 'H')],
+      'a',
+      { deck: [c('A', 'D'), c('Q', 'D'), c('10', 'D')], config: { ...POWER, stack7: false } },
+    );
+    const events = g.play('a', '2H1');
+    expect(events.find((e) => e.kind === 'c7penalty')).toMatchObject({ playerId: 'b', count: 2, forced: true });
+    expect(g.turnId).toBe('c');
+    expect(g.penalty).toBe(0);
+  });
+
+  it('a power card as the last card wins straight away', () => {
+    const g = table({ a: [c('8', 'H')], b: [c('9', 'H'), c('2', 'S')] }, [c('5', 'H')], 'a', { config: POWER });
+    g.called.add('a');
+    expect(kinds(g.play('a', '8H1'))).toEqual(['c7play', 'finish', 'gameOver']);
+    expect(g.winners()).toEqual(['a']);
+  });
+
+  it('skips and reverses in live games too', () => {
+    const g = table({ a: [c('8', 'H'), c('K', 'S')], b: [c('9', 'H'), c('2', 'S')], c: [c('3', 'C'), c('4', 'C')] }, [c('5', 'H')], 'a', {
+      deck: [c('6', 'D')],
+      config: POWER,
+    });
+    const live = Crazy7Game.fromState(g.state());
+    Object.defineProperty(live, 'stepwise', { value: true });
+    expect(kinds(live.play('a', '8H1'))).toEqual(['c7play']);
+    // b is skipped; c has nothing for the 8♥ and waits for the automatic pick
+    expect(live.turnId).toBe('c');
+    expect(live.autoDue).toBe(true);
+  });
+
+  it('never starts the pile with a power card', () => {
+    for (let i = 0; i < 60; i++) {
+      const g = new Crazy7Game(['a', 'b', 'c'], { ...CONFIG, ...POWER });
+      expect(['7', '2', '8', 'A', 'J']).not.toContain(g.top()!.rank);
+      const inHands = [...g.hands.values()].reduce((n, h) => n + h.length, 0);
+      expect(inHands + g.deck.length + g.pile.length).toBe(52);
+    }
+  });
+
+  it('with power off, J, 8, A and 2 are ordinary cards', () => {
+    const g = table(
+      { a: [c('J', 'S'), c('8', 'H'), c('K', 'C')], b: [c('A', 'H'), c('9', 'S')], c: [c('2', 'H'), c('4', 'C')] },
+      [c('5', 'H')],
+      'a',
+    );
+    expect(ids(g.playable('a'))).toEqual(['8H1']);
+    expect(g.play('a', '8H1')[0]).toEqual({ kind: 'c7play', playerId: 'a', card: c('8', 'H'), penalty: 0 });
+    expect(g.turnId).toBe('b');
+    g.play('b', 'AH1');
+    expect(g.dir).toBe(1);
+    expect(g.turnId).toBe('c');
+    g.play('c', '2H1');
+    expect(g.penalty).toBe(0);
+    expect(g.turnId).toBe('a');
+    expect(() => g.play('a', 'JS1')).toThrow('Play a heart or a 2');
+  });
+});

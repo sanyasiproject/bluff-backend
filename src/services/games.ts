@@ -13,6 +13,7 @@ import {
   SECRET_XP,
   xpOf,
   type CoinResult,
+  type GameKind,
   type GameSummary,
   type ReplayResponse,
   type LifetimeStats,
@@ -124,10 +125,10 @@ export class GameRecorder {
     const boostXpOf = (p: GamePlayerDoc & { memberId: string }) =>
       counts && p.userId && !p.kicked ? Math.round(xpOf(asLifetime(p)) * (boostOfP(p).xp - 1)) : 0;
 
-    if (finished) await this.addLifetimeStats(players, record.config.game === 'crazy7', (p) => secretXpOf(p) + boostXpOf(p));
+    if (finished) await this.addLifetimeStats(players, record.config.game ?? 'bluff', (p) => secretXpOf(p) + boostXpOf(p));
     if (finished) await this.updateWinStreaks(players);
     // how each person really plays, for the bots; a stopped game's plays count too
-    if (record.config.game !== 'crazy7') await this.addHabits(players);
+    if ((record.config.game ?? 'bluff') === 'bluff') await this.addHabits(players);
     // missions move only with games that count, like the daily ladder; finished ones are paid as they're saved
     const missionsDone = counts
       ? await this.countMissions(players, record.config, secretDone, (p) => boostOfP(p).coins, addBoostCoins)
@@ -135,14 +136,14 @@ export class GameRecorder {
     // the weekly friends league counts games of 2+ logged-in people that count; never coins
     const people = players.filter((p) => p.userId && !p.kicked);
     if (counts && people.length >= 2) {
-      const crazy7 = record.config.game === 'crazy7';
+      const bluff = (record.config.game ?? 'bluff') === 'bluff';
       await this.league
-        .count(people.map((p) => ({ userId: p.userId!, won: p.won, goodCalls: crazy7 ? 0 : p.stats.goodCalls, cleanBluffs: crazy7 ? 0 : Math.max(0, p.stats.bluffs - p.stats.caught) })))
+        .count(people.map((p) => ({ userId: p.userId!, won: p.won, goodCalls: bluff ? p.stats.goodCalls : 0, cleanBluffs: bluff ? Math.max(0, p.stats.bluffs - p.stats.caught) : 0 })))
         .catch((err: Error) => console.error('[league] could not count a game:', err.message));
     }
     // a ranked Bluff table that finished and counts moves each player's rank points (Crazy 7 is never ranked)
     const ranks =
-      counts && record.config.ranked && record.config.game !== 'crazy7' && people.length >= 2
+      counts && record.config.ranked && (record.config.game ?? 'bluff') === 'bluff' && people.length >= 2
         ? await this.ranked
             .rate(people.map((p) => ({ memberId: p.memberId, userId: p.userId!, won: p.won, place: p.place })), new Date(), record.config.teams)
             .catch((err: Error) => {
@@ -306,7 +307,9 @@ export class GameRecorder {
   }
 
   /** bonusXpOf: XP from the player's secret mission card this game */
-  private async addLifetimeStats<P extends GamePlayerDoc>(players: P[], crazy7: boolean, bonusXpOf: (p: P) => number): Promise<void> {
+  private async addLifetimeStats<P extends GamePlayerDoc>(players: P[], game: GameKind, bonusXpOf: (p: P) => number): Promise<void> {
+    // plays and chances feed the Bluff lie rate: only Bluff games add them
+    const bluff = game === 'bluff';
     const updates: AnyBulkWriteOperation<UserDoc>[] = players
       .filter((p) => p.userId && !p.kicked)
       .map((p) => ({
@@ -322,9 +325,10 @@ export class GameRecorder {
               'stats.goodCalls': p.stats.goodCalls,
               'stats.wrongCalls': p.stats.wrongCalls,
               'stats.cardsPickedUp': p.stats.pickedUp,
-              'stats.plays': p.stats.plays ?? 0,
-              'stats.chances': p.stats.chances ?? 0,
-              'stats.crazy7Games': crazy7 ? 1 : 0,
+              'stats.plays': bluff ? (p.stats.plays ?? 0) : 0,
+              'stats.chances': bluff ? (p.stats.chances ?? 0) : 0,
+              'stats.crazy7Games': game === 'crazy7' ? 1 : 0,
+              'stats.rangGames': game === 'rang' ? 1 : 0,
               'stats.bonusXp': bonusXpOf(p),
             },
           },
@@ -342,9 +346,10 @@ export class GameRecorder {
     onBoost: (memberId: string, extra: number) => void,
   ): Promise<Map<string, MissionDone[]>> {
     const crazy7 = config.game === 'crazy7';
+    const bluff = (config.game ?? 'bluff') === 'bluff';
     // ranked counts only where it rates: Bluff with 2+ logged-in people (bots can't sit at a ranked table)
     const counted = players.filter((p) => p.userId && !p.kicked);
-    const ranked = !!config.ranked && !crazy7 && counted.length >= 2;
+    const ranked = !!config.ranked && bluff && counted.length >= 2;
     // a failed friends lookup only loses this game's friends missions
     const friends = await this.friendPairs(counted.map((p) => p.userId!.toHexString())).catch((err: Error) => {
       console.error('[missions] could not read friends:', err.message);
@@ -358,18 +363,20 @@ export class GameRecorder {
       const tally: MissionCounts = {
         games: 1,
         wins: p.won ? 1 : 0,
-        goodCalls: crazy7 ? 0 : p.stats.goodCalls,
-        cleanBluffs: crazy7 ? 0 : Math.max(0, p.stats.bluffs - p.stats.caught),
+        goodCalls: bluff ? p.stats.goodCalls : 0,
+        cleanBluffs: bluff ? Math.max(0, p.stats.bluffs - p.stats.caught) : 0,
         crazy7Games: crazy7 ? 1 : 0,
         crazy7Wins: crazy7 && p.won ? 1 : 0,
+        rangGames: config.game === 'rang' ? 1 : 0,
+        rangWins: config.game === 'rang' && p.won ? 1 : 0,
         sevens: crazy7 ? (p.stats.sevens ?? 0) : 0,
         friendGames: withFriend ? 1 : 0,
         secrets: secretDone.has(p.memberId) ? 1 : 0,
-        bluffWins: !crazy7 && p.won ? 1 : 0,
-        bluffs: crazy7 ? 0 : p.stats.bluffs,
+        bluffWins: bluff && p.won ? 1 : 0,
+        bluffs: bluff ? p.stats.bluffs : 0,
         rankedGames: ranked ? 1 : 0,
         rankedWins: ranked && p.won ? 1 : 0,
-        teamWins: config.teams && !crazy7 && p.won ? 1 : 0,
+        teamWins: config.teams && bluff && p.won ? 1 : 0,
         friendWins: withFriend && p.won ? 1 : 0,
         lastCalls: crazy7 ? (p.stats.lastCalls ?? 0) : 0,
         stacks: crazy7 ? (p.stats.stacks ?? 0) : 0,
@@ -460,7 +467,7 @@ export class GameRecorder {
         coinChange: (me?.coinChange ?? 0) + (me?.betChange ?? 0),
         bonus: me?.bonus ?? 0,
         my: me
-          ? { bluffs: me.stats.bluffs, caught: me.stats.caught, goodCalls: me.stats.goodCalls, wrongCalls: me.stats.wrongCalls, pickedUp: me.stats.pickedUp }
+          ? { bluffs: me.stats.bluffs, caught: me.stats.caught, goodCalls: me.stats.goodCalls, wrongCalls: me.stats.wrongCalls, pickedUp: me.stats.pickedUp, picks: me.stats.picks ?? 0 }
           : null,
         myAwards: me ? g.awards.filter((a) => a.names.includes(me.name)).map((a) => ({ emoji: a.emoji, title: a.title })) : [],
         players: g.players.map((p) => ({ name: p.name, place: p.place, loser: p.loser, guest: p.guest, kicked: p.kicked ?? false, bot: p.bot ?? false })),

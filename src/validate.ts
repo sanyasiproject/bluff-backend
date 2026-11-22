@@ -7,9 +7,13 @@ import {
   CRAZY7_MAX_PICKS,
   GIFT_STEPS,
   MAX_CARD_SHIELDS,
+  RANG_MAX_PICKS,
+  RANG_HAND_SIZES,
+  RANG_MISSED_PENALTIES,
   MAX_PEEKS,
   QUICK_MESSAGES,
   RANKS,
+  RANG_COLORS,
   REACTIONS,
   sazaOf,
   STAKES,
@@ -22,6 +26,8 @@ import {
   type ChatKind,
   type GameConfig,
   type Rank,
+  type RangColor,
+  type Suit,
   type Role,
   type SazaBadge,
 } from './types.js';
@@ -59,7 +65,7 @@ export function parseConfig(p: Payload): GameConfig {
   const bets = p.bets === undefined ? false : typeof p.bets === 'boolean' ? p.bets : null;
   const teams = p.teams === undefined ? false : typeof p.teams === 'boolean' ? p.teams : null;
   // the game and its Crazy 7 settings came later; older apps don't send them
-  const game = p.game === undefined ? 'bluff' : p.game === 'bluff' || p.game === 'crazy7' ? p.game : null;
+  const game = p.game === undefined ? 'bluff' : p.game === 'bluff' || p.game === 'crazy7' || p.game === 'rang' ? p.game : null;
   const handSize = p.handSize === undefined ? 7 : (CRAZY7_HAND_SIZES as readonly unknown[]).includes(p.handSize) ? (p.handSize as 5 | 7) : null;
   const maxPicks =
     p.maxPicks === undefined ? 1 : Number.isInteger(p.maxPicks) && (p.maxPicks as number) >= 1 && (p.maxPicks as number) <= CRAZY7_MAX_PICKS ? (p.maxPicks as number) : null;
@@ -75,13 +81,24 @@ export function parseConfig(p: Payload): GameConfig {
   const seedhi = p.seedhi === undefined ? false : typeof p.seedhi === 'boolean' ? p.seedhi : null;
   const turnTimer = p.turnTimer === undefined ? false : typeof p.turnTimer === 'boolean' ? p.turnTimer : null;
   const shields = p.shields === undefined ? 0 : Number.isInteger(p.shields) && (p.shields as number) >= 0 && (p.shields as number) <= MAX_CARD_SHIELDS ? (p.shields as number) : null;
+  const bool = (v: unknown, fallback: boolean) => (v === undefined ? fallback : typeof v === 'boolean' ? v : null);
+  // Crazy 7 power cards and Rang's settings came later; older apps don't send them
+  const c7Power = bool(p.c7Power, false);
+  const rangPicks = p.rangPicks === undefined ? 1 : Number.isInteger(p.rangPicks) && (p.rangPicks as number) >= 1 && (p.rangPicks as number) <= RANG_MAX_PICKS ? (p.rangPicks as number) : null;
+  const rangStack = bool(p.rangStack, true);
+  const rangChallenge = bool(p.rangChallenge, true);
+  const rangSwap = bool(p.rangSwap, false);
+  const rangForce = bool(p.rangForce, false);
+  const rangDoubles = bool(p.rangDoubles, false);
+  const rangHand = p.rangHand === undefined ? 7 : (RANG_HAND_SIZES as readonly unknown[]).includes(p.rangHand) ? (p.rangHand as 5 | 7 | 10) : null;
+  const rangMissed = p.rangMissed === undefined ? 2 : (RANG_MISSED_PENALTIES as readonly unknown[]).includes(p.rangMissed) ? (p.rangMissed as 1 | 2 | 4) : null;
   const turnSec = p.turnSec === undefined ? TURN_TIMER.turnSec : (TURN_SECONDS as readonly unknown[]).includes(p.turnSec) ? (p.turnSec as TurnSeconds) : null;
   if (!decks || !bluffRule || stake === null || peeks === null || bets === null || teams === null) throw new GameError('Invalid settings');
-  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null || ranked === null || voice === null || kismat === null || seedhi === null || turnTimer === null || turnSec === null || shields === null) {
+  if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null || ranked === null || voice === null || kismat === null || seedhi === null || turnTimer === null || turnSec === null || shields === null || c7Power === null || rangPicks === null || rangStack === null || rangChallenge === null || rangSwap === null || rangForce === null || rangDoubles === null || rangHand === null || rangMissed === null) {
     throw new GameError('Invalid settings');
   }
   // Bluff's extras are kept while Crazy 7 is picked (it ignores them), so switching back keeps them; bets need coins at stake
-  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked, voice, kismat, seedhi, turnTimer, turnSec, shields };
+  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked, voice, kismat, seedhi, turnTimer, turnSec, shields, c7Power, rangPicks, rangStack, rangChallenge, rangSwap, rangForce, rangHand, rangMissed, rangDoubles };
 }
 
 // only the browsers' own push services: the server never posts to any other address a client sends
@@ -151,6 +168,40 @@ export function parseCardIds(value: unknown): string[] {
   const valid = Array.isArray(value) && value.length <= 104 && value.every((id) => typeof id === 'string' && id.length <= 8);
   if (!valid) throw new GameError('Invalid cards');
   return value as string[];
+}
+
+/** Crazy 7 power cards: the suit named with a J; undefined when not sent */
+export function parseSuit(value: unknown): Suit | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value !== 'S' && value !== 'H' && value !== 'D' && value !== 'C') throw new GameError('Invalid suit');
+  return value;
+}
+
+/** a Rang card id: rg-<colour or w>-<value>-<copy>, e.g. rg-red-7-2, rg-w-wild4-1 */
+export function parseRangCardId(value: unknown): string {
+  if (typeof value !== 'string' || !/^rg-(?:red|blue|green|yellow|w)-(?:[0-9]|skip|reverse|draw2|wild|wild4)-[1-4]$/.test(value)) throw new GameError('Invalid card');
+  return value;
+}
+
+/** Rang: the colour named with a wild; undefined when not sent */
+export function parseRangColor(value: unknown): RangColor | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string' || !(RANG_COLORS as readonly string[]).includes(value)) throw new GameError('Invalid colour');
+  return value as RangColor;
+}
+
+/** Rang doubles: the other cards put down with the first, in order; [] when not sent */
+export function parseRangCardIds(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 7) throw new GameError('Invalid cards');
+  return value.map(parseRangCardId);
+}
+
+/** Rang 7-0: the player to swap hands with; undefined when not sent */
+export function parseTargetId(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string' || value.length > 64) throw new GameError('Invalid player');
+  return value;
 }
 
 export function parseRank(value: unknown): Rank | undefined {

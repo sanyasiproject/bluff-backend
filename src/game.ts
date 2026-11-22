@@ -355,6 +355,10 @@ export class Game {
     return this.places.slice(0, 1);
   }
 
+  handValueOf(id: string): number {
+    return handValue(this.hand(id));
+  }
+
   /** once over: finishing order, then lowest value of cards left (A 1 … K 13); walk-outs, removed players and 2v2 seats that didn't finish get none */
   placeOf(id: string): number | null {
     return this.standings().get(id) ?? null;

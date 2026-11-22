@@ -2,7 +2,7 @@ import { fallback, seatView } from './crazy7/brain.js';
 import { GameError } from './game.js';
 import type { GameEvent } from './models.js';
 import type { Room } from './rooms.js';
-import { claimsAllowed, TURN_TIMER, type Announcement, type Card, type Rank } from './types.js';
+import { claimsAllowed, RANG_COLORS, TURN_TIMER, type Announcement, type Card, type Rank } from './types.js';
 
 type Timer = ReturnType<typeof setTimeout>;
 
@@ -17,6 +17,11 @@ function dueTurn(room: Room): { key: string; playerId: string } | null {
   const g = room.table;
   if (!g || g.over || !g.turnId || room.isBot(g.turnId)) return null;
   if (!room.members.some((m) => !m.bot && m.socketId !== null)) return null;
+  if (room.rang) {
+    // Rang's automatic picks and passes play themselves too
+    if (room.rang.autoDue) return null;
+    return { key: `rg|${room.rang.moveSeq}|${room.rang.turnSeq}`, playerId: g.turnId };
+  }
   if (room.c7) {
     // Crazy 7's automatic picks and passes play themselves
     if (room.c7.autoDue) return null;
@@ -54,9 +59,32 @@ function crazy7Move(room: Room, id: string): GameEvent[] {
   const events: GameEvent[] = [];
   if (action.kind === 'play') {
     if (g.hand(id).length === 2 && g.canCall(id)) events.push(...g.call(id));
-    events.push(...g.play(id, action.cardId));
+    events.push(...g.play(id, action.cardId, action.suit));
     if (g.atRisk === id && g.canCall(id)) events.push(...g.call(id));
   } else if (action.kind === 'pick') {
+    events.push(...g.pick(id));
+  } else {
+    events.push(...g.pass(id));
+  }
+  return events;
+}
+
+/** Rang: a card that fits (a wild names the colour held most, a 7 swaps with the smallest hand), else pick, else pass */
+function rangMove(room: Room, id: string): GameEvent[] {
+  const g = room.rang!;
+  const events: GameEvent[] = [];
+  const legal = g.playable(id);
+  if (legal.length > 0) {
+    const hand = g.hand(id);
+    const card = legal.find((c) => c.color !== null) ?? legal[0];
+    const most = RANG_COLORS.reduce((best, c) => (hand.filter((x) => x.color === c).length > hand.filter((x) => x.color === best).length ? c : best), RANG_COLORS[0]);
+    const others = g.order.filter((p) => p !== id && g.hand(p).length > 0);
+    const smallest = others.reduce<string | undefined>((best, p) => (!best || g.hand(p).length < g.hand(best).length ? p : best), undefined);
+    const swap = g.config.rangSwap && card.value === '7' && hand.length > 1;
+    if (hand.length === 2 && g.canCall(id)) events.push(...g.call(id));
+    events.push(...g.play(id, card.id, { color: card.color === null ? most : undefined, targetId: swap ? smallest : undefined }));
+    if (g.atRisk === id && g.canCall(id)) events.push(...g.call(id));
+  } else if (g.canPick(id)) {
     events.push(...g.pick(id));
   } else {
     events.push(...g.pass(id));
@@ -130,7 +158,7 @@ export class TurnClock {
     let events: GameEvent[];
     try {
       events = this.brain(room, id);
-      if (events.length === 0) events = room.c7 ? crazy7Move(room, id) : bluffMove(room, id);
+      if (events.length === 0) events = room.rang ? rangMove(room, id) : room.c7 ? crazy7Move(room, id) : bluffMove(room, id);
     } catch (err) {
       console.error('[turn timer] auto move failed:', (err as Error).message);
       return;

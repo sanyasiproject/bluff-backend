@@ -18,6 +18,9 @@ const COUNTERS: Record<string, (s: PlayerStats, plays: readonly LoggedPlay[]) =>
   sevens2: (s) => s.sevens ?? 0,
   stack7: (s) => s.stacks ?? 0,
   lastCard: (s) => s.lastCalls ?? 0,
+  rgStack: (s) => s.stacks ?? 0,
+  rgWilds: (s) => s.wilds ?? 0,
+  rgLast: (s) => s.lastCalls ?? 0,
 };
 
 /** one secret mission card of this game's kind for each person, at random; nobody shares a card while there are enough to go round; skip: cards this table can't do */

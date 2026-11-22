@@ -35,7 +35,8 @@ export interface OpponentRead {
 }
 
 /** a bot's choice on its turn */
-export type Crazy7Action = { kind: 'play'; cardId: string } | { kind: 'pick' } | { kind: 'pass' };
+/** suit: the suit named with a J when power cards are on */
+export type Crazy7Action = { kind: 'play'; cardId: string; suit?: Suit } | { kind: 'pick' } | { kind: 'pass' };
 
 /** the table exactly as one seat sees it */
 export interface SeatView {
