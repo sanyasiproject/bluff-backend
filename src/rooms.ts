@@ -881,8 +881,9 @@ export class Room {
 
   /**
    * A Bluff game just ended with Saza on: whoever won takes their badge off, and the last player gets a badge at random, which the
-   * winner may swap. When only bots were left holding cards, the one holding the most is last. 2v2, the host's End game and walk-outs
-   * leave no single last player, so no new badge then. Shown, not spoken: the game-over lines are read out just before.
+   * winner may swap. After the host's End game, or when only bots were left holding cards, last place is the highest card value left
+   * (one of them at random on a tie). 2v2 leaves no single last player, so no new badge then. Shown, not spoken: the game-over lines are
+   * read out just before.
    */
   settleSaza(rand: () => number = Math.random): Announcement[] {
     const g = this.game;
@@ -894,8 +895,9 @@ export class Room {
       m.saza = null;
       notes.push(this.note('room', `${m.name} won and the saza comes off!`));
     }
-    const holding = g.order.filter((id) => g.hand(id).length > 0);
-    const lastId = g.closed ? holding.reduce<string | null>((most, id) => (most && g.hand(most).length >= g.hand(id).length ? most : id), null) : g.loserId;
+    // ended before everyone finished: last place by card value (walk-outs aren't at the table to wear it)
+    const last = g.endedEarly || g.closed ? g.losers().filter((id) => !g.forfeited.has(id)) : [];
+    const lastId = g.endedEarly || g.closed ? (last.length > 0 ? last[Math.floor(rand() * last.length)] : null) : g.loserId;
     const loser = this.members.find((m) => m.id === lastId);
     if (!loser || g.teams || won.length === 0) return notes;
     const badge = SAZA_BADGES[Math.floor(rand() * SAZA_BADGES.length)];

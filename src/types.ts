@@ -172,6 +172,8 @@ export interface LieReveal {
   cards: Card[];
   /** someone called it, but the card turned over was real */
   survivedCall: boolean;
+  /** 🔒 under a Card Shield: nobody could call it */
+  shielded?: boolean;
 }
 
 /** one play in the game-over reveal: what was said and the real cards */
@@ -1432,6 +1434,8 @@ export interface ReplayClaim {
   rank: Rank;
   /** the real cards; missing when the room kept lies secret */
   cards?: Card[];
+  /** 🔒 under a Card Shield */
+  shielded?: boolean;
 }
 
 /** one moment of the game: the start, then one per move */

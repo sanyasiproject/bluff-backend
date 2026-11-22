@@ -307,6 +307,19 @@ describe('Card Shield', () => {
   });
 });
 
+describe('Card Shield in the lie reveal', () => {
+  it('marks a shielded lie that got past everyone', () => {
+    const [k, five, nine] = [card('K'), card('5'), card('9')];
+    const g = setup(['a', 'b'], { a: [k, five, nine], b: [card('2'), card('3')] }, { shields: 1 });
+    g.play('a', ids(k, five), 'K', true);
+    g.pass('b');
+    g.play('a', ids(nine), '9');
+    g.pass('b');
+    expect(g.over).toBe(true);
+    expect(g.lieRecap(() => 'x')!.lies).toEqual([{ playerId: 'a', rank: 'K', cards: [k, five], survivedCall: false, shielded: true }]);
+  });
+});
+
 describe('peek power', () => {
   it('shows one card of the last play to the player who peeks, up to the limit', () => {
     const [q, five] = [card('Q'), card('5')];

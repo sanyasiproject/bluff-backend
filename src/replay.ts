@@ -86,6 +86,7 @@ export class ReplayRecorder {
         count: play.cards.length,
         rank: play.rank,
         ...(this.cards ? { cards: play.cards.map((c) => ({ ...c })) } : {}),
+        ...(play.shielded && { shielded: true }),
       };
     }
     // a call clears the pile, but the step still shows the play it turned over

@@ -56,6 +56,21 @@ describe('replay steps', () => {
     expect(called.claim?.cards).toEqual([fake]);
   });
 
+  it('marks a claim under a Card Shield with 🔒', () => {
+    const { r, people } = room(['Asha', 'Ravi'], parseConfig({ decks: 1, bluffRule: 'all', shields: 1 }));
+    const [asha, ravi] = people;
+    const g = r.game!;
+    g.hands.set(asha.id, [card('2'), card('3')]);
+    g.hands.set(ravi.id, [card('5')]);
+    g.turnId = asha.id;
+    r.replay!.start(g, g, null);
+    move(r, g.play(asha.id, [g.hand(asha.id)[0].id], 'K', true));
+    move(r, g.pass(ravi.id));
+    const [, shielded] = r.snapshot('finished')!.replay!.steps;
+    expect(shielded.lines).toEqual(['Asha played one King with a Card Shield 🔒']);
+    expect(shielded.claim).toMatchObject({ playerId: asha.id, rank: 'K', shielded: true });
+  });
+
   it('never keeps played cards when lies are secret', () => {
     const { r, people } = room(['Asha', 'Ravi'], parseConfig({ decks: 1, bluffRule: 'all', secretLies: true }));
     const [asha, ravi] = people;

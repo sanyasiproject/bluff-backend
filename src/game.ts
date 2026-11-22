@@ -58,7 +58,7 @@ export class Game {
   /** how many times each player caught each other one lying ("caller>player") */
   private readonly catches = new Map<string, number>();
   /** every play with its true cards, for the reveal once the game is over; settled: it stood or was called, not cut off by a walk-out or End game */
-  private readonly playLog: { playId: string; playerId: string; rank: Rank; cards: Card[]; called: boolean; caught: boolean; settled: boolean }[] = [];
+  private readonly playLog: { playId: string; playerId: string; rank: Rank; cards: Card[]; called: boolean; caught: boolean; settled: boolean; shielded: boolean }[] = [];
 
   constructor(
     readonly order: string[],
@@ -154,7 +154,7 @@ export class Game {
     this.roundClaims.push({ rank: claim, n: cards.length });
     if (shield) this.shieldsUsed.set(playerId, (this.shieldsUsed.get(playerId) ?? 0) + 1);
     this.lastPlay = { id: randomUUID(), playerId, cards, rank: claim, ...(shield && { shielded: true }) };
-    this.playLog.push({ playId: this.lastPlay.id, playerId, rank: claim, cards, called: false, caught: false, settled: false });
+    this.playLog.push({ playId: this.lastPlay.id, playerId, rank: claim, cards, called: false, caught: false, settled: false, shielded: shield });
     // a bot's play that doesn't empty its hand: how people treat it is saved for the bots, once each person has had their chance at it
     if (this.bots.has(playerId) && hand.length > cards.length && !shield) {
       const people = this.order.filter((id) => !this.bots.has(id) && this.hand(id).length > 0 && this.partnerOf(id) !== playerId && this.bluffCallsLeft(id) > 0);
@@ -316,7 +316,7 @@ export class Game {
     const lies = [...away]
       .sort((a, b) => fakes(b) - fakes(a))
       .slice(0, LIE_RECAP_MAX)
-      .map((l) => ({ playerId: l.playerId, rank: l.rank, cards: [...l.cards], survivedCall: l.called }));
+      .map((l) => ({ playerId: l.playerId, rank: l.rank, cards: [...l.cards], survivedCall: l.called, ...(l.shielded && { shielded: true }) }));
     const players = this.order.map((id) => {
       const s = this.stat(id);
       return { playerId: id, name: nameOf(id), plays: s.plays, lies: s.bluffs, caught: s.caught };

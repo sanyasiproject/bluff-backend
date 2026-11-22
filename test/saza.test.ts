@@ -106,24 +106,37 @@ describe('saza for the loser', () => {
     expect(() => r.pickSaza(host.id, 'joker')).toThrow('Only the winner picks the saza');
   });
 
-  it("gives no new badge with Saza off, after 2v2, the host's End game or when only bots were left, but a win there takes one off", () => {
+  it("gives no new badge with Saza off, after 2v2, or when nobody won, but a win there takes one off; End game gives it to the highest card value", () => {
     const off = room(['Asha', 'Ravi'], parseConfig({ decks: 1, bluffRule: 'one' }));
     finish(off.r, off.host.id, off.people[1].id);
     expect(off.r.settleSaza()).toEqual([]);
     expect(sazaIn(off.r, off.host.id)).toEqual({ Asha: null, Ravi: null });
     expect(off.r.view(off.host.id).sazaPick).toBe(null);
 
-    // Ravi wears one, goes out first, and the host ends the game: he won, and nobody was left last
+    // Ravi wears one, goes out first, and the host ends the game: he won, and Meena holds the highest value (one King beats 2 + 3)
     const early = room(['Asha', 'Ravi', 'Meena']);
-    const ravi = early.people[1];
+    const [asha0, ravi, meena0] = early.people;
     ravi.saza = 'aloo';
     early.r.game!.hands.set(ravi.id, []);
+    early.r.game!.hands.set(asha0.id, [card('2'), card('3')]);
+    early.r.game!.hands.set(meena0.id, [card('K')]);
     early.r.game!.places.push(ravi.id);
     early.r.endGame(early.host.id);
     expect(early.r.phase).toBe('over');
-    expect(texts(early.r.settleSaza())).toEqual(['Ravi won and the saza comes off!']);
-    expect(Object.values(sazaIn(early.r, early.host.id))).toEqual([null, null, null]);
-    expect(early.r.view(early.host.id).sazaPick).toBe(null);
+    expect(texts(early.r.settleSaza(() => 0))).toEqual(['Ravi won and the saza comes off!', 'Meena gets the Joker saza 🤡']);
+    expect(sazaIn(early.r, early.host.id)).toEqual({ Asha: null, Ravi: null, Meena: 'joker' });
+    expect(early.r.view(early.host.id).sazaPick).toEqual({ loserId: meena0.id, winnerId: ravi.id });
+
+    // a tie for last: one of them at random
+    const tie = room(['Asha', 'Ravi', 'Meena']);
+    const [asha1, ravi1, meena1] = tie.people;
+    tie.r.game!.hands.set(ravi1.id, []);
+    tie.r.game!.hands.set(asha1.id, [card('5')]);
+    tie.r.game!.hands.set(meena1.id, [card('2'), card('3')]);
+    tie.r.game!.places.push(ravi1.id);
+    tie.r.endGame(tie.host.id);
+    tie.r.settleSaza(() => 0.99);
+    expect(tie.r.view(tie.host.id).sazaPick?.loserId).toBe(meena1.id);
 
     // 2v2: Asha walks out, so Ravi's team wins; his badge comes off and nobody gets one
     const teams = room(['Asha', 'Ravi', 'Meena', 'Kiran'], { ...SAZA, teams: true });
