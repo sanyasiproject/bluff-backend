@@ -29,6 +29,8 @@ import {
   type SecretView,
   type ThrowEvent,
   TURN_TIMER,
+  ROOM_CHAT_MAX,
+  type RoomMessage,
 } from './types.js';
 
 /** why a stake is too high for the bots at the table, for players to read */
@@ -107,6 +109,9 @@ export class Room {
   turnClock: { key: string; playerId: string; endsAt: number } | null = null;
   /** turn timer: timed-out turns in a row, by member id */
   turnMisses = new Map<string, number>();
+  /** the room's chat list, oldest first; gone with the room */
+  messages: RoomMessage[] = [];
+  private messageSeq = 0;
 
   constructor(readonly code: string) {}
 
@@ -688,6 +693,20 @@ export class Room {
   }
 
   /** on 'pile': an emoji dropped on the last play, only while a game is on */
+  /** a line for the room's chat list; the oldest drop off past ROOM_CHAT_MAX */
+  addMessage(by: string, text: string, quick: boolean): RoomMessage {
+    const m = this.member(by);
+    if (!quick) {
+      const now = Date.now();
+      if (now - (this.lastChat.get(by) ?? 0) < CHAT_GAP_MS) throw new GameError('Slow down');
+      this.lastChat.set(by, now);
+    }
+    const msg: RoomMessage = { id: ++this.messageSeq, from: m.id, name: m.name, username: m.username, text, at: Date.now(), quick };
+    this.messages.push(msg);
+    if (this.messages.length > ROOM_CHAT_MAX) this.messages.splice(0, this.messages.length - ROOM_CHAT_MAX);
+    return msg;
+  }
+
   chat(by: string, kind: ChatKind, index: number, on?: 'pile'): ChatEvent {
     this.member(by);
     if (on && (!this.table || this.table.over)) throw new GameError('Nothing to react to right now');

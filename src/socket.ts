@@ -11,6 +11,7 @@ import { Presence } from './presence.js';
 import { botStakeText, type Room, type RoomManager } from './rooms.js';
 import {
   BOT_LEVEL_NAMES,
+  QUICK_MESSAGES,
   botStakeCap,
   DEFAULT_CARD_BACK,
   DEFAULT_TABLE_THEME,
@@ -31,6 +32,7 @@ import {
   parseCardIds,
   parseCardIndex,
   parseChat,
+  parseRoomText,
   parseCode,
   parseConfig,
   parseFlag,
@@ -822,6 +824,20 @@ export function registerHandlers(
       const { room, member } = current();
       const { kind, index, on } = parseChat(p);
       io.to(room.code).emit('chat', room.chat(member.id, kind, index, on));
+      // Quick Chat lines go into the room's chat list too
+      if (kind === 'message' && !on) io.to(room.code).emit('room:msg', room.addMessage(member.id, QUICK_MESSAGES[index], true));
+    });
+
+    // room chat: type a line; everyone in the room gets it in their list
+    on('room:say', (p) => {
+      const { room, member } = current();
+      io.to(room.code).emit('room:msg', room.addMessage(member.id, parseRoomText(p.text), false));
+    });
+
+    // the room's whole chat list, for someone who just came in or reconnected
+    on('room:messages', () => {
+      const { room } = current();
+      return { messages: room.messages };
     });
 
     // an emoji flies from one person to another; everyone in the room sees it

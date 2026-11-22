@@ -14,6 +14,7 @@ import {
   STAKES,
   THROWS,
   TURN_SECONDS,
+  ROOM_CHAT_LENGTH,
   TURN_TIMER,
   type TurnSeconds,
   type BotLevel,
@@ -252,6 +253,14 @@ export function parseDmText(value: unknown): string {
   const text = typeof value === 'string' ? value.replace(/[^\P{Cc}\n]/gu, '').trim() : '';
   if (!text) throw new GameError('Type a message first');
   if ([...text].length > DM_MAX_LENGTH) throw new GameError(`Messages can be up to ${DM_MAX_LENGTH} characters`);
+  return text;
+}
+
+/** a typed room chat line: trimmed, one line, up to ROOM_CHAT_LENGTH characters */
+export function parseRoomText(value: unknown): string {
+  const text = typeof value === 'string' ? value.replace(/\p{Cc}/gu, ' ').replace(/\s+/g, ' ').trim() : '';
+  if (!text) throw new GameError('Type a message first');
+  if ([...text].length > ROOM_CHAT_LENGTH) throw new GameError(`Messages can be up to ${ROOM_CHAT_LENGTH} characters`);
   return text;
 }
 

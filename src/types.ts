@@ -1575,3 +1575,26 @@ export interface PassClaimResponse {
   shieldSwapped: boolean;
   user: PublicUser;
 }
+
+// ---- room chat: one message list per room, kept in memory while the room exists ----
+
+/** messages a room keeps (the oldest go first) */
+export const ROOM_CHAT_MAX = 500;
+/** longest typed room message, in characters */
+export const ROOM_CHAT_LENGTH = 200;
+
+/** one line in a room's chat: typed, or a Quick Chat line */
+export interface RoomMessage {
+  id: number;
+  /** sender's member id */
+  from: string;
+  /** sender's name when they sent it (kept after they leave) */
+  name: string;
+  /** sender's username, for muting; null for guests */
+  username: string | null;
+  text: string;
+  /** ms since epoch */
+  at: number;
+  /** a Quick Chat line (also shown as the usual bubble) */
+  quick: boolean;
+}
