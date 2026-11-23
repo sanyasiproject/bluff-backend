@@ -250,6 +250,38 @@ describe('rang: +2 and +4', () => {
   });
 });
 
+describe('rang: a +2/+4 when the cards run out', () => {
+  it('fewer cards left than the penalty: the player picks what there is and the turn goes on', () => {
+    const g = table({ a: [w('wild4'), rc('red', '1')], b: [rc('blue', '3'), rc('blue', '4')], c: [rc('red', '4'), rc('red', '6')] }, [rc('red', '5')], 'a', {
+      config: { rangChallenge: false },
+    });
+    g.play('a', 'rg-w-wild4-1', { color: 'red' });
+    expect(g.penalty).toBe(4);
+    expect(g.canPick('b')).toBe(true);
+    const events = g.pick('b');
+    // only the red 5 under the +4 could be shuffled back in
+    expect(events.find((e) => e.kind === 'rgpenalty')).toMatchObject({ playerId: 'b', count: 1 });
+    expect(g.hand('b')).toHaveLength(3);
+    expect(g.penalty).toBe(0);
+    expect(g.turnId).toBe('c');
+  });
+
+  it('nothing left to pick at all: the penalty picks 0, the turn is missed and the game goes on', () => {
+    const g = table({ a: [rc('red', '1'), rc('red', '2')], b: [rc('blue', '3'), rc('blue', '4')], c: [rc('red', '4'), rc('red', '6')] }, [w('wild4')], 'b', {
+      config: { rangChallenge: false },
+      color: 'red',
+      penalty: 4,
+    });
+    expect(g.canPick('b')).toBe(true);
+    const events = g.pick('b');
+    expect(events.find((e) => e.kind === 'rgpenalty')).toMatchObject({ playerId: 'b', count: 0 });
+    expect(g.hand('b')).toHaveLength(2);
+    expect(g.penalty).toBe(0);
+    expect(g.turnId).toBe('c');
+    expect(g.over).toBe(false);
+  });
+});
+
 describe('rang: game time runs out', () => {
   it('ranks everyone by points held, fewest first; equal points share the place, and a tie for first wins together', () => {
     // a 3 + 9 = 12, b a Skip = 20, c 5 + 7 = 12, d a wild = 50

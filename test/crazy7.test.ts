@@ -195,6 +195,30 @@ describe('crazy 7: sevens', () => {
   });
 });
 
+describe('crazy 7: a 7 when the cards run out', () => {
+  it('fewer cards left than the pick: the player picks what there is and the turn goes on', () => {
+    const g = table({ a: [c('7', 'H'), c('2', 'C')], b: [c('3', 'S'), c('4', 'S')], c: [c('9', 'H'), c('K', 'D')] }, [c('5', 'H')], 'a');
+    g.play('a', '7H1');
+    expect(g.penalty).toBe(2);
+    // only the 5 under the 7 could be shuffled back in
+    expect(g.pick('b').find((e) => e.kind === 'c7penalty')).toMatchObject({ playerId: 'b', count: 1 });
+    expect(g.hand('b')).toHaveLength(3);
+    expect(g.penalty).toBe(0);
+    expect(g.turnId).toBe('c');
+  });
+
+  it('nothing left to pick at all: the pick is 0, the turn is missed and the game goes on', () => {
+    const g = table({ a: [c('2', 'C'), c('3', 'C')], b: [c('3', 'S'), c('4', 'S')], c: [c('9', 'H'), c('K', 'D')] }, [c('7', 'H')], 'b');
+    g.penalty = 2;
+    expect(g.canPick('b')).toBe(true);
+    expect(g.pick('b').find((e) => e.kind === 'c7penalty')).toMatchObject({ playerId: 'b', count: 0 });
+    expect(g.hand('b')).toHaveLength(2);
+    expect(g.penalty).toBe(0);
+    expect(g.turnId).toBe('c');
+    expect(g.over).toBe(false);
+  });
+});
+
 describe('crazy 7: last card', () => {
   it('catches a player who goes down to one card without saying it: they pick 1 and miss a turn', () => {
     const deck = [c('2', 'D'), c('3', 'D'), c('4', 'D')];
