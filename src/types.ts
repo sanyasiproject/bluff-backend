@@ -337,6 +337,8 @@ export interface RangView {
   topBy: string | null;
   /** people without a seat see every hand; null for seated players */
   watch: Record<string, RangCard[]> | null;
+  /** 2v2: my partner's cards (only ever sent to their partner); null otherwise. Older servers don't send it */
+  partner?: RangCard[] | null;
 }
 
 /** one move at a Crazy 7 table, for seat labels and animations */

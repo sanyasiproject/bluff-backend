@@ -1102,6 +1102,8 @@ export class Room {
       topBy: r.topBy,
       // only people without a seat see the cards; seated players never get this
       watch: seated ? null : Object.fromEntries(r.order.map((id) => [id, [...(r.hands.get(id) ?? [])]])),
+      // 2v2: partners see each other's cards (as in Bluff); nobody else's
+      partner: seated && r.teams ? [...(r.hands.get(r.partnerOf(meId) ?? '') ?? [])] : null,
     };
   }
 

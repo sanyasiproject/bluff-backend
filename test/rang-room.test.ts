@@ -18,6 +18,30 @@ function room(names: string[]) {
 }
 
 describe('Rang in a room', () => {
+  it('2v2: each player gets their partner\'s cards, never an opponent\'s', () => {
+    const r = new Room('RTWO');
+    const people = ['Asha', 'Ravi', 'Kiran', 'Meera'].map((n) => r.addMember(n));
+    for (const p of people) p.hasRang = true;
+    r.setConfig(people[0].id, { ...RANG, teams: true });
+    r.start(people[0].id);
+    const g = r.rang!;
+    expect(g.teams).not.toBeNull();
+    for (const p of people) {
+      const v = r.view(p.id).rang!;
+      const mate = g.partnerOf(p.id)!;
+      expect(v.partner!.map((c) => c.id)).toEqual(g.hand(mate).map((c) => c.id));
+      // the two opponents' cards appear nowhere in this player's view
+      const others = people.map((x) => x.id).filter((id) => id !== p.id && id !== mate);
+      const json = JSON.stringify(r.view(p.id));
+      for (const o of others) expect(g.hand(o).some((c) => json.includes(`"${c.id}"`))).toBe(false);
+    }
+  });
+
+  it('no partner cards outside 2v2', () => {
+    const { r, people } = room(['Asha', 'Ravi']);
+    expect(r.view(people[0].id).rang!.partner).toBeNull();
+  });
+
   it('reads its settings with defaults for older apps', () => {
     expect(RANG).toMatchObject({ game: 'rang', rangPicks: 1, rangStack: true, rangChallenge: true, rangSwap: false, c7Power: false });
     expect(parseConfig({ decks: 1, bluffRule: 'one', game: 'rang', rangPicks: 7, rangSwap: true })).toMatchObject({ rangPicks: 7, rangSwap: true });
