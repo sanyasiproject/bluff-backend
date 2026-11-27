@@ -5,6 +5,7 @@ import {
   BOT_LEVELS,
   GAME_CATALOG,
   PLUGGED_GAMES,
+  isPlugged,
   type PluggedKind,
   CRAZY7_HAND_SIZES,
   CRAZY7_MAX_PICKS,
@@ -69,7 +70,7 @@ export function parseConfig(p: Payload): GameConfig {
   const bets = p.bets === undefined ? false : typeof p.bets === 'boolean' ? p.bets : null;
   const teams = p.teams === undefined ? false : typeof p.teams === 'boolean' ? p.teams : null;
   // the game and its Crazy 7 settings came later; older apps don't send them
-  const game = p.game === undefined ? 'bluff' : p.game === 'bluff' || p.game === 'crazy7' || p.game === 'rang' || p.game === 'ludo' ? p.game : null;
+  const game = p.game === undefined ? 'bluff' : p.game === 'bluff' || p.game === 'crazy7' || p.game === 'rang' || isPlugged(p.game as GameKind) ? (p.game as GameKind) : null;
   const handSize = p.handSize === undefined ? 7 : (CRAZY7_HAND_SIZES as readonly unknown[]).includes(p.handSize) ? (p.handSize as 5 | 7) : null;
   const maxPicks =
     p.maxPicks === undefined ? 1 : Number.isInteger(p.maxPicks) && (p.maxPicks as number) >= 1 && (p.maxPicks as number) <= CRAZY7_MAX_PICKS ? (p.maxPicks as number) : null;

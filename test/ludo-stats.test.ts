@@ -91,4 +91,21 @@ describe.skipIf(!MONGO)('Ludo stats and missions (MongoDB)', () => {
     expect(p('w-ludowins3')).toMatchObject({ progress: 1 });
     expect(p('w-ludohome20')).toMatchObject({ progress: 4 });
   });
+
+  it('Saanp Seedhi and Raja Mantri counters land in stats.perGame too', async () => {
+    const a = await account();
+    const b = await account();
+    await save('snakes', [
+      { memberId: 'a', userId: a.id, won: true, place: 1, stats: { ...zero, tallies: { ladders: 4, snakes: 2, bites: 1 } } },
+      { memberId: 'b', userId: b.id, loser: true, place: 2, stats: { ...zero, tallies: { ladders: 1, snakes: 3, bites: 0 } } },
+    ]);
+    await save('rmcs', [
+      { memberId: 'a', userId: a.id, loser: true, place: 2, stats: { ...zero, tallies: { caught: 2, escaped: 1, raja: 1 } } },
+      { memberId: 'b', userId: b.id, won: true, place: 1, stats: { ...zero, tallies: { caught: 0, escaped: 0, raja: 3 } } },
+    ]);
+    const ua = (await users.findOne({ _id: a.oid }))!;
+    expect(ua.stats.perGame).toEqual({ snakes: { played: 1, wins: 1, ladders: 4, snakes: 2, bites: 1 }, rmcs: { played: 1, wins: 0, caught: 2, escaped: 1, raja: 1 } });
+    const ub = (await users.findOne({ _id: b.oid }))!;
+    expect(ub.stats.perGame?.rmcs).toEqual({ played: 1, wins: 1, caught: 0, escaped: 0, raja: 3 });
+  });
 });

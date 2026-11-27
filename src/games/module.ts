@@ -10,6 +10,8 @@ export type PluggedGame = TableGame<Card>;
 export interface AutoStep {
   delayMs: number;
   run(): GameEvent[];
+  /** real-time games: a run with no events changed nothing anyone sees, so no views go out (the next step is still planned) */
+  quiet?: boolean;
 }
 
 /** everything the room, sockets, bots and stats need from one registry game; every new game adds one of these */
@@ -33,7 +35,9 @@ export interface GameModule<G extends PluggedGame = PluggedGame> {
   turnKey(game: G): string;
   /** still playing (not finished, not out): the room ends a game once no person is */
   inPlay(game: G, id: string): boolean;
-  /** this player's counters for stats.perGame[kind] */
+  /** game:move events one connection may send per 10 s (real-time games); unset: the socket's usual limit for every event */
+  moveRate?: number;
+  /** this player's counters for stats.perGame[kind] (best* counters keep the highest, the rest add up) */
   tallies(game: G, playerId: string): Record<string, number>;
   /** a saved game's counters (from tallies) for the mission counters */
   missionCounts(tallies: Record<string, number>, won: boolean): MissionCounts;

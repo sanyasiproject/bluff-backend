@@ -98,7 +98,7 @@ export const SHIELD_MAX_CARDS = 2;
 export const BET_STEPS = [50, 100, 250, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000] as const;
 
 /** which game a room plays */
-export type GameKind = 'bluff' | 'crazy7' | 'rang' | 'ludo';
+export type GameKind = 'bluff' | 'crazy7' | 'rang' | 'ludo' | 'snakes' | 'rmcs' | 'darts' | 'dots' | 'colorwar' | 'fruit' | 'spikes';
 
 /** how well Bluff bots play; the host picks it in the lobby (Crazy 7 bots always play their best) */
 export const BOT_LEVELS = ['normal', 'hard', 'expert'] as const;
@@ -487,13 +487,16 @@ export const LUDO_QUICK_VOICE: readonly { say: string; lang: 'hi' | 'en'; mood: 
   { say: 'एक और गेम!', lang: 'hi', mood: 'excited' },
 ];
 
-/** the emoji and quick lines a table uses: Ludo has its own, every other game the shared ones */
+/** tables that use Ludo's emoji, quick lines and voice lines (Saanp Seedhi and Raja Mantri borrow them) */
+const LUDO_CHAT_GAMES: readonly GameKind[] = ['ludo', 'snakes', 'rmcs', 'darts', 'dots', 'colorwar', 'fruit', 'spikes'];
+
+/** the emoji and quick lines a table uses: Ludo's (also at Saanp Seedhi and Raja Mantri), every other game the shared ones */
 export function chatSetOf(game: GameKind | undefined | null): { reactions: readonly string[]; messages: readonly string[] } {
-  return game === 'ludo' ? { reactions: LUDO_REACTIONS, messages: LUDO_QUICK_MESSAGES } : { reactions: REACTIONS, messages: QUICK_MESSAGES };
+  return game && LUDO_CHAT_GAMES.includes(game) ? { reactions: LUDO_REACTIONS, messages: LUDO_QUICK_MESSAGES } : { reactions: REACTIONS, messages: QUICK_MESSAGES };
 }
 
 /** quick lines are spoken aloud at these tables (no announcer there, so the voice is free) */
-export const speaksQuickChat = (game: GameKind | undefined | null): boolean => game === 'ludo';
+export const speaksQuickChat = (game: GameKind | undefined | null): boolean => !!game && LUDO_CHAT_GAMES.includes(game);
 
 export type ChatKind = 'reaction' | 'message';
 
@@ -1857,14 +1860,16 @@ export interface RoomMessage {
 export const APP_NAME = 'Game Baithak';
 
 /** games built on the game registry (one folder per game on each side); Bluff, Crazy 7 and Rang are wired by hand */
-export const PLUGGED_GAMES = ['ludo'] as const;
+export const PLUGGED_GAMES = ['ludo', 'snakes', 'rmcs', 'darts', 'dots', 'colorwar', 'fruit', 'spikes'] as const;
 export type PluggedKind = (typeof PLUGGED_GAMES)[number];
 export const isPlugged = (k: GameKind | undefined | null): k is PluggedKind => (PLUGGED_GAMES as readonly string[]).includes(k ?? '');
 
-export type GameCategory = 'cards' | 'board';
+export type GameCategory = 'cards' | 'board' | 'party' | 'arcade';
 export const GAME_CATEGORIES: { id: GameCategory; name: string; emoji: string }[] = [
   { id: 'cards', name: 'Cards', emoji: '🃏' },
   { id: 'board', name: 'Board', emoji: '🎲' },
+  { id: 'party', name: 'Party', emoji: '🎉' },
+  { id: 'arcade', name: 'Arcade', emoji: '🕹️' },
 ];
 
 /** one setting a registry game shows in the lobby; the app draws it as a row of choices */
@@ -1914,6 +1919,28 @@ export const GAME_CATALOG: readonly GameInfo[] = [
       ] },
       { id: 'time', label: 'Time', default: 5, when: { id: 'mode', value: 'timed' }, choices: [{ value: 5, label: '5 min' }, { value: 10, label: '10 min' }] },
     ] },
+  { kind: 'snakes', name: 'Saanp Seedhi', emoji: '🐍', tagline: 'Climb the ladders, dodge the snakes', category: 'board', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#43a047', '#f9a825'],
+    options: [
+      { id: 'exact', label: 'Finish', default: true, choices: [{ value: true, label: 'Exact roll', hint: 'Land on 100 exactly or bounce back' }, { value: false, label: 'Any roll', hint: 'Reach 100 or more' }] },
+      { id: 'six', label: 'Start', default: true, choices: [{ value: true, label: 'Need a 6', hint: 'Roll a 6 to step onto the board' }, { value: false, label: 'Go straight', hint: 'Start moving from the first roll' }] },
+      { id: 'bonus', label: 'Sixes', default: true, choices: [{ value: true, label: 'Roll again', hint: 'A 6 gives another roll; three 6s lose the turn' }, { value: false, label: 'One roll', hint: 'One roll a turn' }] },
+      { id: 'bite', label: 'Bite', default: true, choices: [{ value: true, label: 'On', hint: 'Land on a player and send them back 5' }, { value: false, label: 'Off', hint: 'Players can share a square' }] },
+    ] },
+  { kind: 'rmcs', name: 'Raja Mantri Chor Sipahi', emoji: '👑', tagline: 'Find the Chor before he gets away', category: 'party', minPlayers: 4, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#8e24aa', '#ff7043'],
+    options: [{ id: 'rounds', label: 'Rounds', default: 5, choices: [{ value: 5, label: '5 rounds' }, { value: 10, label: '10 rounds' }] }] },
+  { kind: 'spikes', name: 'Spike Attack', emoji: '🔺', tagline: 'Dodge the spikes, keep your 3 lives', category: 'arcade', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#ff1744', '#651fff'],
+    options: [
+      { id: 'size', label: 'Arena', default: 5, choices: [{ value: 5, label: '5 × 5' }, { value: 6, label: '6 × 6' }] },
+      { id: 'speed', label: 'Speed', default: 'normal', choices: [{ value: 'normal', label: 'Normal', hint: '3 second warnings to start' }, { value: 'fast', label: 'Fast', hint: '2 second warnings to start' }] },
+    ] },
+  { kind: 'fruit', name: 'Fruit Slice Duel', emoji: '🍉', tagline: 'Slice the same fruit faster, dodge the bombs', category: 'arcade', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#ff5252', '#00c853'],
+    options: [{ id: 'time', label: 'Time', default: 45, choices: [{ value: 45, label: '45 sec' }, { value: 60, label: '60 sec' }] }] },
+  { kind: 'darts', name: 'Darts', emoji: '🎯', tagline: 'Count down from 301, land exactly on zero', category: 'arcade', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#263238', '#d32f2f'],
+    options: [{ id: 'start', label: 'Start at', default: 301, choices: [{ value: 301, label: '301' }, { value: 501, label: '501' }] }] },
+  { kind: 'colorwar', name: 'Colour Wars', emoji: '🎨', tagline: 'Grow dots, burst and take over the board', category: 'board', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#00b0ff', '#ff4081'],
+    options: [{ id: 'size', label: 'Board', default: 5, choices: [{ value: 5, label: '5 × 5' }, { value: 7, label: '7 × 7' }] }] },
+  { kind: 'dots', name: 'Dots and Boxes', emoji: '⬛', tagline: 'Draw lines, close boxes, steal the board', category: 'board', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#3949ab', '#26c6da'],
+    options: [{ id: 'size', label: 'Board', default: 5, choices: [{ value: 4, label: '4 × 4' }, { value: 5, label: '5 × 5' }, { value: 6, label: '6 × 6' }] }] },
   { kind: 'bluff', name: 'Bluff', emoji: '🃏', tagline: 'Lie with a straight face, catch the liars', category: 'cards', minPlayers: 2, maxPlayers: 8, teams: true, bots: true, colors: ['#2e7d32', '#004d40'], options: [] },
   { kind: 'crazy7', name: 'Crazy 7', emoji: '7️⃣', tagline: 'Match suit or number, 7s make them pick', category: 'cards', minPlayers: 2, maxPlayers: 8, teams: false, bots: true, colors: ['#6a1b9a', '#283593'], options: [] },
   { kind: 'rang', name: 'Rang', emoji: '🌈', tagline: 'Colour cards, wilds and +4s', category: 'cards', minPlayers: 2, maxPlayers: 8, teams: true, bots: true, colors: ['#e53935', '#1e88e5'], options: [] },
@@ -1930,10 +1957,26 @@ export function gameOpt<T extends string | number | boolean>(config: Pick<GameCo
 }
 
 /** a registry game's table, by game; every new registry game adds a variant */
-export type PluggedView = { kind: 'ludo'; ludo: LudoView };
+export type PluggedView =
+  | { kind: 'ludo'; ludo: LudoView }
+  | { kind: 'snakes'; snakes: SnakesView }
+  | { kind: 'rmcs'; rmcs: RmcsView }
+  | { kind: 'darts'; darts: DartsView }
+  | { kind: 'dots'; dots: DotsView }
+  | { kind: 'colorwar'; colorwar: ColorWarView }
+  | { kind: 'fruit'; fruit: FruitView }
+  | { kind: 'spikes'; spikes: SpikesView };
 
 /** a registry game's move, sent with game:move */
-export type PluggedMove = { kind: 'ludo'; move: LudoMoveInput };
+export type PluggedMove =
+  | { kind: 'ludo'; move: LudoMoveInput }
+  | { kind: 'snakes'; move: SnakesMoveInput }
+  | { kind: 'rmcs'; move: RmcsMoveInput }
+  | { kind: 'darts'; move: DartsMoveInput }
+  | { kind: 'dots'; move: DotsMoveInput }
+  | { kind: 'colorwar'; move: ColorWarMoveInput }
+  | { kind: 'fruit'; move: FruitMoveInput }
+  | { kind: 'spikes'; move: SpikesMoveInput };
 
 /** per-account numbers for one game (stats.perGame[kind]); counters are the game's own (Ludo: kills, home, sixes, killed) */
 export type GameTally = { played: number; wins: number } & Partial<Record<string, number>>;
@@ -2133,3 +2176,370 @@ export function ludoLookOk(kind: LudoLookKind, id: unknown, level: number): stri
   const list = LUDO_LOOKS[kind];
   return (list.find((l) => l.id === id && l.level <= level) ?? list[0]).id;
 }
+
+// ─── Saanp Seedhi (snakes and ladders) ───────────────────────────────────────────────────
+
+/** squares 1..100 on a 10×10 board; square 1 bottom-left, rows snake back and forth, 100 top-left */
+export const SNAKES_GOAL = 100;
+/** snake heads → tails (our own layout) */
+export const SNAKES: Readonly<Record<number, number>> = { 17: 7, 54: 34, 62: 19, 64: 60, 87: 36, 93: 73, 95: 75, 98: 79 };
+/** ladder feet → tops (our own layout) */
+export const LADDERS: Readonly<Record<number, number>> = { 2: 38, 4: 14, 9: 31, 21: 42, 28: 84, 51: 67, 72: 91, 80: 99 };
+/** squares a bitten player falls back (bite rule) */
+export const SNAKES_BITE_BACK = 5;
+/** player colours in seat order */
+export const SNAKES_COLORS = ['red', 'blue', 'green', 'yellow'] as const;
+export type SnakesColor = (typeof SNAKES_COLORS)[number];
+
+/** [col, row] of a square on the 10×10 board, row 0 at the top (0 = off the board: null) */
+export function snakesCellOf(square: number): [number, number] | null {
+  if (square < 1 || square > SNAKES_GOAL) return null;
+  const i = square - 1;
+  const rowFromBottom = Math.floor(i / 10);
+  const inRow = i % 10;
+  const col = rowFromBottom % 2 === 0 ? inRow : 9 - inRow;
+  return [col, 9 - rowFromBottom];
+}
+
+export interface SnakesSeat {
+  playerId: string;
+  color: SnakesColor;
+  /** 0 = not on the board yet, 1..100 */
+  pos: number;
+  /** finishing place once at 100, else null */
+  place: number | null;
+  ladders: number;
+  snakes: number;
+  bites: number;
+}
+
+/** one turn's movement, for animation: step from → landed, then slide along a snake or ladder to → to */
+export interface SnakesLastMove {
+  seq: number;
+  playerId: string;
+  roll: number;
+  from: number;
+  /** where the dice count ended (after any bounce off 100) */
+  landed: number;
+  /** final square after a snake or ladder */
+  to: number;
+  /** rolled past 100 with the exact rule: walked to 100 and back */
+  bounced: boolean;
+  via: { kind: 'snake' | 'ladder'; from: number; to: number } | null;
+  /** players this move bit, sent back SNAKES_BITE_BACK squares (bite rule) */
+  bitten: { playerId: string; from: number; to: number }[];
+  /** the move earned another roll (a 6 with the bonus rule) */
+  bonus: boolean;
+}
+
+export interface SnakesView {
+  seats: SnakesSeat[];
+  turnId: string | null;
+  dice: number | null;
+  /** goes up with every roll, so the app rolls the dice again even for the same number */
+  rollSeq: number;
+  /** sixes rolled in a row this turn (3 lose the turn with the bonus rule) */
+  sixes: number;
+  last: SnakesLastMove | null;
+  rules: { exact: boolean; six: boolean; bonus: boolean; bite: boolean };
+}
+
+/** Saanp Seedhi has one move: roll (the token moves by itself) */
+export type SnakesMoveInput = { type: 'roll' };
+
+// ─── Raja Mantri Chor Sipahi ──────────────────────────────────────────────────────────────
+
+export const RMCS_ROLES = ['raja', 'mantri', 'chor', 'sipahi'] as const;
+export type RmcsRole = (typeof RMCS_ROLES)[number];
+/** points on each chit; a wrong guess swaps the Mantri's and the Chor's points for that round */
+export const RMCS_POINTS: Record<RmcsRole, number> = { raja: 1000, mantri: 800, sipahi: 500, chor: 0 };
+export const RMCS_NAMES: Record<RmcsRole, string> = { raja: 'Raja', mantri: 'Mantri', chor: 'Chor', sipahi: 'Sipahi' };
+export const RMCS_EMOJI: Record<RmcsRole, string> = { raja: '👑', mantri: '🧐', chor: '🦹', sipahi: '👮' };
+/** seconds people get to open their chit before it opens by itself */
+export const RMCS_OPEN_SEC = 8;
+
+/**
+ * a round: 'open' — everyone opens their chit (each sees only their own; the Raja shows himself);
+ * 'guess' — the Mantri points at one of the two others as the Chor;
+ * 'result' — every chit is shown and points added; the next round starts by itself
+ */
+export type RmcsPhase = 'open' | 'guess' | 'result';
+
+export interface RmcsRound {
+  round: number;
+  roles: Record<string, RmcsRole>;
+  /** who the Mantri pointed at; null if time ran out (counts as wrong) */
+  guess: string | null;
+  correct: boolean;
+  /** points each player got this round */
+  points: Record<string, number>;
+}
+
+export interface RmcsView {
+  /** 1-based round number, and how many in the game */
+  round: number;
+  rounds: number;
+  phase: RmcsPhase;
+  /** my own chit this round (null for watchers until result) */
+  myRole: RmcsRole | null;
+  /** chits everyone can see: the Raja once opened, the Mantri once guessing starts, every chit at result */
+  shown: Record<string, RmcsRole>;
+  /** who has opened their chit */
+  opened: string[];
+  /** when the open or guess step ends by itself (ms since epoch) */
+  endsAt: number | null;
+  /** totals so far */
+  scores: Record<string, number>;
+  /** the round just finished (result phase and after), newest last */
+  history: RmcsRound[];
+}
+
+/** open my chit; the Mantri guesses who the Chor is */
+export type RmcsMoveInput = { type: 'open' } | { type: 'guess'; target: string };
+
+// ─── shared by the arcade and board party games ───────────────────────────────────────────
+
+/** player colours in seat order (Dots and Boxes, Colour Wars, Fruit, Spikes, Darts) */
+export const PARTY_COLORS = ['#ff5252', '#40c4ff', '#69f0ae', '#ffd740'] as const;
+
+// ─── Darts (301 / 501 countdown) ──────────────────────────────────────────────────────────
+
+/** numbers round the board, clockwise from the top */
+export const DART_NUMBERS = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5] as const;
+/** ring radii as a share of the board's scoring radius (1 = outer edge of the double ring); arcade-wide so 2x and 3x can be hit on a phone */
+export const DART_RINGS = { bull: 0.07, outerBull: 0.16, trebleIn: 0.5, trebleOut: 0.64, doubleIn: 0.86, doubleOut: 1 } as const;
+export const DARTS_PER_TURN = 3;
+
+export type DartRing = 'bull' | 'outerBull' | 'single' | 'treble' | 'double' | 'miss';
+/** what a dart at (x, y) scores; x right, y up, board centre (0,0), scoring radius 1 */
+export function dartScore(x: number, y: number): { ring: DartRing; number: number; score: number } {
+  const r = Math.hypot(x, y);
+  if (r <= DART_RINGS.bull) return { ring: 'bull', number: 25, score: 50 };
+  if (r <= DART_RINGS.outerBull) return { ring: 'outerBull', number: 25, score: 25 };
+  if (r > DART_RINGS.doubleOut) return { ring: 'miss', number: 0, score: 0 };
+  // angle clockwise from straight up; each number spans 18°, 20 centred on the top
+  const deg = ((Math.atan2(x, y) * 180) / Math.PI + 360 + 9) % 360;
+  const number = DART_NUMBERS[Math.floor(deg / 18)];
+  if (r >= DART_RINGS.doubleIn) return { ring: 'double', number, score: number * 2 };
+  if (r >= DART_RINGS.trebleIn && r <= DART_RINGS.trebleOut) return { ring: 'treble', number, score: number * 3 };
+  return { ring: 'single', number, score: number };
+}
+
+export interface DartThrow {
+  seq: number;
+  playerId: string;
+  /** where it landed (after the hand's shake), board units */
+  x: number;
+  y: number;
+  ring: DartRing;
+  number: number;
+  score: number;
+  /** 1..3 in the turn */
+  dart: number;
+  /** went below 0: the turn's darts don't count and the turn ends */
+  bust: boolean;
+}
+
+export interface DartsView {
+  start: 301 | 501;
+  /** points left per player */
+  left: Record<string, number>;
+  turnId: string | null;
+  /** darts thrown this turn so far */
+  thrown: DartThrow[];
+  /** points left when this turn began (a bust goes back to it) */
+  turnStart: number;
+  last: DartThrow | null;
+  /** finishing order so far */
+  places: Record<string, number>;
+}
+
+/** aim at (x, y) in board units where the wobbling reticle was released; the server adds a small shake */
+export type DartsMoveInput = { type: 'throw'; x: number; y: number };
+
+// ─── Dots and Boxes ───────────────────────────────────────────────────────────────────────
+
+/**
+ * a board of size×size boxes has (size+1)×(size+1) dots. Lines are numbered: first the horizontal ones,
+ * row by row ((size+1) rows of size), then the vertical ones (size rows of size+1)
+ */
+export const dotsLineCount = (size: number): number => 2 * size * (size + 1);
+export function dotsLineAt(size: number, line: number): { dir: 'h' | 'v'; row: number; col: number } {
+  const h = size * (size + 1);
+  if (line < h) return { dir: 'h', row: Math.floor(line / size), col: line % size };
+  const v = line - h;
+  return { dir: 'v', row: Math.floor(v / (size + 1)), col: v % (size + 1) };
+}
+/** the four lines round box (row, col) */
+export function dotsBoxLines(size: number, row: number, col: number): [number, number, number, number] {
+  const h = size * (size + 1);
+  return [row * size + col, (row + 1) * size + col, h + row * (size + 1) + col, h + row * (size + 1) + col + 1];
+}
+/** boxes (row * size + col) that a line borders */
+export function dotsBoxesOf(size: number, line: number): number[] {
+  const { dir, row, col } = dotsLineAt(size, line);
+  const out: number[] = [];
+  if (dir === 'h') {
+    if (row > 0) out.push((row - 1) * size + col);
+    if (row < size) out.push(row * size + col);
+  } else {
+    if (col > 0) out.push(row * size + col - 1);
+    if (col < size) out.push(row * size + col);
+  }
+  return out;
+}
+
+export interface DotsView {
+  size: number;
+  /** line → player who drew it */
+  lines: Record<number, string>;
+  /** box → player who closed it */
+  boxes: Record<number, string>;
+  scores: Record<string, number>;
+  turnId: string | null;
+  /** the last line, and boxes it closed (closing a box gives another turn) */
+  last: { seq: number; playerId: string; line: number; closed: number[] } | null;
+}
+export type DotsMoveInput = { type: 'line'; line: number };
+
+// ─── Colour Wars ──────────────────────────────────────────────────────────────────────────
+
+/** a cell bursts at this many dots: it empties and gives one dot (and its colour) to each neighbour */
+export const COLORWAR_BURST = 4;
+/** your first move places this many dots on any empty cell */
+export const COLORWAR_FIRST = 3;
+
+export interface ColorWarCell {
+  owner: string | null;
+  dots: number;
+}
+export interface ColorWarView {
+  size: number;
+  /** row-major, size × size */
+  cells: ColorWarCell[];
+  turnId: string | null;
+  /** players who still need their first move (it places COLORWAR_FIRST dots on an empty cell) */
+  firstMove: string[];
+  /** still in the game; out once they hold no cell after their first move */
+  alive: string[];
+  /** the last tap and its chain, wave by wave (cells that burst in each wave), for the animation */
+  last: { seq: number; playerId: string; cell: number; waves: number[][] } | null;
+  /** finishing order (out first = last place) */
+  places: Record<string, number>;
+}
+export type ColorWarMoveInput = { type: 'tap'; cell: number };
+
+// ─── Fruit Slice Duel ─────────────────────────────────────────────────────────────────────
+
+export const FRUIT_KINDS = ['apple', 'orange', 'melon', 'banana', 'mango', 'grapes', 'bomb'] as const;
+export type FruitKind = (typeof FRUIT_KINDS)[number];
+export const FRUIT_POINTS: Record<FruitKind, number> = { apple: 1, orange: 1, banana: 1, grapes: 2, mango: 2, melon: 3, bomb: -10 };
+/** the play area: x 0..1 left to right, y 0..1 bottom to top; fruit fly up from below and fall back */
+export const FRUIT_GRAVITY = -1.6;
+/** a slice counts within this much of where the fruit really was (ms), for network lag */
+export const FRUIT_SLICE_SLACK_MS = 450;
+
+export interface FruitSpawn {
+  id: number;
+  kind: FruitKind;
+  /** ms after the start when it's thrown in */
+  t: number;
+  x0: number;
+  vx: number;
+  vy: number;
+}
+
+/** a small seeded random (mulberry32), so every phone and the server throw exactly the same fruit */
+export function seededRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** the whole wave for a game: same seed, same fruit for everyone; it gets busier as time goes on */
+export function fruitWave(seed: number, seconds: number): FruitSpawn[] {
+  const rnd = seededRandom(seed);
+  const out: FruitSpawn[] = [];
+  let t = 800;
+  let id = 1;
+  const end = seconds * 1000 - 1500;
+  while (t < end) {
+    const busy = t / end;
+    const burst = 1 + Math.floor(rnd() * (1 + busy * 3));
+    for (let i = 0; i < burst; i++) {
+      const bomb = rnd() < 0.08 + busy * 0.07;
+      const kind: FruitKind = bomb ? 'bomb' : FRUIT_KINDS[Math.floor(rnd() * (FRUIT_KINDS.length - 1))];
+      const x0 = 0.15 + rnd() * 0.7;
+      out.push({ id: id++, kind, t: t + i * 120, x0, vx: (0.5 - x0) * (0.3 + rnd() * 0.4), vy: 1.45 + rnd() * 0.3 });
+    }
+    t += 900 - busy * 450 + rnd() * 400;
+  }
+  return out;
+}
+
+/** where a fruit is ms after the start; null before it's thrown or once it falls off the bottom */
+export function fruitAt(f: FruitSpawn, ms: number): { x: number; y: number } | null {
+  const s = (ms - f.t) / 1000;
+  if (s < 0) return null;
+  const y = -0.1 + f.vy * s + (FRUIT_GRAVITY * s * s) / 2;
+  if (y < -0.15 && s > 0.2) return null;
+  return { x: f.x0 + f.vx * s, y };
+}
+
+export interface FruitView {
+  phase: 'countdown' | 'play' | 'over';
+  seed: number;
+  seconds: number;
+  /** when the fruit start flying and when the game ends (ms since epoch, server clock) */
+  startsAt: number;
+  endsAt: number;
+  scores: Record<string, number>;
+  /** fruit each player has sliced (ids), so a phone that reconnects can hide them */
+  sliced: Record<string, number[]>;
+  /** best combo (fruit in one swipe) per player */
+  combo: Record<string, number>;
+  /** bombs each player hit */
+  bombs: Record<string, number>;
+  /** server time when this view was made, so the app can line up its clock */
+  now: number;
+}
+/** one swipe: the fruit ids it cut and when (ms after startsAt by the phone's clock, corrected by the app) */
+export type FruitMoveInput = { type: 'slice'; ids: number[]; at: number };
+
+// ─── Spike Attack ─────────────────────────────────────────────────────────────────────────
+
+export const SPIKES_LIVES = 3;
+export type SpikeDir = 'left' | 'right' | 'top' | 'bottom';
+/** a spike on the way: it shoots in from `dir` along row (left/right) or column (top/bottom) `line`, right across to the far side */
+export interface SpikeWarning {
+  id: number;
+  dir: SpikeDir;
+  line: number;
+  /** when the warning showed and when the spike strikes (ms since epoch, server clock) */
+  warnAt: number;
+  strikeAt: number;
+}
+export interface SpikesView {
+  size: number;
+  phase: 'countdown' | 'play' | 'over';
+  startsAt: number;
+  /** [col, row] of each player, row 0 at the top */
+  pos: Record<string, [number, number]>;
+  lives: Record<string, number>;
+  /** players hit just now can't be hit again until this time (ms since epoch) */
+  safeUntil: Record<string, number>;
+  warnings: SpikeWarning[];
+  /** recent strikes, for the animation: who they hit */
+  strikes: { id: number; dir: SpikeDir; line: number; at: number; hit: string[] }[];
+  /** finishing order (out first = last place) */
+  places: Record<string, number>;
+  /** server time when this view was made, so the app can line up its clock */
+  now: number;
+}
+/** one step on the grid */
+export type SpikesMoveInput = { type: 'step'; dir: 'up' | 'down' | 'left' | 'right' };

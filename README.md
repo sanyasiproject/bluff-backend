@@ -121,7 +121,7 @@ through one socket event, `game:move` (`PluggedMove`: `{ kind, move }`), and ann
 `GAME_CATALOG` (in `types.ts`) lists every game with its players, 2v2, bots and lobby options (`config.opts`, kept by `parseOpts`:
 known ids and choices only; missing means the default). Apps say which registry games they have with `auth.games` in the
 handshake; a game won't start while a seated person's app lacks it ("must update the app"). A game for fewer seats than the room
-(Ludo: 4) refuses the switch while too many sit, and newcomers past its seats watch. Every finished game adds
+(Ludo and Saanp Seedhi: 4) refuses the switch while too many sit, and newcomers past its seats watch. Every finished game adds
 `stats.perGame.<kind>.played/.wins` (all games), plus the registry game's own counters. No replay or secret cards for registry games.
 
 ### Ludo (`config.game: 'ludo'`, `src/games/ludo/`)
@@ -146,6 +146,127 @@ handshake; a game won't start while a seated person's app lacks it ("must update
   Expert beats Normal ~93%, Hard ~66%.
 - Counters per account: `stats.perGame.ludo.kills/killed/home/sixes`; missions `ludoGames`, `ludoWins`, `ludoKills`, `ludoHome`,
   `ludoSixes`; awards Goti hunter and Lucky sixes.
+
+### Saanp Seedhi (`config.game: 'snakes'`, `src/games/snakes/`)
+
+- 2–4 players, one token each (`SNAKES_COLORS` in seat order), turns in seat order from a random first player. Board and art come
+  from `SNAKES` / `LADDERS` / `snakesCellOf` in `types.ts`.
+- One move, `roll`: the server moves the token at once and the app animates from `SnakesView.last`. `rollSeq` goes up with every
+  roll; `last.seq` only when a token moved (so a roll with no move, or a third 6, leaves `last` as it was). `dice` and `sixes` keep
+  the latest roll after the turn moves on (`sixes` counts the latest roller's 6s in a row).
+- Options (`opts`, all on by default): `six` (a token at 0 needs a 6 and enters on square 1, no further steps), `exact` (land on 100
+  exactly; overshoot walks to 100 and back, `bounced`, `landed` = that square), `bonus` (a 6 rolls again, `last.bonus`; a third 6
+  in a row loses the turn with no move), `bite` (others on the final square, not 0 or 100, go back `SNAKES_BITE_BACK` (5), at least
+  to 1, no chain). After landing a snake head slides to its tail, a ladder foot climbs to its top (`last.via`), then the bite.
+- Reaching 100 gives a place; play goes on until one is left. Winner: 1st place; losers like Ludo; leaving is a forfeit (token off
+  the board); host End game is refused.
+- Bots just roll: the module's `auto()` rolls for a bot after the last roll has had time to show (dice 0.8 s + 0.17 s a square +
+  0.9 s for a snake or ladder + 0.7 s for a bite, plus up to 0.7 s). A person's turn uses the room's turn timer (it rolls for them).
+- Counters: `stats.perGame.snakes.ladders/snakes/bites` (bites made); awards Ladder climber and Snake food. Chat and voice use
+  Ludo's set (`chatSetOf`, `speaksQuickChat`).
+
+### Raja Mantri Chor Sipahi (`config.game: 'rmcs'`, `src/games/rmcs/`)
+
+- Exactly 4 players ("needs exactly 4 players. Add bots to fill the table"); `opts.rounds` 5 or 10. Every step is timed through
+  `auto()`, so the room's turn timer never runs here.
+- A round: `deal` (4 chits shuffled), phase `open` (`endsAt` = deal + `RMCS_OPEN_SEC` 8 s; each player sends `{ type: 'open' }`,
+  bots open 1.2–3.7 s after the deal, every shut chit opens by itself at `endsAt`). Once all 4 are open: phase `guess`, `turnId`
+  = the Mantri, `endsAt` = now + 20 s; the Mantri sends `{ type: 'guess', target }` (one of the two others; a bot picks 50/50 after
+  1.8–4.3 s); time up = wrong, `guess: null`. Then phase `result` for 4 s (`endsAt`), then the next deal, or game over after the
+  last round (the last result stays in the view, `endsAt` null).
+- Points: Raja 1000, Mantri 800, Sipahi 500, Chor 0; a wrong guess swaps the Mantri's and the Chor's for that round. Every round
+  adds 2300 in all. Ranking by total, ties share; winners: the top score.
+- Secrecy: a seated player's view has their own `myRole` and only the chits shown to all (`shown`: the Raja once opened, the Mantri
+  from `guess`, all four at `result`); watchers get `myRole: null`. `history` lists finished rounds (public).
+- Leaving is a forfeit: that seat's chit and guess then play by themselves (0.4 s); one player left wins; no person left stops it
+  with no winner.
+- Counters: `stats.perGame.rmcs.caught` (Mantri, right), `escaped` (Chor, not caught), `raja`; awards Sharp Mantri and Master Chor.
+- Announcer: "Round 2 of 5", "Raja is Asha 👑", "Mantri Ravi, find the Chor!", "Pakda gaya! 🦹 Bina was the Chor" /
+  "Chor bach gaya! 😈 Bina was the Chor", "Game over. Asha wins with 4,300 points 🎉". Chat and voice use Ludo's set.
+
+### Darts (`config.game: 'darts'`, `src/games/darts/`)
+
+- 2–4 players, `opts.start` 301 or 501, turns in seat order from a random first player; colours `PARTY_COLORS` by seat.
+- Move `{ type: 'throw', x, y }`: where the app's wobbling reticle was released, board units (centre 0,0, x right, y up, scoring
+  radius 1; clamped to ±2). The server adds its own shake (Normal, σ `DART_SHAKE` 0.03), scores it with `dartScore` and subtracts.
+  Every dart bumps `last.seq` and lands in `thrown`.
+- Below 0 is a bust: `left` goes back to `turnStart`, `last.bust`, the turn ends. Exactly 0 checks out (a place, `places`); play
+  goes on until one is left, who takes the last place. After a turn ends (3 darts, bust or checkout) the turn stays on the thrower
+  for `DARTS_TURN_PAUSE_MS` (1.6 s) so the board shows its darts; a throw then gets "Wait for the next turn". Then `turnId` moves on,
+  `thrown` empties and `turnStart` is the new player's `left` (`last` stays).
+- Bots throw through `auto()` 1.1–1.8 s apart, aiming at treble 20, or at an exact one-dart finish (single, treble, double, bull),
+  or a set-up single, with level noise (σ Normal 0.22, Hard 0.14, Expert 0.08). A person's timed-out turn throws one Hard dart.
+- Winner: first to check out; the rest by place, then fewest points left. Leaving is a forfeit (a turn in progress doesn't count).
+- Counters `stats.perGame.darts.t180/bulls/checkouts` (bulls = the 50 only); awards Maximum! and Bull hunter. Announcer: "ONE
+  HUNDRED AND EIGHTY! 🎯 Asha", "Bust! Asha stays on 32", "Bullseye for Asha! 🐂", "Asha checked out first! 🏆".
+
+### Dots and Boxes (`config.game: 'dots'`, `src/games/dots/`)
+
+- 2–4 players, `opts.size` 4, 5 or 6 boxes a side. Lines are numbered as in `dotsLineAt` (horizontal rows first, then vertical).
+- Move `{ type: 'line', line }`; every line bumps `last.seq`. A line closing 1 or 2 boxes scores them (`boxes`, `scores`,
+  `last.closed`) and the same player goes again; otherwise the turn passes. All boxes closed: most boxes wins, ties share.
+- Bots move through the driver's think pause (0.7–1.3 s): take a closing line, else a line that gives no box (no third side), else
+  Hard the line giving the fewest boxes at once, Expert the shortest chain the next player could run. Normal sometimes misses
+  a box or doesn't look.
+- Leaving is a forfeit (their boxes stay); one player left wins. Counter `stats.perGame.dots.boxes`; award Box collector.
+  Announcer: "Double! Asha closed two boxes with one line ✌️", "Game over. Asha wins with 9 boxes 🎉" / "share first with 8 boxes".
+
+### Colour Wars (`config.game: 'colorwar'`, `src/games/colorwar/`)
+
+- 2–4 players, `opts.size` 5 or 7. Move `{ type: 'tap', cell }` (row-major). First move: any empty cell gets `COLORWAR_FIRST`
+  (3) dots ("Pick an empty cell to start"); later: one of your own cells +1 ("Tap one of your own cells").
+- At `COLORWAR_BURST` (4) a cell bursts: it empties and each orthogonal neighbour gets +1 dot and the tapper's colour; all ripe cells
+  burst together, wave by wave (`last.waves`, at most 200 waves). A chain stops once no rival colour is left (rivals still to place
+  their first cell count as left). Every tap bumps `last.seq`.
+- A player who has placed and holds no cell is out (`out` event, `places`: first out = last place); last colour standing wins.
+- Bots tap through `auto()` once the last chain has shown (0.9 s + 0.38 s a wave, plus up to 0.7 s): Hard and Expert score each
+  tap by rival cells removed, own cells and danger (own cells next to a rival's 3-dot cell); Expert also checks the next player's
+  best reply; Normal taps at random 45% of the time.
+- Leaving is a forfeit (their cells empty); one player left wins. Counters `stats.perGame.colorwar.captures/bursts`; awards Colour
+  thief and Chain reactor. Announcer: "Asha is wiped out, 3rd place 💥", "Chain reaction! Asha took 7 cells 💥" (5+ waves).
+
+### Real-time registry games (Fruit Slice Duel, Spike Attack)
+
+- Everyone moves at once: `turnId` stays null, so the turn timer, its stand-in moves and "away" never apply. The countdown, every
+  timed step and the bots run through the module's `auto()`, keyed on the game's `stepSeq`, which only timed steps bump (a person's
+  move never resets the plan). Steps marked `quiet` that change nothing send no views. Views carry `now` (server ms) so apps can
+  line up their clocks; times in views (`startsAt`, `endsAt`, `warnAt`, `strikeAt`, `safeUntil`) are server ms since epoch.
+- Socket limit: `game:move` in these games counts against the module's own `moveRate` per 10 s (Fruit 150, Spikes 100) in a
+  separate bucket; every other event keeps the usual 40 per 10 s.
+
+### Fruit Slice Duel (`config.game: 'fruit'`, `src/games/fruit/`)
+
+- 2–4 players, `opts.time` 45 or 60 s. `phase: 'countdown'` for 3 s (`FRUIT_COUNTDOWN_MS`) until `startsAt`, then `'play'` until
+  `endsAt`, then `'over'`. The server picks `seed`; every phone draws `fruitWave(seed, seconds)` with `fruitAt`.
+- Move `{ type: 'slice', ids, at }`: 1–12 fruit ids, `at` = ms after `startsAt` (server clock via `now`). Refused: before the start
+  ("Wait for the countdown"), `at` more than `FRUIT_SLICE_SLACK_MS` (450) behind the server's elapsed time ("Too late, that swipe did
+  not count") or ahead of it ("That swipe is ahead of the clock"), after the end ("Time's up"). Each id counts once per player and
+  only if on screen at `at` (`fruitAt` within -0.05..1.05); others in the swipe are dropped, and a swipe with none left gets
+  "Already sliced" (all were mine already) or "Nothing to slice there".
+- Points `FRUIT_POINTS` (bomb -10, scores may go below 0); 3+ fruit in one swipe add +1 per fruit over 2. Highest score wins, ties
+  share. The game ends on time through `auto()`, and through `clock()` too if nobody is connected.
+- Bots plan every swipe at the start: each fruit near its peak (±250 ms) with 55 / 72 / 85 % (Normal / Hard / Expert), a bomb by
+  mistake 10 / 5 / 2 %; cuts within 160 ms make one swipe (combos); swipes within 120 ms go out as one step.
+- Counters `stats.perGame.fruit.sliced/bombs/bestCombo` (`best*` counters are saved with `$max`, the rest add up). Announcer: "Slice!
+  45 seconds on the clock 🍉", "Asha sliced 5 in one swipe! 🔥" (5+ only), "Time's up! Asha wins with 42 points 🎉".
+
+### Spike Attack (`config.game: 'spikes'`, `src/games/spikes/`)
+
+- 2–4 players, `opts.size` 5 or 6, `opts.speed` normal or fast. Players start in the corners (`pos` is `[col, row]`, row 0 on top)
+  with `SPIKES_LIVES` (3). 3 s countdown (`startsAt`), then play.
+- Move `{ type: 'step', dir: 'up' | 'down' | 'left' | 'right' }`; "Wait for the countdown", "Too quick, one step at a time"
+  (under 140 ms since your last step), "Can't go that way" (wall), "You're out". Players may share a square.
+- Warnings: the first 0.6 s into play, then every gap + 0–0.4 s; each shows `warn` ms before `strikeAt`. Normal: warn 3 s → 1 s and
+  gap 1.7 s → 0.55 s over 75 s of play; fast: 2 s → 1 s and 1.25 s → 0.45 s over 50 s. At most 1 + one per 15 s of play at once
+  (never more than size − 1, so a safe square is left); a row or column is never warned twice at once.
+- A strike hits everyone on the line not `safeUntil` (1 s after a hit): -1 life. 0 lives = out (`places`; players out on the same
+  strike share the place). Last one standing wins (`finish` event); the last players out together share first. After 3 minutes
+  of play (`SPIKES_MAX_MS`) most lives left wins. When no person is left standing, bots still up are ranked by lives.
+- Bots look around every 160–360 ms (180–300 ms while stepping) and only see a warning after a reaction time (Expert 0.2–0.5 s,
+  Hard 0.3–0.8 s, Normal 0.55–1.3 s; now and then 0.8–1.1 s later, Normal most often); on a warned line they run to the nearest square no seen spike crosses,
+  otherwise they now and then wander (better levels drift to the middle).
+- Counters `stats.perGame.spikes.dodges` (stepped off a line you stood on when it was warned) and `hits`. Announcer: "Dodge the
+  spikes! 🔺", "Asha is out 💀 (3rd)", "Ravi is the last one standing! 🏆", "Time's up! Most lives left wins", "Game over. Ravi wins 🎉".
 
 ## Rules worth knowing
 
@@ -257,7 +378,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 |---|---|
 | `src/game.ts` | Game rules: deal, play, pass, bluff (both rules), finishing order, per-player stats |
 | `src/crazy7/` | Crazy 7: `game.ts` (rules), bots (`driver.ts`, `brain.ts`, `memory.ts`) |
-| `src/games/` | The game registry: `module.ts` (`GameModule`), `registry.ts` (`MODULES`), `driver.ts` (automatic steps, bots, game time for every registry game); `ludo/` (`game.ts` rules, `brain.ts` bots, `module.ts`) |
+| `src/games/` | The game registry: `module.ts` (`GameModule`), `registry.ts` (`MODULES`), `driver.ts` (automatic steps, bots, game time for every registry game); `ludo/` (`game.ts` rules, `brain.ts` bots, `module.ts`); `snakes/` and `rmcs/` (`game.ts` rules, `module.ts` with bots and timed steps); `darts/`, `dots/`, `colorwar/` (`game.ts` rules, `brain.ts` bots, `module.ts`; Colour Wars' burst chain in `board.ts`); `fruit/` and `spikes/` (real-time: `game.ts` rules and timeline, Spikes' `brain.ts`, `module.ts`) |
 | `src/bots/` | Bluff bots: `personality.ts` (styles, names), `levels.ts` (Normal / Hard / Expert), `memory.ts` (what a bot saw), `profile.ts` (how a player tends to play), `detector.ts` (how many fakes a play likely holds, and where), `brain.ts` (calls, peeks, its own plays), `driver.ts` (timers, the 2 s call window, moves through the same rules) |
 | `src/habits.ts` | Counts each player's true plays for the bots' saved habits |
 | `src/rooms.ts` | Rooms, seats and watchers, host, lobby settings, chat throttle, game snapshots, spoken announcements |
@@ -308,7 +429,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `rang:pass` | – (Rang: end the turn after picking) |
 | `rang:call` | – (Rang: "last card") |
 | `rang:challenge` | – (Rang: challenge the single +4 that hit you) |
-| `game:move` | `PluggedMove` `{ kind, move }` (registry games; `kind` must be the game on, else "That move is for another game"). Ludo: `{ kind: 'ludo', move: { type: 'roll' } }` or `{ kind: 'ludo', move: { type: 'move', token: 0..3 } }` (a goti in `LudoView.movable`). Errors come back in the ack as `{ ok: false, error }` (e.g. "Not your turn", "Roll the dice first", "Move a goti first", "That goti can't move 3", "Pick one of your gotis", "Invalid move") |
+| `game:move` | `PluggedMove` `{ kind, move }` (registry games; `kind` must be the game on, else "That move is for another game"). Ludo: `{ kind: 'ludo', move: { type: 'roll' } }` or `{ kind: 'ludo', move: { type: 'move', token: 0..3 } }` (a goti in `LudoView.movable`). Saanp Seedhi: `{ kind: 'snakes', move: { type: 'roll' } }`. Raja Mantri: `{ kind: 'rmcs', move: { type: 'open' } }` or `{ kind: 'rmcs', move: { type: 'guess', target: memberId } }`. Darts: `{ kind: 'darts', move: { type: 'throw', x, y } }`. Dots and Boxes: `{ kind: 'dots', move: { type: 'line', line } }`. Colour Wars: `{ kind: 'colorwar', move: { type: 'tap', cell } }`. Fruit: `{ kind: 'fruit', move: { type: 'slice', ids, at } }`. Spike Attack: `{ kind: 'spikes', move: { type: 'step', dir } }`. Errors come back in the ack as `{ ok: false, error }` (e.g. "Not your turn", "Roll the dice first", "Move a goti first", "That goti can't move 3", "Pick one of your gotis", "Invalid move"; Raja Mantri: "Your chit is already open", "Wait for everyone to open their chit", "Only the Mantri finds the Chor", "Pick one of the two players left", "This round is over"; Darts: "Aim at the board", "Wait for the next turn"; Dots: "Pick a line between two dots", "That line is already drawn"; Colour Wars: "Tap a cell on the board", "Pick an empty cell to start", "Tap one of your own cells"; Fruit: "Wait for the countdown", "Too late, that swipe did not count", "That swipe is ahead of the clock", "Time's up", "Already sliced", "Nothing to slice there"; Spikes: "Wait for the countdown", "Too quick, one step at a time", "Can't go that way", "You're out") |
 | `chat:send` | `{ kind: 'reaction' \| 'message', index, on? }` (`on: 'pile'`, reactions only, while a game is on: the emoji lands on the last play instead of floating up; a Quick Chat line also goes into the room's chat list) |
 | `room:say` | `{ text }` (1–`ROOM_CHAT_LENGTH` 200 characters, one line): a typed line for everyone in the room, sent to all as `room:msg` |
 | `room:messages` | → `{ messages }`: the room's chat list, oldest first (last `ROOM_CHAT_MAX` 500 lines, kept in memory only and gone when the room closes) |

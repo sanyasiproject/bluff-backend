@@ -1,4 +1,4 @@
-import type { Award, Card, CoinResult, GameConfig, GameReplay, InviteEvent, LifetimeStats, LudoLookChoice, PlayReveal, Rank, RangCard, RangColor, RankDivisionId, SazaBadge, ShopLookKind, Suit } from './types.js';
+import type { Award, Card, CoinResult, GameConfig, DartThrow, GameReplay, InviteEvent, LifetimeStats, LudoLookChoice, PlayReveal, Rank, RangCard, RangColor, RankDivisionId, SazaBadge, ShopLookKind, SnakesLastMove, SpikeDir, Suit } from './types.js';
 
 /** one of a player's plays this game with the true cards (server only); open: it never stood or was called (still waiting, or cut off by a walk-out or End game) */
 export interface LoggedPlay extends PlayReveal {
@@ -352,7 +352,54 @@ export type GameEvent =
   /** the hit player challenged a +4: guilty (played while holding the colour) means its player picks; else the challenger picks */
   | { kind: 'rgchallenge'; playerId: string; targetId: string; guilty: boolean; count: number }
   // Ludo (registry game)
-  | { kind: 'ludo'; ev: LudoEvent };
+  | { kind: 'ludo'; ev: LudoEvent }
+  | { kind: 'snakes'; ev: SnakesEvent }
+  | { kind: 'rmcs'; ev: RmcsEvent }
+  | { kind: 'darts'; ev: DartsEvent }
+  | { kind: 'dots'; ev: DotsEvent }
+  | { kind: 'colorwar'; ev: ColorWarEvent }
+  | { kind: 'fruit'; ev: FruitEvent }
+  | { kind: 'spikes'; ev: SpikesEvent };
+
+/** Fruit Slice Duel: the fruit start flying, then one accepted swipe (ids: fruit it really cut; combo: fruit, not bombs) */
+export type FruitEvent =
+  | { type: 'go'; seconds: number }
+  | { type: 'slice'; playerId: string; ids: number[]; points: number; combo: number; bomb: boolean };
+
+/** Spike Attack: play starts, a player steps, a warning shows, a spike strikes (hit: players who lost a life), a player is out, time runs out */
+export type SpikesEvent =
+  | { type: 'go' }
+  | { type: 'step'; playerId: string; to: [number, number] }
+  | { type: 'warn'; id: number; dir: SpikeDir; line: number }
+  | { type: 'strike'; id: number; dir: SpikeDir; line: number; hit: string[] }
+  | { type: 'out'; playerId: string; place: number }
+  | { type: 'timeUp' };
+
+/** one Saanp Seedhi roll (moved: the token moved; lost: a third 6 lost the turn), then the move it made */
+export type SnakesEvent =
+  | { type: 'roll'; playerId: string; roll: number; sixes: number; moved: boolean; lost: boolean }
+  | { type: 'move'; move: SnakesLastMove };
+
+/** one dart (turnTotal: the turn's points so far), then the turn's end (bust: went below 0; out: hit exactly 0) */
+export type DartsEvent =
+  | { type: 'throw'; dart: DartThrow; turnTotal: number }
+  | { type: 'turnEnd'; playerId: string; total: number; bust: boolean; out: boolean; t180: boolean };
+
+/** one Dots and Boxes line and the boxes it closed (any closed box gives another turn) */
+export type DotsEvent = { type: 'line'; playerId: string; line: number; closed: number[] };
+
+/** one Colour Wars tap with its chain (waves: cells that burst, wave by wave; captured: cells taken from others), or a player knocked out */
+export type ColorWarEvent =
+  | { type: 'tap'; playerId: string; cell: number; first: boolean; waves: number[][]; captured: number }
+  | { type: 'out'; playerId: string; place: number };
+
+/** one Raja Mantri Chor Sipahi step; events carry only what everyone may see */
+export type RmcsEvent =
+  | { type: 'deal'; round: number; rounds: number }
+  /** raja: this chit was the Raja's (shown to all); auto: opened by itself */
+  | { type: 'open'; playerId: string; raja: boolean; auto: boolean }
+  | { type: 'guessing'; mantriId: string }
+  | { type: 'result'; round: number; mantriId: string; chorId: string; guess: string | null; correct: boolean };
 
 /** one Ludo step; owner: whose goti moved (a 2v2 partner's once the mover's own are all home) */
 export type LudoEvent =

@@ -32,6 +32,7 @@ import {
   GAME_CATALOG,
   chatSetOf,
   ludoLookOk,
+  isPlugged,
   type GameKind,
 } from './types.js';
 import {
@@ -304,16 +305,17 @@ export function registerHandlers(
     }
     room.start(member.id);
     const table = room.table!;
-    const first = table.turnId ? room.member(table.turnId).name : 'Someone';
+    // games where everyone moves at once (Raja Mantri) have nobody going first
+    const first = table.turnId ? `. ${room.member(table.turnId).name} goes first` : '';
     const pot = stake > 0 ? `. Pot: ${formatCoins(stake * table.order.length)} coins` : '';
     // Crazy 7's first turn may already have picked a card for that player
-    const opening = room.c7?.opening ?? room.rang?.opening ?? [];
+    const opening = room.c7?.opening ?? room.rang?.opening ?? (room.plugged as { opening?: GameEvent[] } | null)?.opening ?? [];
     c7bots.observe(room, opening);
     rangbots.observe(room, opening);
     // the Kismat card is read out with the deal, so nobody misses it
     const kismat = room.game?.kismat;
     const wild = kismat ? [room.note('round', `🍀 Kismat card: ${rankPlural(kismat)} are wild this game`)] : [];
-    const said = [room.note('round', `${label}. ${first} goes first${pot}`), ...wild, ...room.announce(opening)];
+    const said = [room.note('round', `${label}${first}${pot}`), ...wild, ...room.announce(opening)];
     room.replay?.addStartLines(said.map((a) => a.text));
     publish(room, said);
   };
@@ -447,6 +449,8 @@ export function registerHandlers(
 
   io.on('connection', (socket) => {
     const hits: number[] = [];
+    /** game:move in a real-time registry game (Fruit, Spikes) counts here, against that game's own allowance */
+    const moveHits: number[] = [];
     const user = socket.data.user as SocketUser | undefined;
     const ip = socket.data.ip as string;
     connections.set(ip, (connections.get(ip) ?? 0) + 1);
@@ -520,13 +524,21 @@ export function registerHandlers(
       return seat;
     };
 
+    /** the game on at this seat's table lets moves come faster than other events (null: the usual limit) */
+    const fastMoveRate = (): number | null => {
+      const g = seat?.room.plugged;
+      return g && isPlugged(g.config.game) ? (moduleOf(g.config.game).moveRate ?? null) : null;
+    };
+
     const on = (event: string, handler: (p: Payload) => object | void | Promise<object | void>) => {
       socket.on(event, async (raw: unknown, ack?: unknown) => {
         const reply: Reply = typeof ack === 'function' ? (ack as Reply) : () => {};
         try {
           const now = Date.now();
-          while (hits.length > 0 && now - hits[0] > RATE_WINDOW_MS) hits.shift();
-          if (hits.push(now) > RATE_MAX_EVENTS) throw new GameError('Too fast, slow down');
+          const fast = event === 'game:move' ? fastMoveRate() : null;
+          const log = fast ? moveHits : hits;
+          while (log.length > 0 && now - log[0] > RATE_WINDOW_MS) log.shift();
+          if (log.push(now) > (fast ?? RATE_MAX_EVENTS)) throw new GameError('Too fast, slow down');
           reply({ ok: true, ...((await handler(asPayload(raw))) ?? {}) });
         } catch (err) {
           if (!(err instanceof GameError)) console.error(`[${event}]`, err);

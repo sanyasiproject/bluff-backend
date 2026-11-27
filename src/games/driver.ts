@@ -61,7 +61,12 @@ export class PluggedDriver {
     this.cancel(room);
     const auto = mod.auto(g);
     if (auto) {
-      this.schedule(room, key, auto.delayMs, () => this.hooks.onMove(room, auto.run()));
+      this.schedule(room, key, auto.delayMs, () => {
+        const events = auto.run();
+        // a real-time game's step that changed nothing: plan the next one without sending views
+        if (auto.quiet && events.length === 0) this.wake(room);
+        else this.hooks.onMove(room, events);
+      });
       return;
     }
     const id = g.turnId;
@@ -83,6 +88,9 @@ export class PluggedDriver {
       if (e.kind === 'ludo' && e.ev.type === 'move' && e.ev.captured.length > 0) {
         say(e.ev.playerId, LINES.hunted, 0.3);
         for (const c of e.ev.captured) say(c.playerId, LINES.hit, 0.3);
+      } else if (e.kind === 'snakes' && e.ev.type === 'move' && e.ev.move.bitten.length > 0) {
+        say(e.ev.move.playerId, LINES.hunted, 0.3);
+        for (const b of e.ev.move.bitten) say(b.playerId, LINES.hit, 0.3);
       } else if (e.kind === 'finish' && e.place === 1) say(e.playerId, LINES.won, 0.5);
       else if (e.kind === 'gameOver') say(bots[Math.floor(this.rand() * bots.length)], LINES.gameOver, 0.4);
     }

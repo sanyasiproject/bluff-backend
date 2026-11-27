@@ -52,9 +52,19 @@ function perGameInc(game: GameKind, p: GamePlayerDoc): Record<string, number> {
   if (!maybeModule(game)) return out;
   for (const [k, n] of Object.entries(p.stats.tallies ?? {})) {
     // only plain counter names reach the update
-    if (/^[a-z][a-zA-Z0-9]{0,30}$/.test(k) && k !== 'played' && k !== 'wins' && Number.isFinite(n)) out[`stats.perGame.${game}.${k}`] = n;
+    if (/^[a-z][a-zA-Z0-9]{0,30}$/.test(k) && !BEST_TALLY.test(k) && k !== 'played' && k !== 'wins' && Number.isFinite(n)) out[`stats.perGame.${game}.${k}`] = n;
   }
   return out;
+}
+
+/** a registry game's best* counters (Fruit's bestCombo) keep the highest game, not a sum */
+const BEST_TALLY = /^best[A-Z][a-zA-Z0-9]{0,26}$/;
+
+/** stats.perGame.<kind>.best*: the highest one game reached, for $max */
+function perGameMax(game: GameKind, p: GamePlayerDoc): Record<string, number> | null {
+  if (!maybeModule(game)) return null;
+  const out = Object.entries(p.stats.tallies ?? {}).filter(([k, n]) => BEST_TALLY.test(k) && Number.isFinite(n));
+  return out.length > 0 ? Object.fromEntries(out.map(([k, n]) => [`stats.perGame.${game}.${k}`, n])) : null;
 }
 
 /** saves games, settles stakes, pays daily game rewards, counts missions, and adds to lifetime stats */
@@ -345,6 +355,7 @@ export class GameRecorder {
               // every game by kind, with a registry game's own counters
               ...perGameInc(game, p),
             },
+            ...(perGameMax(game, p) ? { $max: perGameMax(game, p)! } : {}),
           },
         },
       }));

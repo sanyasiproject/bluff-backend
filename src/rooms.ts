@@ -557,8 +557,12 @@ export class Room {
   assertCanStart(by: string): void {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Game already started');
-    if (this.players().length < 2) throw new GameError('Need at least 2 players');
     const info = gameInfo(this.config.game);
+    // a game for a set number (Raja Mantri: 4) or more than 2 players
+    if (this.players().length < info.minPlayers) {
+      throw new GameError(info.minPlayers === info.maxPlayers ? `${info.name} needs exactly ${info.minPlayers} players${info.bots ? '. Add bots to fill the table' : ''}` : `${info.name} needs at least ${info.minPlayers} players`);
+    }
+    if (this.players().length < 2) throw new GameError('Need at least 2 players');
     if (this.players().length > info.maxPlayers) throw new GameError(`${info.name} is for ${info.minPlayers} to ${info.maxPlayers} players`);
     if (!this.players().some((m) => !m.bot)) throw new GameError('Someone has to play with the bots');
     if (this.teamGame && this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
