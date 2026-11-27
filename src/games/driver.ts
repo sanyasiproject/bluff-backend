@@ -1,7 +1,7 @@
 import { GameError } from '../game.js';
 import type { GameEvent } from '../models.js';
 import type { Room } from '../rooms.js';
-import { isPlugged, QUICK_MESSAGES, REACTIONS, type ChatEvent } from '../types.js';
+import { chatSetOf, isPlugged, type ChatEvent } from '../types.js';
 import { moduleOf } from './registry.js';
 import type { GameModule, PluggedGame } from './module.js';
 
@@ -18,12 +18,11 @@ const THINK = { roll: [800, 1600], move: [700, 1300] } as const;
 
 // lines a bot may say after big moments
 const LINES = {
-  hunted: ['Ab tu gaya 😈', 'Kya chaal hai! 🔥', 'Nice try 😏'],
-  hit: ['Kismat kharab hai yaar 🤦', 'Bas kar bhai 😂', 'Patte dekh ke rona aa gaya 😭'],
-  won: ['Aaj meri raat hai 😎', 'GG 🎉'],
-  gameOver: ['GG 🎉', 'Ek aur round! 🔁'],
+  hunted: ['Kaat diya! 😈', 'Sorry, kaatna pada 😅', 'Hehe, phir se kaat diya 😜'],
+  hit: ['Please mera goti mat kaato 🥺', 'Arre yaar, mera goti! 😭', 'Agli baari tu gaya 😏'],
+  won: ['Main jeet raha hoon 🏆', 'GG 🎉'],
+  gameOver: ['GG 🎉', 'Ek aur game! 🔁'],
 } as const;
-const lineIndex = (text: string) => (QUICK_MESSAGES as readonly string[]).indexOf(text);
 
 /** the registry game on in this room, with its module; null for Bluff, Crazy 7 and Rang */
 function pluggedOf(room: Room): { g: PluggedGame; mod: GameModule<PluggedGame> } | null {
@@ -166,7 +165,9 @@ export class PluggedDriver {
       if (!this.isOpen(room) || !room.members.some((m) => m.id === id)) return;
       // now and then an emoji instead of words
       const asEmoji = this.rand() < 0.3;
-      const index = asEmoji ? Math.floor(this.rand() * REACTIONS.length) : lineIndex(lines[Math.floor(this.rand() * lines.length)]);
+      // the table's own lists (Ludo has its own)
+      const set = chatSetOf(room.config.game);
+      const index = asEmoji ? Math.floor(this.rand() * set.reactions.length) : set.messages.indexOf(lines[Math.floor(this.rand() * lines.length)]);
       if (index < 0) return;
       try {
         this.hooks.onChat(room, room.chat(id, asEmoji ? 'reaction' : 'message', index));

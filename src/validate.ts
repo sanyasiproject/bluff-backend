@@ -15,10 +15,9 @@ import {
   RANG_MISSED_PENALTIES,
   RANG_TIMES,
   MAX_PEEKS,
-  QUICK_MESSAGES,
+  chatSetOf,
   RANKS,
   RANG_COLORS,
-  REACTIONS,
   sazaOf,
   STAKES,
   THROWS,
@@ -34,6 +33,7 @@ import {
   type Suit,
   type Role,
   type SazaBadge,
+  type GameKind,
 } from './types.js';
 import { DM_MAX_LENGTH } from './types.js';
 
@@ -253,9 +253,10 @@ export function parsePlayId(value: unknown): string {
 }
 
 /** only picks from the fixed lists, never free text; on 'pile' (reactions only) drops it on the last play */
-export function parseChat(p: Payload): { kind: ChatKind; index: number; on?: 'pile' } {
+export function parseChat(p: Payload, game?: GameKind): { kind: ChatKind; index: number; on?: 'pile' } {
   const kind = p.kind === 'reaction' || p.kind === 'message' ? p.kind : null;
-  const size = kind === 'reaction' ? REACTIONS.length : QUICK_MESSAGES.length;
+  const set = chatSetOf(game);
+  const size = kind === 'reaction' ? set.reactions.length : set.messages.length;
   const index = p.index;
   if (!kind || typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= size) {
     throw new GameError('Invalid message');

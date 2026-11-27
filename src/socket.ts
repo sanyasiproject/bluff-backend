@@ -30,6 +30,7 @@ import {
   type ServerInfo,
   stakeLevelOf,
   GAME_CATALOG,
+  chatSetOf,
   type GameKind,
 } from './types.js';
 import {
@@ -921,10 +922,10 @@ export function registerHandlers(
 
     on('chat:send', (p) => {
       const { room, member } = current();
-      const { kind, index, on } = parseChat(p);
+      const { kind, index, on } = parseChat(p, room.config.game);
       io.to(room.code).emit('chat', room.chat(member.id, kind, index, on));
       // Quick Chat lines go into the room's chat list too
-      if (kind === 'message' && !on) io.to(room.code).emit('room:msg', room.addMessage(member.id, QUICK_MESSAGES[index], true));
+      if (kind === 'message' && !on) io.to(room.code).emit('room:msg', room.addMessage(member.id, chatSetOf(room.config.game).messages[index], true));
     });
 
     // room chat: type a line; everyone in the room gets it in their list

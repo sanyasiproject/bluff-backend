@@ -429,9 +429,44 @@ export const QUICK_MESSAGES = [
   'GG 🎉',
 ] as const;
 
+/** Ludo's own emoji and quick lines (Ludo tables use these instead of REACTIONS and QUICK_MESSAGES); spoken aloud at the table */
+export const LUDO_REACTIONS = ['🎲', '🥺', '😈', '😭', '🙏', '🔥', '😂', '👏'] as const;
+export const LUDO_QUICK_MESSAGES = [
+  'Please mera goti mat kaato 🥺',
+  "Please don't cut my goti 🥺",
+  'Six de do bhagwan 🙏',
+  'Bas ek six chahiye 🤞',
+  'Chakka! 🎲',
+  'Kaat diya! 😈',
+  'Sorry, kaatna pada 😅',
+  'Hehe, phir se kaat diya 😜',
+  'Arre yaar, mera goti! 😭',
+  'Dosti mein kaat diya? 💔',
+  'Bach ke rehna 👀',
+  'Agli baari tu gaya 😏',
+  'Main safe hoon 😎',
+  'Ghar pahunch gaya 🏠',
+  'Bas ek ghar aur! 🏁',
+  'Kya kismat hai! 🍀',
+  'Jaldi roll karo ⏰',
+  'Nice move! 👏',
+  'Team up karein? 🤝',
+  'Main jeet raha hoon 🏆',
+  'GG 🎉',
+  'Ek aur game! 🔁',
+] as const;
+
+/** the emoji and quick lines a table uses: Ludo has its own, every other game the shared ones */
+export function chatSetOf(game: GameKind | undefined | null): { reactions: readonly string[]; messages: readonly string[] } {
+  return game === 'ludo' ? { reactions: LUDO_REACTIONS, messages: LUDO_QUICK_MESSAGES } : { reactions: REACTIONS, messages: QUICK_MESSAGES };
+}
+
+/** quick lines are spoken aloud at these tables (no announcer there, so the voice is free) */
+export const speaksQuickChat = (game: GameKind | undefined | null): boolean => game === 'ludo';
+
 export type ChatKind = 'reaction' | 'message';
 
-/** index points into REACTIONS or QUICK_MESSAGES, so no free text ever goes through the server */
+/** index points into the table's chatSetOf lists (REACTIONS / QUICK_MESSAGES, Ludo's own at a Ludo table), so no free text ever goes through the server */
 export interface ChatEvent {
   from: string;
   kind: ChatKind;
