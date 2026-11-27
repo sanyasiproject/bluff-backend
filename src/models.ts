@@ -1,4 +1,4 @@
-import type { Award, Card, CoinResult, GameConfig, GameReplay, InviteEvent, LifetimeStats, PlayReveal, Rank, RangCard, RangColor, RankDivisionId, SazaBadge, ShopLookKind, Suit } from './types.js';
+import type { Award, Card, CoinResult, GameConfig, GameReplay, InviteEvent, LifetimeStats, LudoLookChoice, PlayReveal, Rank, RangCard, RangColor, RankDivisionId, SazaBadge, ShopLookKind, Suit } from './types.js';
 
 /** one of a player's plays this game with the true cards (server only); open: it never stood or was called (still waiting, or cut off by a walk-out or End game) */
 export interface LoggedPlay extends PlayReveal {
@@ -51,6 +51,8 @@ export interface Member {
   hasRang: boolean;
   /** registry games their app knows (handshake auth.games); such a game waits for older apps to update */
   games: string[];
+  /** Ludo looks they picked on their phone (ludo:look); their gotis and dice show like this for everyone */
+  ludoLook: LudoLookChoice;
   /** Bluff's saza badge in this room: the last player wears it until they win a game here */
   saza: SazaBadge | null;
   /** shop looks they rent, each with the time it runs out (read at join and when they buy or switch) */

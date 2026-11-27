@@ -31,6 +31,7 @@ import {
   stakeLevelOf,
   GAME_CATALOG,
   chatSetOf,
+  ludoLookOk,
   type GameKind,
 } from './types.js';
 import {
@@ -674,6 +675,14 @@ export function registerHandlers(
     });
 
     // lobby: ready to start, or not yet (wait a minute); the host's Start opens once every other person is ready
+    // host buzzes the players who aren't ready: their phones vibrate (10 s cooldown)
+    on('room:nudge', () => {
+      const { room, member } = current();
+      const waiting = room.nudge(member.id);
+      for (const m of waiting) if (m.socketId) io.to(m.socketId).emit('room:nudged', { from: member.name });
+      return { count: waiting.length };
+    });
+
     on('room:ready', (p) => {
       const { room, member } = current();
       room.setReady(member.id, parseFlag(p.ready, 'Ready'));
@@ -785,6 +794,17 @@ export function registerHandlers(
     on('room:saza', (p) => {
       const { room, member } = current();
       publish(room, room.pickSaza(member.id, parseSaza(p.badge)));
+    });
+
+    // Ludo looks picked on the phone: their gotis and dice for everyone, and the table's board when they're host; locked looks fall back to the free one
+    on('ludo:look', (p) => {
+      const { room, member } = current();
+      const level = member.level ?? 1;
+      const next = { board: ludoLookOk('board', p.board, level), goti: ludoLookOk('goti', p.goti, level), dice: ludoLookOk('dice', p.dice, level) };
+      const was = member.ludoLook;
+      if (was.board === next.board && was.goti === next.goti && was.dice === next.dice) return;
+      member.ludoLook = next;
+      broadcast(room);
     });
 
     on('room:kick', (p) => {

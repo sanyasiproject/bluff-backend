@@ -398,6 +398,9 @@ export interface Crazy7View {
 
 export type Phase = 'lobby' | 'playing' | 'over';
 
+/** host's "get ready" buzz: once every this many ms (room:nudge → room:nudged to everyone not ready) */
+export const NUDGE_COOLDOWN_MS = 10_000;
+
 export const REACTIONS = ['😂', '🤥', '👀', '🔥', '😱', '👏', '🤡', '😎'] as const;
 
 export const QUICK_MESSAGES = [
@@ -455,6 +458,34 @@ export const LUDO_QUICK_MESSAGES = [
   'GG 🎉',
   'Ek aur game! 🔁',
 ] as const;
+
+/** how a spoken line should feel: the app bends pitch and speed to match */
+export type VoiceMood = 'plead' | 'sad' | 'happy' | 'excited' | 'cheeky' | 'calm';
+/** what the voice says for each LUDO_QUICK_MESSAGES line (same order): Hindi lines in Devanagari so a Hindi voice reads them naturally */
+export const LUDO_QUICK_VOICE: readonly { say: string; lang: 'hi' | 'en'; mood: VoiceMood }[] = [
+  { say: 'प्लीज़, मेरी गोटी मत काटो ना!', lang: 'hi', mood: 'plead' },
+  { say: "Please don't cut my goti!", lang: 'en', mood: 'plead' },
+  { say: 'छक्का दे दो भगवान!', lang: 'hi', mood: 'plead' },
+  { say: 'बस एक छक्का चाहिए!', lang: 'hi', mood: 'plead' },
+  { say: 'छक्का!', lang: 'hi', mood: 'excited' },
+  { say: 'काट दिया!', lang: 'hi', mood: 'cheeky' },
+  { say: 'सॉरी, काटना पड़ा!', lang: 'hi', mood: 'cheeky' },
+  { say: 'हीहीही, फिर से काट दिया!', lang: 'hi', mood: 'cheeky' },
+  { say: 'अरे यार, मेरी गोटी!', lang: 'hi', mood: 'sad' },
+  { say: 'दोस्ती में काट दिया?', lang: 'hi', mood: 'sad' },
+  { say: 'बच के रहना!', lang: 'hi', mood: 'cheeky' },
+  { say: 'अगली बारी तू गया!', lang: 'hi', mood: 'cheeky' },
+  { say: 'मैं सेफ़ हूँ!', lang: 'hi', mood: 'happy' },
+  { say: 'घर पहुँच गया!', lang: 'hi', mood: 'excited' },
+  { say: 'बस एक घर और!', lang: 'hi', mood: 'excited' },
+  { say: 'क्या किस्मत है!', lang: 'hi', mood: 'happy' },
+  { say: 'जल्दी रोल करो ना!', lang: 'hi', mood: 'calm' },
+  { say: 'नाइस मूव!', lang: 'hi', mood: 'happy' },
+  { say: 'टीम अप करें?', lang: 'hi', mood: 'calm' },
+  { say: 'मैं जीत रहा हूँ!', lang: 'hi', mood: 'excited' },
+  { say: 'जी जी! अच्छा खेले!', lang: 'hi', mood: 'happy' },
+  { say: 'एक और गेम!', lang: 'hi', mood: 'excited' },
+];
 
 /** the emoji and quick lines a table uses: Ludo has its own, every other game the shared ones */
 export function chatSetOf(game: GameKind | undefined | null): { reactions: readonly string[]; messages: readonly string[] } {
@@ -757,6 +788,8 @@ export interface PublicPlayer {
   away?: boolean;
   /** games won in a row (logged-in people; refreshed after each game); 0 for guests and bots (missing from older servers) */
   streak?: number;
+  /** their Ludo looks: their gotis and dice show like this for everyone; the host's board is the table's (missing from older servers) */
+  ludoLook?: LudoLookChoice;
 }
 
 /** how one player's coins changed when a game ended */
@@ -2052,3 +2085,51 @@ export interface LudoView {
 
 /** Ludo stats counters kept per account in stats.perGame.ludo */
 export const LUDO_TALLIES = ['kills', 'killed', 'home', 'sixes'] as const;
+
+// ─── Ludo looks (shared by both apps, so everyone sees the same thing) ───────────────────
+
+/** a Ludo look: unlocked at a level; both apps draw every id */
+export interface LudoLookDef {
+  id: string;
+  name: string;
+  emoji: string;
+  level: number;
+}
+/** boards: the host's board is the table's board for everyone */
+export const LUDO_BOARD_LOOKS: readonly LudoLookDef[] = [
+  { id: 'classic', name: 'Classic', emoji: '🎲', level: 1 },
+  { id: 'wood', name: 'Sheesham', emoji: '🪵', level: 3 },
+  { id: 'neon', name: 'Neon', emoji: '💡', level: 6 },
+  { id: 'night', name: 'Raat', emoji: '🌙', level: 8 },
+  { id: 'royal', name: 'Mahal', emoji: '👑', level: 10 },
+];
+/** goti styles: each player's own gotis, seen by everyone */
+export const LUDO_GOTI_LOOKS: readonly LudoLookDef[] = [
+  { id: 'glossy', name: 'Glossy', emoji: '♟️', level: 1 },
+  { id: 'marble', name: 'Marble', emoji: '🔮', level: 4 },
+  { id: 'gem', name: 'Gem', emoji: '💎', level: 8 },
+  { id: 'metal', name: 'Metal', emoji: '🥇', level: 12 },
+  { id: 'crown', name: 'Raja', emoji: '👑', level: 18 },
+];
+/** dice skins: the dice shows the skin of the player whose turn it is */
+export const LUDO_DICE_LOOKS: readonly LudoLookDef[] = [
+  { id: 'ivory', name: 'Ivory', emoji: '🎲', level: 1 },
+  { id: 'ruby', name: 'Ruby', emoji: '♦️', level: 2 },
+  { id: 'neon', name: 'Neon', emoji: '💡', level: 5 },
+  { id: 'gold', name: 'Sona', emoji: '✨', level: 7 },
+  { id: 'jade', name: 'Jade', emoji: '🟢', level: 10 },
+];
+export type LudoLookKind = 'board' | 'goti' | 'dice';
+export const LUDO_LOOKS: Record<LudoLookKind, readonly LudoLookDef[]> = { board: LUDO_BOARD_LOOKS, goti: LUDO_GOTI_LOOKS, dice: LUDO_DICE_LOOKS };
+export interface LudoLookChoice {
+  board: string;
+  goti: string;
+  dice: string;
+}
+export const DEFAULT_LUDO_LOOK: LudoLookChoice = { board: 'classic', goti: 'glossy', dice: 'ivory' };
+
+/** a look id kept only when it exists and the level unlocks it, else the first (free) one */
+export function ludoLookOk(kind: LudoLookKind, id: unknown, level: number): string {
+  const list = LUDO_LOOKS[kind];
+  return (list.find((l) => l.id === id && l.level <= level) ?? list[0]).id;
+}

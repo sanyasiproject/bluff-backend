@@ -122,3 +122,19 @@ describe('ludo over sockets', () => {
     expect(me.state!.winnerIds).toHaveLength(1);
   }, 120_000);
 });
+
+describe('Ludo looks', () => {
+  it('each player’s looks reach everyone; locked or unknown looks fall back to the free one', async () => {
+    const a = await client(['ludo']);
+    const b = await client(['ludo']);
+    const made = await send(a, 'room:create', { name: 'Asha' });
+    await send(b, 'room:join', { code: made.code, name: 'Bina' });
+    await until(() => (a.state?.players.length ?? 0) === 2);
+    // guests are level 1: only the free looks
+    await send(a, 'ludo:look', { board: 'royal', goti: 'gem', dice: 'nope' });
+    await send(b, 'ludo:look', { board: 'classic', goti: 'glossy', dice: 'ivory' });
+    const asha = () => b.state!.players.find((p) => p.name === 'Asha')!;
+    await until(() => !!asha().ludoLook);
+    expect(asha().ludoLook).toEqual({ board: 'classic', goti: 'glossy', dice: 'ivory' });
+  });
+});

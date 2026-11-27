@@ -43,6 +43,8 @@ import {
   ROOM_CHAT_MAX,
   type RoomMessage,
   handValue,
+  DEFAULT_LUDO_LOOK,
+  NUDGE_COOLDOWN_MS,
 } from './types.js';
 
 /** why a stake is too high for the bots at the table, for players to read */
@@ -224,6 +226,7 @@ export class Room {
       hasRang: false,
       games: [],
       saza: null,
+      ludoLook: DEFAULT_LUDO_LOOK,
       shop: account?.shop ?? NO_WEAR,
       // logged-in people start a season at Bronze 0
       rank: account ? (account.rank ?? { division: 'bronze', points: 0 }) : null,
@@ -423,6 +426,21 @@ export class Room {
     if (by === this.hostId) throw new GameError('The host starts the game once everyone is ready');
     m.ready = ready;
     return m;
+  }
+
+  /** when the host last nudged the room to get ready */
+  private nudgedAt = -Infinity;
+
+  /** host buzzes everyone not ready yet; once every NUDGE_COOLDOWN_MS. Returns who gets the buzz */
+  nudge(by: string, now = Date.now()): Member[] {
+    this.assertHost(by);
+    if (this.phase !== 'lobby') throw new GameError('The game has already started');
+    const waiting = this.waitingFor();
+    if (waiting.length === 0) throw new GameError('Everyone is ready');
+    const left = this.nudgedAt + NUDGE_COOLDOWN_MS - now;
+    if (left > 0) throw new GameError(`Wait ${Math.ceil(left / 1000)}s to buzz again`);
+    this.nudgedAt = now;
+    return waiting;
   }
 
   /** seated people who haven't said they're ready; the host, bots and older apps never hold up the start */
@@ -915,6 +933,7 @@ export class Room {
         rank: m.bot ? null : m.rank,
         away: this.isAway(m.id),
         streak: m.bot ? 0 : m.streak,
+        ludoLook: m.ludoLook,
       })),
       watchers: this.members
         .filter((m) => !seatedIds.has(m.id))

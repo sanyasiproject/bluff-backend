@@ -22,3 +22,10 @@ describe('Ludo chat set', () => {
     expect(new Set(LUDO_QUICK_MESSAGES).size).toBe(LUDO_QUICK_MESSAGES.length);
   });
 });
+
+describe('Ludo voice lines', () => {
+  it('one spoken line for every quick line', async () => {
+    const { LUDO_QUICK_VOICE } = await import('../src/types.js');
+    expect(LUDO_QUICK_VOICE.length).toBe(LUDO_QUICK_MESSAGES.length);
+  });
+});
