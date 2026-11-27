@@ -60,22 +60,22 @@ describe.skipIf(!MONGO)('Fruit and Spikes stats (MongoDB)', () => {
     return store.games.save(record);
   }
 
-  it('Fruit counters add up, but bestCombo keeps the best game; Spikes counters add up', async () => {
+  it('Fruit counters add up, but bestReflex keeps the best game; Spikes counters add up', async () => {
     const a = await account();
     const b = await account();
-    const fruit = (combo: number, sliced: number) => [
-      { memberId: 'a', userId: a.id, won: true, place: 1, stats: { ...zero, tallies: { sliced, bombs: 1, bestCombo: combo } } },
-      { memberId: 'b', userId: b.id, loser: true, place: 2, stats: { ...zero, tallies: { sliced: 2, bombs: 0, bestCombo: 1 } } },
+    const fruit = (reflex: number, won: number) => [
+      { memberId: 'a', userId: a.id, won: true, place: 1, stats: { ...zero, tallies: { won, magnets: 1, bestReflex: reflex } } },
+      { memberId: 'b', userId: b.id, loser: true, place: 2, stats: { ...zero, tallies: { won: 2, magnets: 0, bestReflex: 500 } } },
     ];
-    await save('fruit', fruit(6, 20));
-    await save('fruit', fruit(3, 15));
+    await save('fruit', fruit(720, 9));
+    await save('fruit', fruit(650, 7));
     await save('spikes', [
       { memberId: 'a', userId: a.id, loser: true, place: 2, stats: { ...zero, tallies: { dodges: 4, hits: 3 } } },
       { memberId: 'b', userId: b.id, won: true, place: 1, stats: { ...zero, tallies: { dodges: 7, hits: 1 } } },
     ]);
     const ua = (await users.findOne({ _id: a.oid }))!;
-    expect(ua.stats.perGame).toEqual({ fruit: { played: 2, wins: 2, sliced: 35, bombs: 2, bestCombo: 6 }, spikes: { played: 1, wins: 0, dodges: 4, hits: 3 } });
+    expect(ua.stats.perGame).toEqual({ fruit: { played: 2, wins: 2, won: 16, magnets: 2, bestReflex: 720 }, spikes: { played: 1, wins: 0, dodges: 4, hits: 3 } });
     const ub = (await users.findOne({ _id: b.oid }))!;
-    expect(ub.stats.perGame?.fruit).toEqual({ played: 2, wins: 0, sliced: 4, bombs: 0, bestCombo: 1 });
+    expect(ub.stats.perGame?.fruit).toEqual({ played: 2, wins: 0, won: 4, magnets: 0, bestReflex: 500 });
   });
 });

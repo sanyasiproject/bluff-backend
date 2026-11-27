@@ -57,7 +57,7 @@ function perGameInc(game: GameKind, p: GamePlayerDoc): Record<string, number> {
   return out;
 }
 
-/** a registry game's best* counters (Fruit's bestCombo) keep the highest game, not a sum */
+/** a registry game's best* counters (Fruit's bestReflex: 1000 − best reaction ms) keep the highest game, not a sum */
 const BEST_TALLY = /^best[A-Z][a-zA-Z0-9]{0,26}$/;
 
 /** stats.perGame.<kind>.best*: the highest one game reached, for $max */

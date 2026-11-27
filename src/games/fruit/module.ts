@@ -2,19 +2,15 @@ import { GameError } from '../../game.js';
 import type { GameEvent } from '../../models.js';
 import type { AnnounceKind, FruitMoveInput } from '../../types.js';
 import type { GameModule } from '../module.js';
-import { FRUIT_MAX_IDS, FruitGame, type FruitTally } from './game.js';
+import { FruitGame, type FruitTally } from './game.js';
 
-/** a combo this big is read out */
-const SAY_COMBO = 5;
-
-/** a game:move payload's Fruit part: { type: 'slice', ids: fruit ids, at: ms after startsAt } */
+/** a game:move payload's Fruit part: { type: 'strike', round, reaction: ms from when the item showed on this phone } */
 export function parseFruitMove(raw: unknown): FruitMoveInput {
   const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  if (p.type !== 'slice') throw new GameError('Invalid move');
-  const ids = p.ids;
-  if (!Array.isArray(ids) || ids.length === 0 || ids.length > FRUIT_MAX_IDS || !ids.every((x) => Number.isInteger(x) && x > 0 && x < 100_000)) throw new GameError('Invalid move');
-  if (typeof p.at !== 'number' || !Number.isFinite(p.at) || Math.abs(p.at) > 10 * 60_000) throw new GameError('Invalid move');
-  return { type: 'slice', ids: ids as number[], at: p.at };
+  if (p.type !== 'strike') throw new GameError('Invalid move');
+  if (!Number.isInteger(p.round) || (p.round as number) < 1 || (p.round as number) > 1000) throw new GameError('Invalid move');
+  if (typeof p.reaction !== 'number' || !Number.isFinite(p.reaction) || p.reaction < 0 || p.reaction > 60_000) throw new GameError('Invalid move');
+  return { type: 'strike', round: p.round as number, reaction: Math.round(p.reaction) };
 }
 
 function describe(g: FruitGame, e: GameEvent, n: (id: string | null) => string): [AnnounceKind, string] | null {
@@ -24,13 +20,11 @@ function describe(g: FruitGame, e: GameEvent, n: (id: string | null) => string):
     if (g.closed && won.length === 0) return ['over', 'Game over. Only bots are left playing'];
     if (won.length === 0) return ['over', 'Game over'];
     const pts = (g.scores.get(won[0]) ?? 0).toLocaleString('en-IN');
-    return ['over', won.length > 1 ? `Time's up! ${won.map(n).join(' and ')} share first with ${pts} points 🎉` : `Time's up! ${n(won[0])} wins with ${pts} points 🎉`];
+    return ['over', won.length > 1 ? `Game over! ${won.map(n).join(' and ')} share first with ${pts} points 🎉` : `Game over! ${n(won[0])} wins with ${pts} points 🎉`];
   }
   if (e.kind !== 'fruit') return null;
-  const x = e.ev;
-  if (x.type === 'go') return ['round', `Slice! ${x.seconds} seconds on the clock 🍉`];
-  // only the big combos: no line per slice
-  if (x.combo >= SAY_COMBO) return ['play', `${n(x.playerId)} sliced ${x.combo} in one swipe! 🔥`];
+  // only the start: items, strikes and results show on the table
+  if (e.ev.type === 'go') return ['round', `Swords ready! ${e.ev.rounds} items, fastest strike takes the fruit. Never cut the magnet 🧲`];
   return null;
 }
 
@@ -40,22 +34,21 @@ export const fruitModule: GameModule<FruitGame> = {
   view: (g) => ({ kind: 'fruit', fruit: g.view() }),
   move(g, playerId, raw) {
     const m = parseFruitMove(raw);
-    return g.slice(playerId, m.ids, m.at);
+    return g.strike(playerId, m.round, m.reaction);
   },
   describe,
-  // the countdown, every bot swipe and the final whistle, on the server's clock
+  // the countdown, each item, bots' strikes and each item's close, on the server's clock
   auto(g) {
     const step = g.nextStep();
     return step ? { delayMs: Math.max(0, step.at - g.now()), run: step.run, quiet: true } : null;
   },
-  // ends the game on time even with nobody connected
-  clock: (g) => (g.over ? null : { endsAt: g.endsAt, run: () => g.finish() }),
-  // nobody has a turn, so this is only a fallback: bots swipe through auto()
-  botMove: () => ({ type: 'slice', ids: [1], at: 0 }),
+  clock: () => null,
+  // nobody has a turn, so this is only a fallback: bots strike through auto()
+  botMove: (g) => ({ type: 'strike', round: g.round, reaction: 400 }),
   turnKey: (g) => `${g.stepSeq}`,
   inPlay: (g, id) => g.inPlay(id),
-  // ~10 swipes a second
-  moveRate: 150,
+  // one strike an item; room for a few retries
+  moveRate: 60,
   tallies: (g, id) => ({ ...((g.stats.get(id)?.tallies as FruitTally | undefined) ?? {}) }),
   missionCounts: () => ({}),
 };

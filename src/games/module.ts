@@ -37,6 +37,8 @@ export interface GameModule<G extends PluggedGame = PluggedGame> {
   inPlay(game: G, id: string): boolean;
   /** game:move events one connection may send per 10 s (real-time games); unset: the socket's usual limit for every event */
   moveRate?: number;
+  /** real-time movement: events `is` marks live (positions) skip the replay and announcer and go out with the next view, at most every `ms` */
+  live?: { ms: number; is(e: GameEvent): boolean };
   /** this player's counters for stats.perGame[kind] (best* counters keep the highest, the rest add up) */
   tallies(game: G, playerId: string): Record<string, number>;
   /** a saved game's counters (from tallies) for the mission counters */

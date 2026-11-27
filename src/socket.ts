@@ -127,9 +127,16 @@ export function registerHandlers(
   /** when each account's last connection closed while this server ran */
   const wentOffline = new Map<string, number>();
   // every player gets their own view so hands stay private; bots then plan their next move
+  /** real-time movement games: when views last went out, and a planned push that carries the moves since */
+  const lastPush = new WeakMap<Room, number>();
+  const livePush = new Map<Room, ReturnType<typeof setTimeout>>();
   const broadcast = (room: Room) => {
     // the turn clock first, so every view carries this turn's time left
     clock.wake(room);
+    lastPush.set(room, Date.now());
+    const pending = livePush.get(room);
+    if (pending) clearTimeout(pending);
+    livePush.delete(room);
     for (const m of room.members) if (m.socketId) io.to(m.socketId).emit('state', room.view(m.id));
     bots.wake(room);
     c7bots.wake(room);
@@ -167,7 +174,28 @@ export function registerHandlers(
       .catch((err: Error) => console.error('[games] could not save game:', err.message));
   };
 
+  /** live moves (positions) go out with the next view, at most one push every `ms` */
+  const pushSoon = (room: Room, ms: number) => {
+    plugged.wake(room);
+    if (livePush.has(room)) return;
+    const wait = Math.max(0, (lastPush.get(room) ?? 0) + ms - Date.now());
+    const timer = setTimeout(() => {
+      livePush.delete(room);
+      if (rooms.isOpen(room)) broadcast(room);
+    }, wait);
+    livePush.set(room, timer);
+  };
+
+  /** the live part of the registry game on, if it has one */
+  const liveOf = (room: Room) => {
+    const g = room.plugged;
+    return g && isPlugged(g.config.game) ? (moduleOf(g.config.game).live ?? null) : null;
+  };
+
   const afterMove = (room: Room, events: GameEvent[], notes: Announcement[] = []) => {
+    const live = liveOf(room);
+    // only moves: no replay step, no announcer, a coalesced view push
+    if (live && notes.length === 0 && events.length > 0 && events.every((e) => live.is(e))) return pushSoon(room, live.ms);
     // once no person holds cards against the bots, the result is settled
     const all = [...events, ...room.endIfOnlyBots()];
     const over = all.some((e) => e.kind === 'gameOver');
@@ -1075,6 +1103,8 @@ export function registerHandlers(
       rangauto.stop();
       rangclock.stop();
       plugged.stop();
+      for (const t of livePush.values()) clearTimeout(t);
+      livePush.clear();
       clock.stop();
     },
     /** a player changed their avatar, card back or table: their seat in any room shows it at once */

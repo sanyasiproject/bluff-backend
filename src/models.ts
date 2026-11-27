@@ -1,4 +1,4 @@
-import type { Award, Card, CoinResult, GameConfig, DartThrow, GameReplay, InviteEvent, LifetimeStats, LudoLookChoice, PlayReveal, Rank, RangCard, RangColor, RankDivisionId, SazaBadge, ShopLookKind, SnakesLastMove, SpikeDir, Suit } from './types.js';
+import type { Award, Card, CoinResult, GameConfig, DartThrow, FruitItemKind, GameReplay, InviteEvent, LifetimeStats, LudoLookChoice, PlayReveal, Rank, RangCard, RangColor, RankDivisionId, SazaBadge, ShopLookKind, SnakesLastMove, SpikeDir, Suit } from './types.js';
 
 /** one of a player's plays this game with the true cards (server only); open: it never stood or was called (still waiting, or cut off by a walk-out or End game) */
 export interface LoggedPlay extends PlayReveal {
@@ -361,12 +361,14 @@ export type GameEvent =
   | { kind: 'fruit'; ev: FruitEvent }
   | { kind: 'spikes'; ev: SpikesEvent };
 
-/** Fruit Slice Duel: the fruit start flying, then one accepted swipe (ids: fruit it really cut; combo: fruit, not bombs) */
+/** Fruit Slice Duel: play starts, an item pops up, a strike is taken, the item's result (winner: fastest on a fruit; slowed: magnet strikers) */
 export type FruitEvent =
-  | { type: 'go'; seconds: number }
-  | { type: 'slice'; playerId: string; ids: number[]; points: number; combo: number; bomb: boolean };
+  | { type: 'go'; rounds: number }
+  | { type: 'item'; round: number; kind: FruitItemKind }
+  | { type: 'strike'; playerId: string; round: number }
+  | { type: 'result'; round: number; kind: FruitItemKind; winner: string | null; points: number; slowed: string[] };
 
-/** Spike Attack: play starts, a player steps, a warning shows, a spike strikes (hit: players who lost a life), a player is out, time runs out */
+/** Spike Attack: play starts, a player moves (to: [x, y] in arena units; live, coalesced into views), a warning shows, a spike strikes (hit: players who lost a life), a player is out, time runs out */
 export type SpikesEvent =
   | { type: 'go' }
   | { type: 'step'; playerId: string; to: [number, number] }

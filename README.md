@@ -228,45 +228,64 @@ handshake; a game won't start while a seated person's app lacks it ("must update
 ### Real-time registry games (Fruit Slice Duel, Spike Attack)
 
 - Everyone moves at once: `turnId` stays null, so the turn timer, its stand-in moves and "away" never apply. The countdown, every
-  timed step and the bots run through the module's `auto()`, keyed on the game's `stepSeq`, which only timed steps bump (a person's
-  move never resets the plan). Steps marked `quiet` that change nothing send no views. Views carry `now` (server ms) so apps can
-  line up their clocks; times in views (`startsAt`, `endsAt`, `warnAt`, `strikeAt`, `safeUntil`) are server ms since epoch.
-- Socket limit: `game:move` in these games counts against the module's own `moveRate` per 10 s (Fruit 150, Spikes 100) in a
+  timed step and the bots run through the module's `auto()`, keyed on the game's `stepSeq` (Spikes: people's moves never bump it;
+  Fruit: a strike does, since it can move the item's close). Steps marked `quiet` that change nothing send no views. Views carry
+  `now` (server ms) so apps can line up their clocks; times in views (`startsAt`, `shownAt`, `warnAt`, `strikeAt`, `safeUntil`) are
+  server ms since epoch.
+- Live moves (`GameModule.live`, Spikes only): position events skip the replay and announcer; views go out at most every 80 ms
+  (`SPIKES_PUSH_MS`, leading edge: a lone move goes out at once, moves in the next 80 ms share one push). Warnings, strikes, outs
+  and the end go out immediately and carry the latest positions.
+- Socket limit: `game:move` in these games counts against the module's own `moveRate` per 10 s (Spikes 200, Fruit 60) in a
   separate bucket; every other event keeps the usual 40 per 10 s.
 
 ### Fruit Slice Duel (`config.game: 'fruit'`, `src/games/fruit/`)
 
-- 2–4 players, `opts.time` 45 or 60 s. `phase: 'countdown'` for 3 s (`FRUIT_COUNTDOWN_MS`) until `startsAt`, then `'play'` until
-  `endsAt`, then `'over'`. The server picks `seed`; every phone draws `fruitWave(seed, seconds)` with `fruitAt`.
-- Move `{ type: 'slice', ids, at }`: 1–12 fruit ids, `at` = ms after `startsAt` (server clock via `now`). Refused: before the start
-  ("Wait for the countdown"), `at` more than `FRUIT_SLICE_SLACK_MS` (450) behind the server's elapsed time ("Too late, that swipe did
-  not count") or ahead of it ("That swipe is ahead of the clock"), after the end ("Time's up"). Each id counts once per player and
-  only if on screen at `at` (`fruitAt` within -0.05..1.05); others in the swipe are dropped, and a swipe with none left gets
-  "Already sliced" (all were mine already) or "Nothing to slice there".
-- Points `FRUIT_POINTS` (bomb -10, scores may go below 0); 3+ fruit in one swipe add +1 per fruit over 2. Highest score wins, ties
-  share. The game ends on time through `auto()`, and through `clock()` too if nobody is connected.
-- Bots plan every swipe at the start: each fruit near its peak (±250 ms) with 55 / 72 / 85 % (Normal / Hard / Expert), a bomb by
-  mistake 10 / 5 / 2 %; cuts within 160 ms make one swipe (combos); swipes within 120 ms go out as one step.
-- Counters `stats.perGame.fruit.sliced/bombs/bestCombo` (`best*` counters are saved with `$max`, the rest add up). Announcer: "Slice!
-  45 seconds on the clock 🍉", "Asha sliced 5 in one swipe! 🔥" (5+ only), "Time's up! Asha wins with 42 points 🎉".
+- A reaction duel: one item at a time pops up in the middle, everyone has a sword and one Strike button. 2–4 players,
+  `opts.rounds` 15 or 25 items. `phase: 'countdown'` for 3 s (`FRUIT_COUNTDOWN_MS`), then `'play'`, then `'over'` right after the
+  last item's result.
+- Each item: a random wait of 1.0–2.6 s (`FRUIT_GAP_MS`), then `item: { round, kind, shownAt }` (view pushed at once). About 1 in 4
+  items is a `'magnet'`, never two in a row; fruit kinds are random. `round` is the item up or last shown (0 before the first).
+- Move `{ type: 'strike', round, reaction }`: `reaction` = ms from when the item was painted on that phone to the tap (whole ms;
+  0–60000, else "Invalid move"). One per player per item. Refused: "Wait for the countdown", "Wait for the item to show" (no item yet
+  or a later round), "Too late, that item is over" (an earlier round or after the close), "You already struck this one", "Too fast
+  to be real, that strike did not count" (`reaction` < `FRUIT_MIN_REACTION_MS` 110), "That strike doesn't match the clock, it did
+  not count" (`reaction` > server ms since `shownAt` + 30: the phone can't have drawn it before the server sent it), "The game is
+  over". There's no per-player round-trip check (an honest player may claim anything from 110 ms up to the real elapsed time).
+- Close: `FRUIT_COLLECT_MS` (700) after the first accepted strike, or `FRUIT_ITEM_MS` (2500) after `shownAt`, or at once when
+  everyone still seated has struck. Judging: a slowed sword adds `FRUIT_SLOW_MS` (350) to its reaction. A fruit goes to the smallest
+  judged reaction (a dead heat: the strike the server got first) for `FRUIT_ITEM_POINTS` (apple/orange/banana 1, grapes/mango 2,
+  melon 3); nobody struck = no points. A magnet gives no points and slows everyone who struck it for the next
+  `FRUIT_MAGNET_ROUNDS` (2) items. Each closed item takes one off existing slows first. `result: { round, kind, winner, reactions
+  (judged ms, null = no strike), slowed }`; the next wait starts `FRUIT_RESULT_MS` (1.2 s) after the close. Who struck stays hidden
+  until the result. Highest score wins, ties share.
+- Bots strike every fruit at a reaction drawn from Normal 430–760 ms, Hard 320–560, Expert 250–420 (+350 while slowed) and strike a
+  magnet by mistake 18 / 9 / 4 %.
+- Counters `stats.perGame.fruit.won` (fruit won), `magnets` (magnets struck) and `bestReflex` = 1000 − best raw reaction ms on a
+  fruit (a `best*` counter, saved with `$max`; show it as `1000 − bestReflex` ms). Announcer: "Swords ready! 15 items, fastest
+  strike takes the fruit. Never cut the magnet 🧲", "Game over! Asha wins with 12 points 🎉".
 
 ### Spike Attack (`config.game: 'spikes'`, `src/games/spikes/`)
 
-- 2–4 players, `opts.size` 5 or 6, `opts.speed` normal or fast. Players start in the corners (`pos` is `[col, row]`, row 0 on top)
-  with `SPIKES_LIVES` (3). 3 s countdown (`startsAt`), then play.
-- Move `{ type: 'step', dir: 'up' | 'down' | 'left' | 'right' }`; "Wait for the countdown", "Too quick, one step at a time"
-  (under 140 ms since your last step), "Can't go that way" (wall), "You're out". Players may share a square.
+- Free movement. 2–4 players, `opts.size` 5 or 6 (the arena is size × size units, y 0 at the top), `opts.speed` normal or fast.
+  Players start at the corner boxes' centres (`pos` `[x, y]` floats, rounded to 3 decimals in views) with `SPIKES_LIVES` (3).
+  3 s countdown (`startsAt`), then play.
+- Move `{ type: 'move', x, y }` (finite, |v| < 100, else "Invalid move"), sent ~12 times a second. Never refused for speed: it is
+  cut back along the line to `SPIKES_SPEED` (3.2/s) × ms since your last accepted move + slack, then kept within
+  [`SPIKES_RADIUS`, size − `SPIKES_RADIUS`] (0.32). The slack is unused allowance carried over, at most `SPIKES_SLACK` (0.35), so it
+  absorbs bunched packets but never adds up. Errors: "Wait for the countdown", "You're out", "The game is over".
 - Warnings: the first 0.6 s into play, then every gap + 0–0.4 s; each shows `warn` ms before `strikeAt`. Normal: warn 3 s → 1 s and
   gap 1.7 s → 0.55 s over 75 s of play; fast: 2 s → 1 s and 1.25 s → 0.45 s over 50 s. At most 1 + one per 15 s of play at once
-  (never more than size − 1, so a safe square is left); a row or column is never warned twice at once.
-- A strike hits everyone on the line not `safeUntil` (1 s after a hit): -1 life. 0 lives = out (`places`; players out on the same
-  strike share the place). Last one standing wins (`finish` event); the last players out together share first. After 3 minutes
-  of play (`SPIKES_MAX_MS`) most lives left wins. When no person is left standing, bots still up are ranked by lives.
-- Bots look around every 160–360 ms (180–300 ms while stepping) and only see a warning after a reaction time (Expert 0.2–0.5 s,
-  Hard 0.3–0.8 s, Normal 0.55–1.3 s; now and then 0.8–1.1 s later, Normal most often); on a warned line they run to the nearest square no seen spike crosses,
-  otherwise they now and then wander (better levels drift to the middle).
-- Counters `stats.perGame.spikes.dodges` (stepped off a line you stood on when it was warned) and `hits`. Announcer: "Dodge the
-  spikes! 🔺", "Asha is out 💀 (3rd)", "Ravi is the last one standing! 🏆", "Time's up! Most lives left wins", "Game over. Ravi wins 🎉".
+  (never more than size − 1, so a safe lane is left); a row or column is never warned twice at once.
+- A strike at `strikeAt` hits everyone whose body overlaps the band, not `safeUntil` (1 s after a hit): row r is hit when
+  |y − (r + 0.5)| < 0.5 + 0.85 × `SPIKES_RADIUS` (0.772), columns the same with x. -1 life; 0 lives = out (`places`; players out on
+  the same strike share the place). Last one standing wins (`finish` event); the last players out together share first. After 3
+  minutes of play (`SPIKES_MAX_MS`) most lives left wins. When no person is left standing, bots still up are ranked by lives.
+- Bots run continuously (a step every 100 ms while running, at 85 / 95 / 100 % of `SPIKES_SPEED`), look around every 250–480 /
+  170–340 / 110–220 ms (Normal / Hard / Expert) and only see a warning after a reaction time (Expert 0.2–0.5 s, Hard 0.3–0.8 s,
+  Normal 0.55–1.3 s; now and then 0.8–1.1 s later). In a warned band they run to the nearest safe spot whose path crosses no band
+  near its strike; otherwise they now and then wander (better levels drift to the middle).
+- Counters `stats.perGame.spikes.dodges` (left a band you were in when it was warned) and `hits`. Announcer: "Dodge the spikes! 🔺",
+  "Asha is out 💀 (3rd)", "Ravi is the last one standing! 🏆", "Time's up! Most lives left wins", "Game over. Ravi wins 🎉".
 
 ## Rules worth knowing
 
@@ -429,7 +448,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `rang:pass` | – (Rang: end the turn after picking) |
 | `rang:call` | – (Rang: "last card") |
 | `rang:challenge` | – (Rang: challenge the single +4 that hit you) |
-| `game:move` | `PluggedMove` `{ kind, move }` (registry games; `kind` must be the game on, else "That move is for another game"). Ludo: `{ kind: 'ludo', move: { type: 'roll' } }` or `{ kind: 'ludo', move: { type: 'move', token: 0..3 } }` (a goti in `LudoView.movable`). Saanp Seedhi: `{ kind: 'snakes', move: { type: 'roll' } }`. Raja Mantri: `{ kind: 'rmcs', move: { type: 'open' } }` or `{ kind: 'rmcs', move: { type: 'guess', target: memberId } }`. Darts: `{ kind: 'darts', move: { type: 'throw', x, y } }`. Dots and Boxes: `{ kind: 'dots', move: { type: 'line', line } }`. Colour Wars: `{ kind: 'colorwar', move: { type: 'tap', cell } }`. Fruit: `{ kind: 'fruit', move: { type: 'slice', ids, at } }`. Spike Attack: `{ kind: 'spikes', move: { type: 'step', dir } }`. Errors come back in the ack as `{ ok: false, error }` (e.g. "Not your turn", "Roll the dice first", "Move a goti first", "That goti can't move 3", "Pick one of your gotis", "Invalid move"; Raja Mantri: "Your chit is already open", "Wait for everyone to open their chit", "Only the Mantri finds the Chor", "Pick one of the two players left", "This round is over"; Darts: "Aim at the board", "Wait for the next turn"; Dots: "Pick a line between two dots", "That line is already drawn"; Colour Wars: "Tap a cell on the board", "Pick an empty cell to start", "Tap one of your own cells"; Fruit: "Wait for the countdown", "Too late, that swipe did not count", "That swipe is ahead of the clock", "Time's up", "Already sliced", "Nothing to slice there"; Spikes: "Wait for the countdown", "Too quick, one step at a time", "Can't go that way", "You're out") |
+| `game:move` | `PluggedMove` `{ kind, move }` (registry games; `kind` must be the game on, else "That move is for another game"). Ludo: `{ kind: 'ludo', move: { type: 'roll' } }` or `{ kind: 'ludo', move: { type: 'move', token: 0..3 } }` (a goti in `LudoView.movable`). Saanp Seedhi: `{ kind: 'snakes', move: { type: 'roll' } }`. Raja Mantri: `{ kind: 'rmcs', move: { type: 'open' } }` or `{ kind: 'rmcs', move: { type: 'guess', target: memberId } }`. Darts: `{ kind: 'darts', move: { type: 'throw', x, y } }`. Dots and Boxes: `{ kind: 'dots', move: { type: 'line', line } }`. Colour Wars: `{ kind: 'colorwar', move: { type: 'tap', cell } }`. Fruit: `{ kind: 'fruit', move: { type: 'strike', round, reaction } }`. Spike Attack: `{ kind: 'spikes', move: { type: 'move', x, y } }`. Errors come back in the ack as `{ ok: false, error }` (e.g. "Not your turn", "Roll the dice first", "Move a goti first", "That goti can't move 3", "Pick one of your gotis", "Invalid move"; Raja Mantri: "Your chit is already open", "Wait for everyone to open their chit", "Only the Mantri finds the Chor", "Pick one of the two players left", "This round is over"; Darts: "Aim at the board", "Wait for the next turn"; Dots: "Pick a line between two dots", "That line is already drawn"; Colour Wars: "Tap a cell on the board", "Pick an empty cell to start", "Tap one of your own cells"; Fruit: "Wait for the countdown", "Wait for the item to show", "Too late, that item is over", "You already struck this one", "Too fast to be real, that strike did not count", "That strike doesn't match the clock, it did not count"; Spikes: "Wait for the countdown", "You're out") |
 | `chat:send` | `{ kind: 'reaction' \| 'message', index, on? }` (`on: 'pile'`, reactions only, while a game is on: the emoji lands on the last play instead of floating up; a Quick Chat line also goes into the room's chat list) |
 | `room:say` | `{ text }` (1–`ROOM_CHAT_LENGTH` 200 characters, one line): a typed line for everyone in the room, sent to all as `room:msg` |
 | `room:messages` | → `{ messages }`: the room's chat list, oldest first (last `ROOM_CHAT_MAX` 500 lines, kept in memory only and gone when the room closes) |

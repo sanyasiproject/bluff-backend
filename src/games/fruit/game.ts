@@ -2,32 +2,42 @@ import { secureRandom, type RandomInt } from '../../cards.js';
 import { GameError } from '../../game.js';
 import type { BetResult, FruitEvent, GameEvent, PlayerStats, TableGame } from '../../models.js';
 import { standingsOf } from '../../standings.js';
-import { FRUIT_POINTS, FRUIT_SLICE_SLACK_MS, fruitAt, fruitWave, gameOpt, type BotLevel, type Card, type FruitSpawn, type FruitView, type GameConfig } from '../../types.js';
+import {
+  FRUIT_COLLECT_MS,
+  FRUIT_ITEM_MS,
+  FRUIT_ITEM_POINTS,
+  FRUIT_KINDS,
+  FRUIT_MAGNET_ROUNDS,
+  FRUIT_MIN_REACTION_MS,
+  FRUIT_SLOW_MS,
+  gameOpt,
+  type BotLevel,
+  type Card,
+  type FruitItemKind,
+  type FruitView,
+  type GameConfig,
+} from '../../types.js';
 
-/** Fruit Slice Duel's per-account counters (stats.perGame.fruit); bestCombo keeps the highest game */
-export type FruitTally = { sliced: number; bombs: number; bestCombo: number };
+/** Fruit Slice Duel's per-account counters (stats.perGame.fruit): fruit won, magnets struck, and bestReflex = 1000 − best reaction ms (kept with $max) */
+export type FruitTally = { won: number; magnets: number; bestReflex: number };
 
-/** the 3-2-1 before the fruit start flying (ms) */
+/** the 3-2-1 before the first item (ms) */
 export const FRUIT_COUNTDOWN_MS = 3_000;
-/** most fruit ids one swipe may carry */
-export const FRUIT_MAX_IDS = 12;
-/** bot swipes this close together go out as one step (ms) */
-const BOT_BATCH_MS = 120;
-/** a bot's slices this close together are one swipe, so bots make combos too (ms) */
-const BOT_SWIPE_MS = 160;
-/** chance a bot slices a fruit, and cuts a bomb by mistake, by level */
-const BOT_ODDS: Record<BotLevel, { fruit: number; bomb: number }> = {
-  normal: { fruit: 0.55, bomb: 0.1 },
-  hard: { fruit: 0.72, bomb: 0.05 },
-  expert: { fruit: 0.85, bomb: 0.02 },
+/** the result stays up this long before the next gap starts (ms) */
+export const FRUIT_RESULT_MS = 1_200;
+/** the wait before each item: random in this range, so nobody can time it (ms) */
+export const FRUIT_GAP_MS = [1_000, 2_600] as const;
+/** a claimed reaction may exceed the time since the item showed by this much (clock rounding) */
+export const FRUIT_CLOCK_SLACK_MS = 30;
+/** chance the next item is a magnet (never two in a row, so about 1 in 4 overall) */
+const MAGNET_ODDS = 0.33;
+/** bots' reaction range and chance they strike a magnet by mistake, by level */
+export const FRUIT_BOT: Record<BotLevel, { reaction: [number, number]; magnet: number }> = {
+  normal: { reaction: [430, 760], magnet: 0.18 },
+  hard: { reaction: [320, 560], magnet: 0.09 },
+  expert: { reaction: [250, 420], magnet: 0.04 },
 };
-
-/** one planned bot swipe: ms after the start */
-interface BotSwipe {
-  playerId: string;
-  at: number;
-  ids: number[];
-}
+const FRUITS = FRUIT_KINDS.filter((k): k is Exclude<FruitItemKind, 'magnet'> => k !== 'bomb');
 
 const emptyStats = (): PlayerStats & { tallies: FruitTally } => ({
   bluffs: 0,
@@ -37,21 +47,18 @@ const emptyStats = (): PlayerStats & { tallies: FruitTally } => ({
   pickedUp: 0,
   plays: 0,
   chances: 0,
-  tallies: { sliced: 0, bombs: 0, bestCombo: 0 },
+  tallies: { won: 0, magnets: 0, bestReflex: 0 },
 });
 
 const ev = (e: FruitEvent): GameEvent => ({ kind: 'fruit', ev: e });
 
-/** on the play area at that moment (a little margin for the fruit's size) */
-export function onScreen(f: FruitSpawn, ms: number): boolean {
-  const p = fruitAt(f, ms);
-  return p !== null && p.y >= -0.05 && p.y <= 1.05 && p.x >= -0.05 && p.x <= 1.05;
+/** one taken strike: the claimed reaction and when the server got it */
+interface Strike {
+  reaction: number;
+  at: number;
 }
 
-/** ms after its throw when a fruit is at the top of its flight */
-export const peakMsOf = (f: FruitSpawn): number => f.t + (f.vy / 1.6) * 1000;
-
-/** Fruit Slice Duel: everyone slices the same seeded wave at once; highest score when time runs out wins */
+/** Fruit Slice Duel: one item at a time; fastest reaction takes a fruit, striking a magnet slows your sword */
 export class FruitGame implements TableGame<Card> {
   readonly hands = new Map<string, Card[]>();
   readonly stats = new Map<string, PlayerStats>();
@@ -62,74 +69,52 @@ export class FruitGame implements TableGame<Card> {
   readonly endedEarly = false;
   pile: Card[] = [];
   places: string[] = [];
-  /** nobody has a turn: everyone slices at once */
+  /** nobody has a turn: everyone strikes at once */
   turnId: string | null = null;
   over = false;
   aborted = false;
   closed = false;
   phase: FruitView['phase'] = 'countdown';
-  readonly seed: number;
-  readonly seconds: number;
-  readonly wave: FruitSpawn[];
+  readonly rounds: number;
   readonly startsAt: number;
-  readonly endsAt: number;
   readonly bots: Set<string>;
+  readonly level: BotLevel;
   readonly scores = new Map<string, number>();
-  readonly sliced = new Map<string, Set<number>>();
-  readonly combo = new Map<string, number>();
-  readonly bombs = new Map<string, number>();
-  /** goes up with every timed step (not with people's swipes): drivers key their timers on it */
+  /** items each player's sword stays slow for */
+  readonly slow = new Map<string, number>();
+  /** the item number now up or last shown (0 before the first) */
+  round = 0;
+  item: FruitView['item'] = null;
+  result: FruitView['result'] = null;
+  /** strikes taken for the item up */
+  readonly strikes = new Map<string, Strike>();
+  /** when the server got the first strike for the item up */
+  firstStrikeAt: number | null = null;
+  /** when the next item shows (between items) */
+  nextItemAt = Infinity;
+  /** bots' planned strikes for the item up, server time */
+  botPlan: { id: string; at: number; reaction: number }[] = [];
+  /** goes up with every timed step and with strikes that move the deadline: drivers key their timers on it */
   stepSeq = 0;
-  /** every bot swipe of the game, planned at the start, in time order */
-  readonly botPlan: BotSwipe[];
-  private planAt = 0;
-  private readonly byId: Map<number, FruitSpawn>;
 
   constructor(
     readonly order: string[],
     readonly config: GameConfig,
-    rand: RandomInt = secureRandom,
+    _rand: RandomInt = secureRandom,
     botIds: string[] = [],
     readonly now: () => number = Date.now,
-    jitter: () => number = Math.random,
+    private readonly jitter: () => number = Math.random,
   ) {
     if (order.length < 2 || order.length > 4) throw new GameError('Fruit Slice Duel needs 2 to 4 players');
-    this.seconds = gameOpt<number>(config, 'time');
-    this.seed = rand(2_000_000_000) + 1;
-    this.wave = fruitWave(this.seed, this.seconds);
-    this.byId = new Map(this.wave.map((f) => [f.id, f]));
+    this.rounds = gameOpt<number>(config, 'rounds');
     this.startsAt = this.now() + FRUIT_COUNTDOWN_MS;
-    this.endsAt = this.startsAt + this.seconds * 1000;
     this.bots = new Set(botIds);
+    this.level = (config.botLevel ?? 'hard') as BotLevel;
     for (const id of order) {
       this.stats.set(id, emptyStats());
       this.scores.set(id, 0);
-      this.sliced.set(id, new Set());
-      this.combo.set(id, 0);
-      this.bombs.set(id, 0);
+      this.slow.set(id, 0);
     }
-    this.botPlan = order.filter((id) => this.bots.has(id)).flatMap((id) => this.planBot(id, config.botLevel, jitter));
-    this.botPlan.sort((a, b) => a.at - b.at);
-  }
-
-  /** a bot's swipes: each fruit near its peak by chance, now and then a bomb by mistake */
-  private planBot(id: string, level: BotLevel, jitter: () => number): BotSwipe[] {
-    const odds = BOT_ODDS[level] ?? BOT_ODDS.hard;
-    const cuts: { at: number; id: number }[] = [];
-    for (const f of this.wave) {
-      if (jitter() >= (f.kind === 'bomb' ? odds.bomb : odds.fruit)) continue;
-      const at = Math.round(peakMsOf(f) + (jitter() - 0.5) * 500);
-      if (at < this.seconds * 1000 && onScreen(f, at)) cuts.push({ at, id: f.id });
-    }
-    cuts.sort((a, b) => a.at - b.at);
-    const out: BotSwipe[] = [];
-    for (const c of cuts) {
-      const last = out[out.length - 1];
-      // close enough to cut in one stroke, and still on screen then
-      if (last && c.at - last.at <= BOT_SWIPE_MS && onScreen(this.byId.get(c.id)!, last.at)) last.ids.push(c.id);
-      else out.push({ playerId: id, at: c.at, ids: [c.id] });
-    }
-    return out;
   }
 
   hand(_id: string): Card[] {
@@ -152,83 +137,155 @@ export class FruitGame implements TableGame<Card> {
     return this.stats.get(id)!.tallies as FruitTally;
   }
 
-  /** the countdown is over: the fruit start flying */
+  private still(): string[] {
+    return this.order.filter((id) => !this.isOut(id));
+  }
+
+  /** a random wait before the next item */
+  private gap(): number {
+    return FRUIT_GAP_MS[0] + this.jitter() * (FRUIT_GAP_MS[1] - FRUIT_GAP_MS[0]);
+  }
+
+  /** the countdown is over: the first wait starts */
   go(): GameEvent[] {
     if (this.over || this.phase !== 'countdown') return [];
     this.phase = 'play';
+    this.nextItemAt = this.now() + this.gap();
     this.stepSeq++;
-    return [ev({ type: 'go', seconds: this.seconds })];
+    return [ev({ type: 'go', rounds: this.rounds })];
   }
 
-  /** a person's swipe: `at` (ms after startsAt) must be within the slack of the server's own clock */
-  slice(id: string, ids: number[], at: number): GameEvent[] {
-    if (this.over) throw new GameError("Time's up");
-    if (!this.order.includes(id) || this.isOut(id)) throw new GameError("You're not playing this game");
-    const t = this.now() - this.startsAt;
-    if (t < 0 || at < 0) throw new GameError('Wait for the countdown');
-    if (t - at > FRUIT_SLICE_SLACK_MS) throw new GameError('Too late, that swipe did not count');
-    if (at - t > FRUIT_SLICE_SLACK_MS) throw new GameError('That swipe is ahead of the clock');
-    if (at > this.seconds * 1000) throw new GameError("Time's up");
-    return this.cut(id, ids, at);
-  }
-
-  /** the fruit really cut: each once per player, only while on screen at `at` */
-  private cut(id: string, ids: number[], at: number): GameEvent[] {
-    const mine = this.sliced.get(id)!;
-    const unique = [...new Set(ids)];
-    const cut = unique.map((x) => this.byId.get(x)).filter((f): f is FruitSpawn => !!f && !mine.has(f.id) && onScreen(f, at));
-    if (cut.length === 0) throw new GameError(unique.every((x) => mine.has(x)) ? 'Already sliced' : 'Nothing to slice there');
-    const fruit = cut.filter((f) => f.kind !== 'bomb').length;
-    const bombs = cut.length - fruit;
-    // a swipe of 3+ fruit: +1 for each fruit over 2
-    const points = cut.reduce((n, f) => n + FRUIT_POINTS[f.kind], 0) + Math.max(0, fruit - 2);
-    for (const f of cut) mine.add(f.id);
-    this.scores.set(id, (this.scores.get(id) ?? 0) + points);
-    this.combo.set(id, Math.max(this.combo.get(id) ?? 0, fruit));
-    this.bombs.set(id, (this.bombs.get(id) ?? 0) + bombs);
-    const tally = this.tallyOf(id);
-    tally.sliced += fruit;
-    tally.bombs += bombs;
-    tally.bestCombo = Math.max(tally.bestCombo, fruit);
-    return [ev({ type: 'slice', playerId: id, ids: cut.map((f) => f.id), points, combo: fruit, bomb: bombs > 0 })];
-  }
-
-  /** the next batch of bot swipes (those within BOT_BATCH_MS of the first), played as planned */
-  botSwipes(): GameEvent[] {
-    if (this.over || this.planAt >= this.botPlan.length) return [];
-    const first = this.botPlan[this.planAt].at;
-    const events: GameEvent[] = [];
-    while (this.planAt < this.botPlan.length && this.botPlan[this.planAt].at <= first + BOT_BATCH_MS) {
-      const s = this.botPlan[this.planAt++];
-      if (!this.inPlay(s.playerId)) continue;
-      try {
-        events.push(...this.cut(s.playerId, s.ids, s.at));
-      } catch (err) {
-        if (!(err instanceof GameError)) throw err;
-      }
+  /** the next item pops up; bots plan their strikes */
+  showItem(): GameEvent[] {
+    if (this.over || this.phase !== 'play' || this.item) return [];
+    const now = this.now();
+    this.round++;
+    const lastMagnet = this.result?.kind === 'magnet';
+    const kind: FruitItemKind = !lastMagnet && this.jitter() < MAGNET_ODDS ? 'magnet' : FRUITS[Math.floor(this.jitter() * FRUITS.length)];
+    this.item = { round: this.round, kind, shownAt: now };
+    this.strikes.clear();
+    this.firstStrikeAt = null;
+    this.nextItemAt = Infinity;
+    this.botPlan = [];
+    const odds = FRUIT_BOT[this.level] ?? FRUIT_BOT.hard;
+    for (const id of this.still()) {
+      if (!this.bots.has(id)) continue;
+      if (kind === 'magnet' && this.jitter() >= odds.magnet) continue;
+      const reaction = Math.round(odds.reaction[0] + this.jitter() * (odds.reaction[1] - odds.reaction[0]));
+      this.botPlan.push({ id, at: now + reaction, reaction });
     }
+    this.botPlan.sort((a, b) => a.at - b.at);
     this.stepSeq++;
+    return [ev({ type: 'item', round: this.round, kind })];
+  }
+
+  /** when the item up closes: FRUIT_COLLECT_MS after the first strike, or FRUIT_ITEM_MS after it showed */
+  deadline(): number {
+    if (!this.item) return Infinity;
+    const cap = this.item.shownAt + FRUIT_ITEM_MS;
+    return this.firstStrikeAt === null ? cap : Math.min(cap, this.firstStrikeAt + FRUIT_COLLECT_MS);
+  }
+
+  /** a person's strike at item `round`, `reaction` ms after the item showed on their screen */
+  strike(id: string, round: number, reaction: number): GameEvent[] {
+    if (this.over) throw new GameError('The game is over');
+    if (!this.order.includes(id) || this.isOut(id)) throw new GameError("You're not playing this game");
+    const now = this.now();
+    if (this.phase === 'countdown') throw new GameError('Wait for the countdown');
+    if (!this.item || round !== this.item.round) throw new GameError(round <= this.round ? 'Too late, that item is over' : 'Wait for the item to show');
+    if (now > this.deadline()) throw new GameError('Too late, that item is over');
+    if (this.strikes.has(id)) throw new GameError('You already struck this one');
+    if (reaction < FRUIT_MIN_REACTION_MS) throw new GameError('Too fast to be real, that strike did not count');
+    // the phone drew the item only after the server sent it, so a real reaction fits in the time since
+    if (reaction > now - this.item.shownAt + FRUIT_CLOCK_SLACK_MS) throw new GameError("That strike doesn't match the clock, it did not count");
+    return this.take(id, reaction, now);
+  }
+
+  /** a strike counts; the first one starts the collect window, and once everyone has struck the item closes */
+  private take(id: string, reaction: number, at: number): GameEvent[] {
+    this.strikes.set(id, { reaction, at });
+    if (this.firstStrikeAt === null) this.firstStrikeAt = at;
+    this.stepSeq++;
+    const events = [ev({ type: 'strike', playerId: id, round: this.round })];
+    if (this.still().every((p) => this.strikes.has(p))) events.push(...this.resolve());
     return events;
   }
 
-  /** the next timed step: the countdown ends, bots swipe, or time runs out */
+  /** bots' strikes due by now */
+  botStrikes(): GameEvent[] {
+    if (this.over || !this.item) return [];
+    const now = this.now();
+    const events: GameEvent[] = [];
+    this.stepSeq++;
+    while (this.item && this.botPlan.length > 0 && this.botPlan[0].at <= now) {
+      const s = this.botPlan.shift()!;
+      if (this.still().includes(s.id) && !this.strikes.has(s.id)) events.push(...this.take(s.id, s.reaction, now));
+    }
+    return events;
+  }
+
+  /** the item closes: a fruit goes to the fastest (slowed swords +FRUIT_SLOW_MS); a magnet slows whoever struck it */
+  resolve(): GameEvent[] {
+    const item = this.item;
+    if (this.over || !item) return [];
+    const now = this.now();
+    const still = this.still();
+    const judged = new Map<string, Strike>();
+    for (const [id, s] of this.strikes) if (still.includes(id)) judged.set(id, { reaction: s.reaction + ((this.slow.get(id) ?? 0) > 0 ? FRUIT_SLOW_MS : 0), at: s.at });
+    const reactions = Object.fromEntries(still.map((id) => [id, judged.get(id)?.reaction ?? null]));
+    let winner: string | null = null;
+    let points = 0;
+    let slowed: string[] = [];
+    if (item.kind === 'magnet') slowed = [...judged.keys()];
+    else {
+      // fastest judged reaction; a dead heat goes to the strike the server got first
+      for (const [id, s] of judged) {
+        const best = winner ? judged.get(winner)! : null;
+        if (!best || s.reaction < best.reaction || (s.reaction === best.reaction && s.at < best.at)) winner = id;
+      }
+      for (const [id] of judged) {
+        const t = this.tallyOf(id);
+        t.bestReflex = Math.max(t.bestReflex, Math.max(0, 1000 - this.strikes.get(id)!.reaction));
+      }
+      if (winner) {
+        points = FRUIT_ITEM_POINTS[item.kind];
+        this.scores.set(winner, (this.scores.get(winner) ?? 0) + points);
+        this.tallyOf(winner).won++;
+      }
+    }
+    // this item used up one slowed item; magnet strikers are slowed for the next ones
+    for (const id of this.order) this.slow.set(id, Math.max(0, (this.slow.get(id) ?? 0) - 1));
+    for (const id of slowed) {
+      this.slow.set(id, FRUIT_MAGNET_ROUNDS);
+      this.tallyOf(id).magnets++;
+    }
+    this.result = { round: item.round, kind: item.kind, winner, reactions, slowed };
+    this.item = null;
+    this.strikes.clear();
+    this.botPlan = [];
+    this.firstStrikeAt = null;
+    this.stepSeq++;
+    const events = [ev({ type: 'result', round: item.round, kind: item.kind, winner, points, slowed })];
+    if (this.round >= this.rounds) events.push(...this.end());
+    else this.nextItemAt = now + FRUIT_RESULT_MS + this.gap();
+    return events;
+  }
+
+  /** the next timed step: the countdown ends, an item shows, bots strike, or the item closes */
   nextStep(): { at: number; run: () => GameEvent[] } | null {
     if (this.over) return null;
     if (this.phase === 'countdown') return { at: this.startsAt, run: () => this.go() };
-    const bot = this.botPlan[this.planAt];
-    if (bot && this.startsAt + bot.at < this.endsAt) return { at: this.startsAt + bot.at, run: () => this.botSwipes() };
-    return { at: this.endsAt, run: () => this.finish() };
-  }
-
-  /** time is up: highest score wins */
-  finish(): GameEvent[] {
-    if (this.over) return [];
-    return this.end();
+    if (!this.item) return { at: this.nextItemAt, run: () => this.showItem() };
+    const close = this.deadline();
+    const bot = this.botPlan[0];
+    if (bot && bot.at < close) return { at: bot.at, run: () => this.botStrikes() };
+    return { at: close, run: () => this.resolve() };
   }
 
   private end(): GameEvent[] {
     this.over = true;
     this.phase = 'over';
+    this.item = null;
     this.stepSeq++;
     return [{ kind: 'gameOver', loserId: null }];
   }
@@ -257,14 +314,13 @@ export class FruitGame implements TableGame<Card> {
   private drop(walked: boolean): GameEvent[] {
     this.stepSeq++;
     const still = this.still();
-    if (still.length > 1) return [];
+    if (still.length > 1) {
+      // everyone left may already have struck
+      return this.item && still.every((p) => this.strikes.has(p)) ? this.resolve() : [];
+    }
     // a kick leaves no fair winner; a walk-out hands the game to whoever is left
     if (!walked || still.length === 0) this.aborted = true;
     return this.end();
-  }
-
-  private still(): string[] {
-    return this.order.filter((id) => !this.isOut(id));
   }
 
   /** the top score among those still seated, ties share */
@@ -290,19 +346,18 @@ export class FruitGame implements TableGame<Card> {
     return standingsOf([], this.still(), (p) => -(this.scores.get(p) ?? 0)).get(id) ?? null;
   }
 
-  /** the same for everyone: the seed draws the wave on each phone */
+  /** the same for everyone: who struck stays hidden until the result */
   view(): FruitView {
     const rec = <T>(m: Map<string, T>) => Object.fromEntries(this.order.map((id) => [id, m.get(id)!]));
     return {
       phase: this.phase,
-      seed: this.seed,
-      seconds: this.seconds,
-      startsAt: this.startsAt,
-      endsAt: this.endsAt,
+      round: this.round,
+      rounds: this.rounds,
+      item: this.item ? { ...this.item } : null,
+      result: this.result ? { ...this.result, reactions: { ...this.result.reactions }, slowed: [...this.result.slowed] } : null,
       scores: rec(this.scores),
-      sliced: Object.fromEntries(this.order.map((id) => [id, [...this.sliced.get(id)!]])),
-      combo: rec(this.combo),
-      bombs: rec(this.bombs),
+      slow: rec(this.slow),
+      startsAt: this.startsAt,
       now: this.now(),
     };
   }

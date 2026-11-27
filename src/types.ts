@@ -1933,8 +1933,8 @@ export const GAME_CATALOG: readonly GameInfo[] = [
       { id: 'size', label: 'Arena', default: 5, choices: [{ value: 5, label: '5 × 5' }, { value: 6, label: '6 × 6' }] },
       { id: 'speed', label: 'Speed', default: 'normal', choices: [{ value: 'normal', label: 'Normal', hint: '3 second warnings to start' }, { value: 'fast', label: 'Fast', hint: '2 second warnings to start' }] },
     ] },
-  { kind: 'fruit', name: 'Fruit Slice Duel', emoji: '🍉', tagline: 'Slice the same fruit faster, dodge the bombs', category: 'arcade', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#ff5252', '#00c853'],
-    options: [{ id: 'time', label: 'Time', default: 45, choices: [{ value: 45, label: '45 sec' }, { value: 60, label: '60 sec' }] }] },
+  { kind: 'fruit', name: 'Fruit Slice Duel', emoji: '🍉', tagline: 'Fastest sword takes the fruit. Never cut the magnet!', category: 'arcade', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#ff5252', '#00c853'],
+    options: [{ id: 'rounds', label: 'Rounds', default: 15, choices: [{ value: 15, label: '15 items' }, { value: 25, label: '25 items' }] }] },
   { kind: 'darts', name: 'Darts', emoji: '🎯', tagline: 'Count down from 301, land exactly on zero', category: 'arcade', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#263238', '#d32f2f'],
     options: [{ id: 'start', label: 'Start at', default: 301, choices: [{ value: 301, label: '301' }, { value: 501, label: '501' }] }] },
   { kind: 'colorwar', name: 'Colour Wars', emoji: '🎨', tagline: 'Grow dots, burst and take over the board', category: 'board', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#00b0ff', '#ff4081'],
@@ -2491,25 +2491,39 @@ export function fruitAt(f: FruitSpawn, ms: number): { x: number; y: number } | n
   return { x: f.x0 + f.vx * s, y };
 }
 
+/** Fruit Slice Duel (reaction duel): one item at a time pops up in the middle; everyone has a sword and one Strike button */
+export type FruitItemKind = Exclude<FruitKind, 'bomb'> | 'magnet';
+/** striking a magnet slows your sword for this many next items */
+export const FRUIT_MAGNET_ROUNDS = 2;
+/** a slowed sword adds this much to your reaction time */
+export const FRUIT_SLOW_MS = 350;
+/** reactions faster than this are not human: refused */
+export const FRUIT_MIN_REACTION_MS = 110;
+/** after the first strike, the server waits this long for slower phones' strikes before naming the winner */
+export const FRUIT_COLLECT_MS = 700;
+/** an item stays up at most this long; nobody strikes = nobody scores */
+export const FRUIT_ITEM_MS = 2500;
+/** points for winning each fruit */
+export const FRUIT_ITEM_POINTS: Record<Exclude<FruitItemKind, 'magnet'>, number> = { apple: 1, orange: 1, banana: 1, grapes: 2, mango: 2, melon: 3 };
+
 export interface FruitView {
   phase: 'countdown' | 'play' | 'over';
-  seed: number;
-  seconds: number;
-  /** when the fruit start flying and when the game ends (ms since epoch, server clock) */
-  startsAt: number;
-  endsAt: number;
+  /** 1-based item number and how many in the game */
+  round: number;
+  rounds: number;
+  /** the item up now (null between items); shownAt is server time — each phone measures reaction from when IT drew the item */
+  item: { round: number; kind: FruitItemKind; shownAt: number } | null;
+  /** the last item's result: who won it (fastest reaction on a fruit), everyone's reaction (null = no strike), who got slowed by a magnet */
+  result: { round: number; kind: FruitItemKind; winner: string | null; reactions: Record<string, number | null>; slowed: string[] } | null;
   scores: Record<string, number>;
-  /** fruit each player has sliced (ids), so a phone that reconnects can hide them */
-  sliced: Record<string, number[]>;
-  /** best combo (fruit in one swipe) per player */
-  combo: Record<string, number>;
-  /** bombs each player hit */
-  bombs: Record<string, number>;
+  /** items each player's sword stays slow for (magnet) */
+  slow: Record<string, number>;
+  startsAt: number;
   /** server time when this view was made, so the app can line up its clock */
   now: number;
 }
-/** one swipe: the fruit ids it cut and when (ms after startsAt by the phone's clock, corrected by the app) */
-export type FruitMoveInput = { type: 'slice'; ids: number[]; at: number };
+/** strike at item `round`; reaction = ms from when the item appeared on this phone's screen to the tap */
+export type FruitMoveInput = { type: 'strike'; round: number; reaction: number };
 
 // ─── Spike Attack ─────────────────────────────────────────────────────────────────────────
 
@@ -2524,11 +2538,14 @@ export interface SpikeWarning {
   warnAt: number;
   strikeAt: number;
 }
+/** Spike Attack movement: free, in arena units (the arena is size × size, a player is a circle) */
+export const SPIKES_SPEED = 3.2;
+export const SPIKES_RADIUS = 0.32;
 export interface SpikesView {
   size: number;
   phase: 'countdown' | 'play' | 'over';
   startsAt: number;
-  /** [col, row] of each player, row 0 at the top */
+  /** each player's centre [x, y] in arena units (0..size), y 0 at the top; a spike on row r hits anyone whose circle overlaps r..r+1 */
   pos: Record<string, [number, number]>;
   lives: Record<string, number>;
   /** players hit just now can't be hit again until this time (ms since epoch) */
@@ -2541,5 +2558,5 @@ export interface SpikesView {
   /** server time when this view was made, so the app can line up its clock */
   now: number;
 }
-/** one step on the grid */
-export type SpikesMoveInput = { type: 'step'; dir: 'up' | 'down' | 'left' | 'right' };
+/** where my character is now (sent about 12 times a second while moving); the server checks it against SPIKES_SPEED */
+export type SpikesMoveInput = { type: 'move'; x: number; y: number };
