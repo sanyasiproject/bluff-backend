@@ -3,6 +3,9 @@ import {
   RTC_MAX_SDP,
   BET_STEPS,
   BOT_LEVELS,
+  GAME_CATALOG,
+  PLUGGED_GAMES,
+  type PluggedKind,
   CRAZY7_HAND_SIZES,
   CRAZY7_MAX_PICKS,
   GIFT_STEPS,
@@ -66,7 +69,7 @@ export function parseConfig(p: Payload): GameConfig {
   const bets = p.bets === undefined ? false : typeof p.bets === 'boolean' ? p.bets : null;
   const teams = p.teams === undefined ? false : typeof p.teams === 'boolean' ? p.teams : null;
   // the game and its Crazy 7 settings came later; older apps don't send them
-  const game = p.game === undefined ? 'bluff' : p.game === 'bluff' || p.game === 'crazy7' || p.game === 'rang' ? p.game : null;
+  const game = p.game === undefined ? 'bluff' : p.game === 'bluff' || p.game === 'crazy7' || p.game === 'rang' || p.game === 'ludo' ? p.game : null;
   const handSize = p.handSize === undefined ? 7 : (CRAZY7_HAND_SIZES as readonly unknown[]).includes(p.handSize) ? (p.handSize as 5 | 7) : null;
   const maxPicks =
     p.maxPicks === undefined ? 1 : Number.isInteger(p.maxPicks) && (p.maxPicks as number) >= 1 && (p.maxPicks as number) <= CRAZY7_MAX_PICKS ? (p.maxPicks as number) : null;
@@ -99,8 +102,33 @@ export function parseConfig(p: Payload): GameConfig {
   if (!game || handSize === null || maxPicks === null || stack7 === null || botLevel === null || saza === null || secretLies === null || ranked === null || voice === null || kismat === null || seedhi === null || turnTimer === null || turnSec === null || shields === null || c7Power === null || rangPicks === null || rangStack === null || rangChallenge === null || rangSwap === null || rangForce === null || rangDoubles === null || rangHand === null || rangMissed === null || rangTime === null) {
     throw new GameError('Invalid settings');
   }
+  const opts = parseOpts(p.opts);
   // Bluff's extras are kept while Crazy 7 is picked (it ignores them), so switching back keeps them; bets need coins at stake
-  return { game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked, voice, kismat, seedhi, turnTimer, turnSec, shields, c7Power, rangPicks, rangStack, rangChallenge, rangSwap, rangForce, rangHand, rangMissed, rangDoubles, rangTime };
+  return { ...(opts ? { opts } : {}), game, decks, bluffRule, stake, peeks, bets: bets && stake > 0, teams, handSize, maxPicks, stack7, botLevel, saza, secretLies, ranked, voice, kismat, seedhi, turnTimer, turnSec, shields, c7Power, rangPicks, rangStack, rangChallenge, rangSwap, rangForce, rangHand, rangMissed, rangDoubles, rangTime };
+}
+
+/** registry games' settings: only option ids in GAME_CATALOG with one of their choices; anything else is dropped (missing: defaults) */
+export function parseOpts(value: unknown): Record<string, string | number | boolean> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const out: Record<string, string | number | boolean> = {};
+  for (const [id, v] of Object.entries(value as Payload).slice(0, 40)) {
+    const ok = GAME_CATALOG.some((g) => g.options.some((o) => o.id === id && o.choices.some((c) => c.value === v)));
+    if (ok) out[id] = v as string | number | boolean;
+  }
+  return out;
+}
+
+/** the registry games an app knows (handshake auth.games); anything else is ignored */
+export function parseGames(value: unknown): PluggedKind[] {
+  if (!Array.isArray(value)) return [];
+  return PLUGGED_GAMES.filter((k) => value.includes(k));
+}
+
+/** game:move: { kind, move } for the registry game on; the move itself is checked by that game's module */
+export function parsePluggedMove(p: Payload, on: string): unknown {
+  if (p.kind !== on) throw new GameError('That move is for another game');
+  if (p.move === undefined || p.move === null || typeof p.move !== 'object') throw new GameError('Invalid move');
+  return p.move;
 }
 
 // only the browsers' own push services: the server never posts to any other address a client sends

@@ -30,9 +30,14 @@ const CRAZY7_RULES: AwardRule[] = [
   { emoji: '🙊', title: 'Forgot to call', score: (s) => s.missedCalls ?? 0, detail: (n) => `missed last card ${plural(n, 'time')}` },
 ];
 
+const LUDO_RULES: AwardRule[] = [
+  { emoji: '💥', title: 'Goti hunter', score: (s) => s.tallies?.kills ?? 0, detail: (n) => `knocked off ${plural(n, 'goti')}` },
+  { emoji: '🎲', title: 'Lucky sixes', score: (s) => s.tallies?.sixes ?? 0, detail: (n) => `rolled ${n} ${n === 1 ? 'six' : 'sixes'}` },
+];
+
 /** highest score wins each award and ties share it; awards nobody earned are left out */
 export function computeAwards(stats: Map<string, PlayerStats>, game: GameKind = 'bluff'): Award[] {
-  return (game === 'crazy7' ? CRAZY7_RULES : game === 'rang' ? RANG_RULES : RULES).flatMap((rule) => {
+  return (game === 'crazy7' ? CRAZY7_RULES : game === 'rang' ? RANG_RULES : game === 'ludo' ? LUDO_RULES : RULES).flatMap((rule) => {
     const scored = [...stats].map(([id, s]) => ({ id, n: rule.score(s) }));
     const best = Math.max(0, ...scored.map((x) => x.n));
     if (best === 0) return [];

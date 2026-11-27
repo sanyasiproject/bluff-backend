@@ -1,6 +1,7 @@
 import { ObjectId, type AnyBulkWriteOperation } from 'mongodb';
 import { istDay } from '../days.js';
 import type { CatchDoc, Collections, GameDoc, GamePlayerDoc, UserDoc } from '../db/documents.js';
+import { maybeModule } from '../games/registry.js';
 import { HABIT_KEYS, habitsPipeline } from '../habits.js';
 import type { GameRecord } from '../models.js';
 import {
@@ -44,6 +45,17 @@ const asLifetime = (p: GamePlayerDoc, crazy7 = false): LifetimeStats => ({
   crazy7Games: crazy7 ? 1 : 0,
   bonusXp: 0,
 });
+
+/** stats.perGame.<kind>: played, wins and (registry games) the game's own counters */
+function perGameInc(game: GameKind, p: GamePlayerDoc): Record<string, number> {
+  const out: Record<string, number> = { [`stats.perGame.${game}.played`]: 1, [`stats.perGame.${game}.wins`]: p.won ? 1 : 0 };
+  if (!maybeModule(game)) return out;
+  for (const [k, n] of Object.entries(p.stats.tallies ?? {})) {
+    // only plain counter names reach the update
+    if (/^[a-z][a-zA-Z0-9]{0,30}$/.test(k) && k !== 'played' && k !== 'wins' && Number.isFinite(n)) out[`stats.perGame.${game}.${k}`] = n;
+  }
+  return out;
+}
 
 /** saves games, settles stakes, pays daily game rewards, counts missions, and adds to lifetime stats */
 export class GameRecorder {
@@ -330,6 +342,8 @@ export class GameRecorder {
               'stats.crazy7Games': game === 'crazy7' ? 1 : 0,
               'stats.rangGames': game === 'rang' ? 1 : 0,
               'stats.bonusXp': bonusXpOf(p),
+              // every game by kind, with a registry game's own counters
+              ...perGameInc(game, p),
             },
           },
         },
@@ -380,6 +394,8 @@ export class GameRecorder {
         friendWins: withFriend && p.won ? 1 : 0,
         lastCalls: crazy7 ? (p.stats.lastCalls ?? 0) : 0,
         stacks: crazy7 ? (p.stats.stacks ?? 0) : 0,
+        // a registry game's own counters (Ludo: games, wins, kills, gotis home, sixes)
+        ...(maybeModule(config.game)?.missionCounts(p.stats.tallies ?? {}, p.won) ?? {}),
       };
       try {
         const boost = coinBoostOf(p);

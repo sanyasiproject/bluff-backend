@@ -1,4 +1,5 @@
 import { fallback, seatView } from './crazy7/brain.js';
+import { maybeModule } from './games/registry.js';
 import { GameError } from './game.js';
 import type { GameEvent } from './models.js';
 import type { Room } from './rooms.js';
@@ -17,6 +18,12 @@ function dueTurn(room: Room): { key: string; playerId: string } | null {
   const g = room.table;
   if (!g || g.over || !g.turnId || room.isBot(g.turnId)) return null;
   if (!room.members.some((m) => !m.bot && m.socketId !== null)) return null;
+  const mod = room.plugged ? maybeModule(room.plugged.config.game) : null;
+  if (room.plugged && mod) {
+    // registry games' automatic steps play themselves
+    if (mod.auto(room.plugged)) return null;
+    return { key: `pg|${mod.turnKey(room.plugged)}`, playerId: g.turnId };
+  }
   if (room.rang) {
     // Rang's automatic picks and passes play themselves too
     if (room.rang.autoDue) return null;
@@ -158,6 +165,8 @@ export class TurnClock {
     let events: GameEvent[];
     try {
       events = this.brain(room, id);
+      // registry games have only the brain's move
+      if (events.length === 0 && room.plugged) return;
       if (events.length === 0) events = room.rang ? rangMove(room, id) : room.c7 ? crazy7Move(room, id) : bluffMove(room, id);
     } catch (err) {
       console.error('[turn timer] auto move failed:', (err as Error).message);

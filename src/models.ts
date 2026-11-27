@@ -49,6 +49,8 @@ export interface Member {
   hasTwists: boolean;
   /** their app has Rang and Crazy 7 power cards; such a game waits for older apps to update */
   hasRang: boolean;
+  /** registry games their app knows (handshake auth.games); such a game waits for older apps to update */
+  games: string[];
   /** Bluff's saza badge in this room: the last player wears it until they win a game here */
   saza: SazaBadge | null;
   /** shop looks they rent, each with the time it runs out (read at join and when they buy or switch) */
@@ -275,6 +277,8 @@ export interface PlayerStats {
   lastCalls?: number;
   /** Bluff: how they really played this game, added to the account's habits when the game is saved */
   habits?: Habits;
+  /** registry games: the game's own per-account counters (Ludo: kills, killed, home, sixes), added to stats.perGame when saved */
+  tallies?: Record<string, number>;
 }
 
 /** what a room reads from whichever game is on (Bluff's Game, Crazy7Game or RangGame); C is that game's card */
@@ -344,4 +348,15 @@ export type GameEvent =
   | { kind: 'rgmissed'; playerId: string }
   | { kind: 'rgshuffle'; count: number }
   /** the hit player challenged a +4: guilty (played while holding the colour) means its player picks; else the challenger picks */
-  | { kind: 'rgchallenge'; playerId: string; targetId: string; guilty: boolean; count: number };
+  | { kind: 'rgchallenge'; playerId: string; targetId: string; guilty: boolean; count: number }
+  // Ludo (registry game)
+  | { kind: 'ludo'; ev: LudoEvent };
+
+/** one Ludo step; owner: whose goti moved (a 2v2 partner's once the mover's own are all home) */
+export type LudoEvent =
+  | { type: 'roll'; playerId: string; roll: number; sixes: number }
+  | { type: 'move'; playerId: string; owner: string; token: number; from: number; to: number; roll: number; captured: { playerId: string; token: number; from: number }[]; home: boolean; bonus: boolean }
+  /** no goti could move, or the third 6 in a row lost the turn */
+  | { type: 'pass'; playerId: string; roll: number; threeSixes: boolean }
+  /** Master mode: nobody could move for a while, so every goti may now go home */
+  | { type: 'unlock' };

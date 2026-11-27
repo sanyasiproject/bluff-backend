@@ -17,6 +17,8 @@ vitest 5 (vite 8 as dev peer) + supertest. Accounts are optional: without `MONGO
 | `src/types.ts` | Shapes and constants shared with the app. **The frontend copy must stay identical** (only the "Keep in sync" header differs). Shared logic too: `levelOf`, `xpOf`, `XP_RULES`, `DAILY_GAME_REWARDS`, `BET_STEPS`, `MAX_PEEKS` |
 | `src/game.ts` | Pure game rules (deal, play, pass, bluff, peek, bets, 2v2 teams, finishing, winners/losers). No sockets |
 | `src/crazy7/` | Second game, Crazy 7: `game.ts` (pure rules; `fromState` copies for bot search), bots (`driver.ts` timers, `brain.ts` search, `memory.ts` public events). The room holds `game` (Bluff) or `c7`; `room.table` is whichever is on (`TableGame` in `models.ts`) |
+| `src/games/` | **Game registry** (Game Baithak): every game after Rang plugs in here. `module.ts` (`GameModule`: create, view, move, describe, auto, clock, botMove, turnKey, inPlay, tallies, missionCounts), `registry.ts` (`MODULES`, `moduleOf`, `maybeModule`), `driver.ts` (`PluggedDriver`: automatic steps, bots at a human pace, game time, the turn timer's stand-in, for every registry game). The room holds it in `room.plugged` (part of `room.table`), the view in `RoomView.plugged`, moves arrive as `game:move` |
+| `src/games/ludo/` | Ludo: `game.ts` (pure rules, `LudoGame implements TableGame` with no cards), `brain.ts` (Normal / Hard / Expert move scoring), `module.ts` (move parsing, announcer lines, auto steps, tallies) |
 | `src/bots/` | Bluff bot engine: `personality.ts` (6 styles, names), `levels.ts` (`config.botLevel` Normal / Hard / Expert), `memory.ts` (public events a bot saw, discards, its own read checks), `profile.ts` (a player's tendencies from saved habits, priors and read checks), `detector.ts` (chance of 0..n fakes in the last play and at each card, from card counting and the profile; hard and expert weigh every way the round's earlier claims could have gone), `brain.ts` (pure decisions from `room.view(botId)`: calls mixed near the line, peeks, its own plays scored and picked at random, and `planOf`: a mode that changes every few rounds), `driver.ts` (timers incl. the 2 s call window; moves go through `Game` and `afterMove` like a person's) |
 | `src/habits.ts` | `Habits` counters recorded in `Game.play` / `pass` / `callBluff` with the true cards (incl. how people play around bots: traps, over-claims, calls on bots' plays counted once each person had their chance; `Game.bots` says which seats are bots), merged into `users.habits` by `GameRecorder.save` (`habitsPipeline`: old totals fade by `HABIT_DECAY` per game, capped at `HABIT_TURN_LIMIT` turns, so the last ~25 games weigh most) |
 | `src/secrets.ts` | Secret mission cards: deal one per person at the start (`dealSecrets`) and count each card's progress from its holder's own stats and plays (`secretView`) |
@@ -49,6 +51,14 @@ unset = localhost/LAN only), optional `MONGODB_DB`, `ADMIN_API_KEY`, `DEFAULT_CO
 and for friend-invite notifications `VAPID_PUBLIC_KEY` + `VAPID_PRIVATE_KEY` (secret) + optional `VAPID_SUBJECT` (`services/push.ts`;
 without the keys push is off; an admin can also switch it off in the app).
 
+## Adding a new game (registry checklist)
+
+1. `src/types.ts` (then copy to both apps, keeping their line 1): add the kind to `GameKind` and `PLUGGED_GAMES`, a `GAME_CATALOG` entry (players, teams, bots, `options`), its view in `PluggedView`, its move in `PluggedMove`, any tallies and mission counters.
+2. `src/games/<kind>/`: `game.ts` (pure rules implementing `TableGame`: empty hands, `pile` [], `winners()`/`losers()` like Ludo's, `leave` = forfeit, `removePlayer`, `close`), `brain.ts` (bots by `config.botLevel`), `module.ts` (the `GameModule`).
+3. One line in `src/games/registry.ts`. `validate.ts` accepts the kind in `parseConfig`; nothing else in rooms or sockets should need a branch.
+4. Tests: `test/<kind>.test.ts` (rules), `<kind>-bots.test.ts` (bots finish hundreds of games, levels ordered), `<kind>-room.test.ts` (views, seats, app check), `<kind>-socket.test.ts` (a game over `game:move`).
+5. README (rules, `game:move` payload) and this map.
+
 ## Rules of thumb
 
 - Coins are virtual. Stakes, bets and the daily ladder settle only in `GameRecorder.save` for **finished** games; stopped games move nothing; balances never go below zero.
@@ -60,7 +70,7 @@ without the keys push is off; an admin can also switch it off in the app).
 - Coin shop (`services/shop.ts`): every item is a rental (1 or 7 days), never owned. Boosts are read once in `GameRecorder.save` and touch only games that count; XP boosts multiply only the game's own XP. Looks reach rooms through `lookChanged` (with `shop`) and show only while the rental runs (`shopLookOf`). Buys are `rev`-guarded and audited.
 - Saza badges (`Member.saza`) live in the room only: set in `Room.settleSaza` at a Bluff game's end, swapped by the winner with `room:saza`, never saved.
 - New room settings default to **off** and must accept older apps that don't send them (see `parseConfig`). `config.game` picks Bluff or Crazy 7; Crazy 7 ignores Bluff's extras (kept for switching back).
-- Code that works for both games goes through `room.table`; Bluff-only code uses `room.game`, Crazy 7 `room.c7`.
+- Code that works for both games goes through `room.table`; Bluff-only code uses `room.game`, Crazy 7 `room.c7`, registry games `room.plugged` with `moduleOf(kind)`. Use `room.inPlay(id)` (not `hand().length`) to ask whether someone is still in the game. Seats follow `room.seatLimit` (`GAME_CATALOG` maxPlayers, at most `MAX_PLAYERS`).
 - Seated players never get another player's cards (except 2v2 partners via `partnerHand` in Bluff and `RangView.partner` in Rang, and past plays once the game is over: `Game.lieRecap`, `room:plays`). Add a test when touching `view()`.
 - Watchers see every hand, so once a game is playing `room:join` becomes a watch request (`requestWatch`) the host approves with `room:admit`; `room:lobby` lets everyone still waiting in.
 - `room:leave` mid-game with cards, or with last cards not yet settled, is a forfeit (`game.leave`): the player is in `losers()` and still pays the stake. A kick (`removePlayer`) pays nothing.

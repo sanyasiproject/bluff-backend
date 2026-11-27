@@ -1,5 +1,5 @@
 import type { Habits } from '../models.js';
-import type { LifetimeStats } from '../types.js';
+import { PLUGGED_GAMES, type LifetimeStats } from '../types.js';
 import { skillOf } from './levels.js';
 import type { BotMemory } from './memory.js';
 import type { Policy, Read } from './models.js';
@@ -44,7 +44,9 @@ function blend(prior: number, strength: number, evidence: Evidence[]): number {
 /** lifetime lie rate against the average, for accounts that have no saved habits yet */
 function lieLean(life: LifetimeStats | null | undefined): number {
   if (!life) return 1;
-  const games = life.gamesPlayed - (life.crazy7Games ?? 0) - (life.rangGames ?? 0);
+  // registry games (Ludo and after) aren't Bluff either
+  const plugged = PLUGGED_GAMES.reduce((n, k) => n + (life.perGame?.[k]?.played ?? 0), 0);
+  const games = life.gamesPlayed - (life.crazy7Games ?? 0) - (life.rangGames ?? 0) - plugged;
   if (games <= 0 || life.plays <= 0) return 1;
   const rate = (life.bluffs + PRIOR_LIES * 20) / (life.plays + 20);
   return clamp(rate / PRIOR_LIES, 0.3, 3.5);

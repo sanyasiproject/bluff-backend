@@ -98,7 +98,7 @@ export const SHIELD_MAX_CARDS = 2;
 export const BET_STEPS = [50, 100, 250, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000] as const;
 
 /** which game a room plays */
-export type GameKind = 'bluff' | 'crazy7' | 'rang';
+export type GameKind = 'bluff' | 'crazy7' | 'rang' | 'ludo';
 
 /** how well Bluff bots play; the host picks it in the lobby (Crazy 7 bots always play their best) */
 export const BOT_LEVELS = ['normal', 'hard', 'expert'] as const;
@@ -156,6 +156,8 @@ export const rangPoints = (c: Pick<RangCard, 'value'>): number =>
 export const rangHandPoints = (cards: Pick<RangCard, 'value'>[]): number => cards.reduce((n, c) => n + rangPoints(c), 0);
 
 export interface GameConfig {
+  /** registry games (GAME_CATALOG options): each game's own settings by GameOptionSpec.id; parseConfig keeps known ids and choices only (older apps don't send it) */
+  opts?: Record<string, string | number | boolean>;
   /** Bluff (default) or Crazy 7; older apps don't send it */
   game: GameKind;
   decks: 1 | 2;
@@ -845,6 +847,8 @@ export interface RoomView {
   crazy7: Crazy7View | null;
   /** the Rang table while a Rang game is on, else null */
   rang: RangView | null;
+  /** a registry game's table (Ludo and every game after it) while it's on, else null (missing from older servers) */
+  plugged?: PluggedView | null;
   /** game over with Saza on: who wears the new badge, and the winner who may still swap it; null otherwise */
   sazaPick: { loserId: string; winnerId: string } | null;
   /** a Bluff game is over: its lies, unless the host keeps them secret; null otherwise (never while the game runs) */
@@ -875,6 +879,8 @@ export interface LifetimeStats {
   crazy7Games: number;
   /** of gamesPlayed, how many were Rang (older accounts: missing) */
   rangGames?: number;
+  /** per game: played, won and the game's own counters, counted from Game Baithak on (older accounts: missing) */
+  perGame?: Partial<Record<GameKind, GameTally>>;
   /** XP from missions and secret mission cards (older accounts: 0) */
   bonusXp: number;
 }
@@ -929,7 +935,13 @@ export type MissionCounter =
   | 'stacks'
   /** Rang games finished, and won */
   | 'rangGames'
-  | 'rangWins';
+  | 'rangWins'
+  /** Ludo games finished and won, gotis knocked off, gotis home, sixes rolled */
+  | 'ludoGames'
+  | 'ludoWins'
+  | 'ludoKills'
+  | 'ludoHome'
+  | 'ludoSixes';
 
 export type MissionPeriod = 'daily' | 'weekly';
 
@@ -952,6 +964,9 @@ export const MISSIONS: readonly MissionDef[] = [
   { id: 'd-win1', period: 'daily', emoji: '🏆', title: 'Win a game', counter: 'wins', goal: 1, coins: 200, xp: 40, social: false },
   { id: 'd-catch2', period: 'daily', emoji: '🕵️', title: 'Catch 2 liars in Bluff', counter: 'goodCalls', goal: 2, coins: 150, xp: 30, social: false },
   { id: 'd-sneak3', period: 'daily', emoji: '😎', title: 'Get 3 lies past everyone in Bluff', counter: 'cleanBluffs', goal: 3, coins: 150, xp: 30, social: false },
+  { id: 'd-ludogames2', period: 'daily', emoji: '🎲', title: 'Finish 2 games of Ludo', counter: 'ludoGames', goal: 2, coins: 150, xp: 30, social: false },
+  { id: 'd-ludokills3', period: 'daily', emoji: '💥', title: 'Knock off 3 gotis in Ludo', counter: 'ludoKills', goal: 3, coins: 200, xp: 40, social: false },
+  { id: 'd-ludosixes8', period: 'daily', emoji: '🎯', title: 'Roll 8 sixes in Ludo', counter: 'ludoSixes', goal: 8, coins: 150, xp: 30, social: false },
   { id: 'd-ranggames2', period: 'daily', emoji: '🌈', title: 'Finish 2 games of Rang', counter: 'rangGames', goal: 2, coins: 150, xp: 30, social: false },
   { id: 'd-c7games2', period: 'daily', emoji: '7️⃣', title: 'Finish 2 games of Crazy 7', counter: 'crazy7Games', goal: 2, coins: 150, xp: 30, social: false },
   { id: 'd-sevens3', period: 'daily', emoji: '🃏', title: 'Play 3 sevens in Crazy 7', counter: 'sevens', goal: 3, coins: 150, xp: 30, social: false },
@@ -972,6 +987,8 @@ export const MISSIONS: readonly MissionDef[] = [
   { id: 'w-wins5', period: 'weekly', emoji: '🏆', title: 'Win 5 games', counter: 'wins', goal: 5, coins: 1_200, xp: 200, social: false },
   { id: 'w-catch10', period: 'weekly', emoji: '🕵️', title: 'Catch 10 liars in Bluff', counter: 'goodCalls', goal: 10, coins: 1_000, xp: 150, social: false },
   { id: 'w-sneak12', period: 'weekly', emoji: '😎', title: 'Get 12 lies past everyone in Bluff', counter: 'cleanBluffs', goal: 12, coins: 1_000, xp: 150, social: false },
+  { id: 'w-ludowins3', period: 'weekly', emoji: '🎲', title: 'Win 3 games of Ludo', counter: 'ludoWins', goal: 3, coins: 1_000, xp: 150, social: false },
+  { id: 'w-ludohome20', period: 'weekly', emoji: '🏠', title: 'Bring 20 gotis home in Ludo', counter: 'ludoHome', goal: 20, coins: 1_000, xp: 150, social: false },
   { id: 'w-rangwins3', period: 'weekly', emoji: '🌈', title: 'Win 3 games of Rang', counter: 'rangWins', goal: 3, coins: 1_000, xp: 150, social: false },
   { id: 'w-c7wins3', period: 'weekly', emoji: '7️⃣', title: 'Win 3 games of Crazy 7', counter: 'crazy7Wins', goal: 3, coins: 1_000, xp: 150, social: false },
   { id: 'w-secret5', period: 'weekly', emoji: '🤫', title: 'Complete 5 secret missions', counter: 'secrets', goal: 5, coins: 1_000, xp: 150, social: false },
@@ -1765,3 +1782,238 @@ export interface RoomMessage {
   /** a Quick Chat line (also shown as the usual bubble) */
   quick: boolean;
 }
+
+// ─── Game Baithak: the game catalog and registry games ───────────────────────────────
+
+/** the app's name, shown on the splash, home and page titles */
+export const APP_NAME = 'Game Baithak';
+
+/** games built on the game registry (one folder per game on each side); Bluff, Crazy 7 and Rang are wired by hand */
+export const PLUGGED_GAMES = ['ludo'] as const;
+export type PluggedKind = (typeof PLUGGED_GAMES)[number];
+export const isPlugged = (k: GameKind | undefined | null): k is PluggedKind => (PLUGGED_GAMES as readonly string[]).includes(k ?? '');
+
+export type GameCategory = 'cards' | 'board';
+export const GAME_CATEGORIES: { id: GameCategory; name: string; emoji: string }[] = [
+  { id: 'cards', name: 'Cards', emoji: '🃏' },
+  { id: 'board', name: 'Board', emoji: '🎲' },
+];
+
+/** one setting a registry game shows in the lobby; the app draws it as a row of choices */
+export interface GameOptionSpec {
+  id: string;
+  label: string;
+  hint?: string;
+  choices: { value: string | number | boolean; label: string; hint?: string }[];
+  default: string | number | boolean;
+  /** shown only while another option has this value */
+  when?: { id: string; value: string | number | boolean };
+}
+
+/** a game in the catalog: the home grid, lobby picker and profile read it */
+export interface GameInfo {
+  kind: GameKind;
+  name: string;
+  emoji: string;
+  tagline: string;
+  category: GameCategory;
+  minPlayers: number;
+  maxPlayers: number;
+  /** 2v2 partners possible */
+  teams: boolean;
+  bots: boolean;
+  /** shows a NEW badge on the home grid */
+  isNew?: boolean;
+  /** tile colours: [from, to] */
+  colors: [string, string];
+  /** registry games only: lobby settings, stored in GameConfig.opts */
+  options: GameOptionSpec[];
+}
+
+export const LUDO_MODES = ['classic', 'quick', 'timed', 'master'] as const;
+export type LudoMode = (typeof LUDO_MODES)[number];
+/** Ludo timed mode: minutes, the choices (opts.time) */
+export const LUDO_TIMES = [5, 10] as const;
+
+export const GAME_CATALOG: readonly GameInfo[] = [
+  { kind: 'ludo', name: 'Ludo', emoji: '🎲', tagline: 'Roll, race and knock gotis home', category: 'board', minPlayers: 2, maxPlayers: 4, teams: true, bots: true, isNew: true, colors: ['#ff8a3d', '#c2185b'],
+    options: [
+      { id: 'mode', label: 'Mode', default: 'classic', choices: [
+        { value: 'classic', label: 'Classic', hint: 'All 4 gotis home. A 6 opens a goti' },
+        { value: 'quick', label: 'Quick', hint: 'Gotis start open. 2 home wins' },
+        { value: 'timed', label: 'Timed', hint: 'Most points when time runs out' },
+        { value: 'master', label: 'Master', hint: 'No way home before your first kill' },
+      ] },
+      { id: 'time', label: 'Time', default: 5, when: { id: 'mode', value: 'timed' }, choices: [{ value: 5, label: '5 min' }, { value: 10, label: '10 min' }] },
+    ] },
+  { kind: 'bluff', name: 'Bluff', emoji: '🃏', tagline: 'Lie with a straight face, catch the liars', category: 'cards', minPlayers: 2, maxPlayers: 8, teams: true, bots: true, colors: ['#2e7d32', '#004d40'], options: [] },
+  { kind: 'crazy7', name: 'Crazy 7', emoji: '7️⃣', tagline: 'Match suit or number, 7s make them pick', category: 'cards', minPlayers: 2, maxPlayers: 8, teams: false, bots: true, colors: ['#6a1b9a', '#283593'], options: [] },
+  { kind: 'rang', name: 'Rang', emoji: '🌈', tagline: 'Colour cards, wilds and +4s', category: 'cards', minPlayers: 2, maxPlayers: 8, teams: true, bots: true, colors: ['#e53935', '#1e88e5'], options: [] },
+];
+
+export const gameInfo = (k: GameKind | undefined | null): GameInfo => GAME_CATALOG.find((g) => g.kind === (k ?? 'bluff')) ?? GAME_CATALOG.find((g) => g.kind === 'bluff')!;
+
+/** a registry game's option, or its default when unset or not one of its choices */
+export function gameOpt<T extends string | number | boolean>(config: Pick<GameConfig, 'game' | 'opts'>, id: string): T {
+  const spec = gameInfo(config.game).options.find((o) => o.id === id);
+  const v = config.opts?.[id];
+  if (spec && spec.choices.some((c) => c.value === v)) return v as T;
+  return (spec?.default ?? v) as T;
+}
+
+/** a registry game's table, by game; every new registry game adds a variant */
+export type PluggedView = { kind: 'ludo'; ludo: LudoView };
+
+/** a registry game's move, sent with game:move */
+export type PluggedMove = { kind: 'ludo'; move: LudoMoveInput };
+
+/** per-account numbers for one game (stats.perGame[kind]); counters are the game's own (Ludo: kills, home, sixes, killed) */
+export type GameTally = { played: number; wins: number } & Partial<Record<string, number>>;
+
+// ─── Ludo ──────────────────────────────────────────────────────────────────────────────
+
+/** goti colours in turn order, clockwise from the top left */
+export const LUDO_COLORS = ['red', 'green', 'yellow', 'blue'] as const;
+export type LudoColor = (typeof LUDO_COLORS)[number];
+export const LUDO_COLOR_HEX: Record<LudoColor, string> = { red: '#e53935', green: '#43a047', yellow: '#fdd835', blue: '#1e88e5' };
+/** the colours used for 2, 3 and 4 players (2 sit opposite) */
+export const LUDO_SEAT_COLORS: Record<2 | 3 | 4, LudoColor[]> = { 2: ['red', 'yellow'], 3: ['red', 'green', 'yellow'], 4: ['red', 'green', 'yellow', 'blue'] };
+
+/** squares on the shared ring */
+export const LUDO_RING = 52;
+/** a goti's progress: -1 in its base, 0..50 on the ring from its own start square, 51..55 its home lane, 56 home */
+export const LUDO_BASE = -1;
+export const LUDO_LAST_RING = 50;
+export const LUDO_HOME = 56;
+export const LUDO_TOKENS = 4;
+/** Quick mode: gotis home to win */
+export const LUDO_QUICK_HOME = 2;
+/** ring squares nobody can be knocked off: each colour's start and the star 8 squares on */
+export const LUDO_SAFE_RING = [0, 8, 13, 21, 26, 34, 39, 47] as const;
+/** Timed mode points: each square moved, a kill, a goti home; a goti knocked off loses the squares it had moved */
+export const LUDO_POINTS = { step: 1, kill: 20, home: 15 } as const;
+
+/** where each colour's start square sits on the ring */
+export const ludoStartOf = (c: LudoColor): number => LUDO_COLORS.indexOf(c) * 13;
+/** ring square of a goti on the ring, else null (base, lane, home) */
+export const ludoRingOf = (c: LudoColor, progress: number): number | null =>
+  progress >= 0 && progress <= LUDO_LAST_RING ? (ludoStartOf(c) + progress) % LUDO_RING : null;
+export const ludoIsSafe = (ring: number): boolean => (LUDO_SAFE_RING as readonly number[]).includes(ring);
+
+/** the 15×15 board: [col, row], row 0 at the top. The ring, starting at red's start square */
+export const LUDO_RING_CELLS: readonly [number, number][] = [
+  [1, 6], [2, 6], [3, 6], [4, 6], [5, 6],
+  [6, 5], [6, 4], [6, 3], [6, 2], [6, 1], [6, 0],
+  [7, 0],
+  [8, 0], [8, 1], [8, 2], [8, 3], [8, 4], [8, 5],
+  [9, 6], [10, 6], [11, 6], [12, 6], [13, 6], [14, 6],
+  [14, 7],
+  [14, 8], [13, 8], [12, 8], [11, 8], [10, 8], [9, 8],
+  [8, 9], [8, 10], [8, 11], [8, 12], [8, 13], [8, 14],
+  [7, 14],
+  [6, 14], [6, 13], [6, 12], [6, 11], [6, 10], [6, 9],
+  [5, 8], [4, 8], [3, 8], [2, 8], [1, 8], [0, 8],
+  [0, 7],
+  [0, 6],
+];
+/** each colour's home lane, squares 51..55 */
+export const LUDO_LANE_CELLS: Record<LudoColor, readonly [number, number][]> = {
+  red: [[1, 7], [2, 7], [3, 7], [4, 7], [5, 7]],
+  green: [[7, 1], [7, 2], [7, 3], [7, 4], [7, 5]],
+  yellow: [[13, 7], [12, 7], [11, 7], [10, 7], [9, 7]],
+  blue: [[7, 13], [7, 12], [7, 11], [7, 10], [7, 9]],
+};
+/** the four spots in each base (centres, so halves) */
+export const LUDO_BASE_CELLS: Record<LudoColor, readonly [number, number][]> = {
+  red: [[1.5, 1.5], [3.5, 1.5], [1.5, 3.5], [3.5, 3.5]],
+  green: [[10.5, 1.5], [12.5, 1.5], [10.5, 3.5], [12.5, 3.5]],
+  yellow: [[10.5, 10.5], [12.5, 10.5], [10.5, 12.5], [12.5, 12.5]],
+  blue: [[1.5, 10.5], [3.5, 10.5], [1.5, 12.5], [3.5, 12.5]],
+};
+/** home: the centre triangle of each colour (centre point) */
+export const LUDO_HOME_CELLS: Record<LudoColor, [number, number]> = { red: [6.4, 7], green: [7, 6.4], yellow: [7.6, 7], blue: [7, 7.6] };
+
+/** the board square ([col, row], cell centre at +0.5) of a goti; token picks its base spot */
+export function ludoCellOf(c: LudoColor, progress: number, token = 0): [number, number] {
+  if (progress <= LUDO_BASE) {
+    const [x, y] = LUDO_BASE_CELLS[c][token % LUDO_TOKENS];
+    return [x - 0.5, y - 0.5];
+  }
+  if (progress <= LUDO_LAST_RING) return [...LUDO_RING_CELLS[ludoRingOf(c, progress)!]] as [number, number];
+  if (progress < LUDO_HOME) return [...LUDO_LANE_CELLS[c][progress - LUDO_LAST_RING - 1]] as [number, number];
+  const [x, y] = LUDO_HOME_CELLS[c];
+  return [x - 0.5, y - 0.5];
+}
+
+/** the squares a goti passes through from one progress to the next, for a hop-by-hop animation (excludes from, includes to); a goti leaving base goes straight to its start */
+export function ludoPath(c: LudoColor, from: number, to: number): [number, number][] {
+  if (from <= LUDO_BASE) return [ludoCellOf(c, 0)];
+  const out: [number, number][] = [];
+  for (let p = from + 1; p <= to; p++) out.push(ludoCellOf(c, p));
+  return out;
+}
+
+export interface LudoSeat {
+  playerId: string;
+  color: LudoColor;
+  /** progress of each of the 4 gotis (see LUDO_BASE / LUDO_HOME) */
+  tokens: number[];
+  kills: number;
+  /** gotis home */
+  home: number;
+  /** finishing place once out, else null */
+  place: number | null;
+  /** Timed mode: points so far; 0 in the other modes */
+  score: number;
+  /** Master mode: has made a kill, so the home lane is open */
+  unlocked: boolean;
+}
+
+/** what a player does on their turn: roll, or move a goti by the roll */
+export type LudoMoveInput = { type: 'roll' } | { type: 'move'; token: number };
+
+/** one goti move, for animation and the announcer; seq goes up by one each move */
+export interface LudoLastMove {
+  seq: number;
+  playerId: string;
+  color: LudoColor;
+  token: number;
+  from: number;
+  to: number;
+  roll: number;
+  /** gotis knocked back to base by this move */
+  captured: { playerId: string; color: LudoColor; token: number; from: number }[];
+  /** the goti reached home */
+  home: boolean;
+  /** the move earned another roll (6, kill or home) */
+  bonus: boolean;
+}
+
+/** the Ludo table as one seat sees it (Ludo has no secrets: everyone sees the same) */
+export interface LudoView {
+  mode: LudoMode;
+  seats: LudoSeat[];
+  turnId: string | null;
+  /** the turn's dice: the last roll shown, null before the first roll of a turn */
+  dice: number | null;
+  /** goes up with every roll, so the app rolls the dice again even for the same number */
+  rollSeq: number;
+  /** the player on turn has rolled and must pick a goti */
+  rolled: boolean;
+  /** gotis the player on turn may move with this roll (empty before rolling) */
+  movable: number[];
+  /** sixes rolled in a row this turn (3 loses the turn) */
+  sixes: number;
+  /** whose gotis the turn player moves: their own, or their partner's once all of theirs are home (2v2) */
+  movesFor: string | null;
+  last: LudoLastMove | null;
+  /** Timed mode: when the game ends (ms since epoch); null otherwise */
+  endsAt: number | null;
+  /** 2v2: partners (red+yellow vs green+blue), else null */
+  teams: [string[], string[]] | null;
+  /** every kill so far, oldest first, for the game-over kill recap */
+  kills: { by: string; victim: string; at: number }[];
+}
+
+/** Ludo stats counters kept per account in stats.perGame.ludo */
+export const LUDO_TALLIES = ['kills', 'killed', 'home', 'sixes'] as const;

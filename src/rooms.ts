@@ -4,6 +4,8 @@ import { computeAwards } from './awards.js';
 import { cardName, describeClaim, ordinal, secureRandom } from './cards.js';
 import { Crazy7Game } from './crazy7/game.js';
 import { RangGame } from './rang/game.js';
+import type { PluggedGame } from './games/module.js';
+import { maybeModule, moduleOf } from './games/registry.js';
 import { rangCardName, rangColorName } from './rang/names.js';
 import { Game, GameError } from './game.js';
 import type { GameEvent, GameRecord, Member, MemberAccount, TableGame, WatchRequest } from './models.js';
@@ -28,6 +30,8 @@ import {
   type RangView,
   type Suit,
   rangHandPoints,
+  gameInfo,
+  isPlugged,
   type GameConfig,
   type Phase,
   type PlayerPlays,
@@ -102,6 +106,8 @@ export class Room {
   /** a Crazy 7 game */
   c7: Crazy7Game | null = null;
   rang: RangGame | null = null;
+  /** a registry game (Ludo and every game after it) */
+  plugged: PluggedGame | null = null;
   /** the running game's steps for its replay; null in the lobby */
   replay: ReplayRecorder | null = null;
   startedAt: Date | null = null;
@@ -152,7 +158,20 @@ export class Room {
 
   /** whichever game is on */
   get table(): TableGame<Card> | TableGame<RangCard> | null {
-    return this.game ?? this.c7 ?? this.rang;
+    return this.game ?? this.c7 ?? this.rang ?? this.plugged;
+  }
+
+  /** seats in this room's game: the room's limit, or fewer for a game made for fewer players */
+  get seatLimit(): number {
+    return Math.min(MAX_PLAYERS, gameInfo(this.config.game).maxPlayers);
+  }
+
+  /** still playing the running game: holding cards, or (registry games) still racing */
+  inPlay(id: string): boolean {
+    const g = this.table;
+    if (!g) return false;
+    if (this.plugged && isPlugged(this.plugged.config.game)) return moduleOf(this.plugged.config.game).inPlay(this.plugged, id);
+    return g.hand(id).length > 0;
   }
 
   get phase(): Phase {
@@ -186,7 +205,7 @@ export class Room {
       socketId: null,
       lastSeen: Date.now(),
       // late or extra people watch, and get a seat in the next game
-      watching: watch || this.phase === 'playing' || this.players().length >= MAX_PLAYERS,
+      watching: watch || this.phase === 'playing' || this.players().length >= this.seatLimit,
       watchByChoice: watch,
       slot: null,
       userId: account?.userId ?? null,
@@ -203,6 +222,7 @@ export class Room {
       hasReady: false,
       hasTwists: false,
       hasRang: false,
+      games: [],
       saza: null,
       shop: account?.shop ?? NO_WEAR,
       // logged-in people start a season at Bronze 0
@@ -242,7 +262,7 @@ export class Room {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Bots can only join in the lobby');
     if (this.rankedTable) throw new GameError("Bots can't play ranked games");
-    if (this.players().length >= MAX_PLAYERS) throw new GameError(`All ${MAX_PLAYERS} seats are taken`);
+    if (this.players().length >= this.seatLimit) throw new GameError(`All ${this.seatLimit} seats are taken`);
     const bot = this.addMember(name);
     bot.bot = true;
     return { bot, stakeLowered: this.capStake() };
@@ -283,7 +303,7 @@ export class Room {
     // last cards still open to a call: the bots get their chance first
     if (this.game?.goingOut()) return [];
     const people = g.order.filter((id) => !this.isBot(id));
-    return people.every((id) => g.hand(id).length === 0) ? g.close() : [];
+    return people.every((id) => !this.inPlay(id)) ? g.close() : [];
   }
 
   isBot(id: string): boolean {
@@ -388,7 +408,7 @@ export class Room {
       this.fillSeats();
       return m;
     }
-    if (m.watching && this.players().length >= MAX_PLAYERS) throw new GameError(`All ${MAX_PLAYERS} seats are taken`);
+    if (m.watching && this.players().length >= this.seatLimit) throw new GameError(`All ${this.seatLimit} seats are taken`);
     if (m.watching) m.ready = false;
     m.watching = false;
     m.watchByChoice = false;
@@ -419,8 +439,15 @@ export class Room {
     // picking a stake above what the bots allow is refused; picking a lower bot level brings the stake down with it
     const sameBots = stakeLevelOf(config) === stakeLevelOf(this.config);
     if (this.hasBots && sameBots && config.stake > botStakeCap(config)) throw new GameError(botStakeText(config));
+    // a game for fewer players: someone has to watch first
+    const info = gameInfo(config.game);
+    if (config.game !== this.config.game && this.players().length > info.maxPlayers) {
+      throw new GameError(`${info.name} is for ${info.minPlayers} to ${info.maxPlayers} players. Move ${this.players().length - info.maxPlayers} to watching first`);
+    }
     const before = this.config;
     this.config = config;
+    // back to a game with more seats: people waiting for one sit down
+    if (gameInfo(config.game).maxPlayers > gameInfo(before.game).maxPlayers) this.fillSeats();
     if (!config.teams) this.swapAsks.clear();
     // Saza switched off: every badge comes off
     if (!config.saza) for (const m of this.members) m.saza = null;
@@ -513,6 +540,8 @@ export class Room {
     this.assertHost(by);
     if (this.phase !== 'lobby') throw new GameError('Game already started');
     if (this.players().length < 2) throw new GameError('Need at least 2 players');
+    const info = gameInfo(this.config.game);
+    if (this.players().length > info.maxPlayers) throw new GameError(`${info.name} is for ${info.minPlayers} to ${info.maxPlayers} players`);
     if (!this.players().some((m) => !m.bot)) throw new GameError('Someone has to play with the bots');
     if (this.teamGame && this.players().length !== 4) throw new GameError('Teams need exactly 4 players');
     if (this.rankedTable) {
@@ -530,13 +559,18 @@ export class Room {
       const old = this.players().filter((m) => !m.bot && !m.hasRang);
       if (old.length > 0) throw new GameError(`${old.map((m) => m.name).join(', ')} must update the app (reload it) to play ${this.config.game === 'rang' ? 'Rang' : 'with power cards'}`);
     }
+    // registry games need an app that has them
+    if (isPlugged(this.config.game)) {
+      const old = this.players().filter((m) => !m.bot && !m.games.includes(this.config.game));
+      if (old.length > 0) throw new GameError(`${old.map((m) => m.name).join(', ')} must update the app (reload it) to play ${info.name}`);
+    }
     const waiting = this.waitingFor();
     if (waiting.length > 0) throw new GameError(`Waiting for ${waiting.map((m) => m.name).join(', ')} to be ready`);
   }
 
   /** 2v2 is on and the game plays in teams: Bluff or Rang (Crazy 7 keeps the setting but ignores it) */
   private get teamGame(): boolean {
-    return this.config.teams && this.config.game !== 'crazy7';
+    return this.config.teams && this.config.game !== 'crazy7' && gameInfo(this.config.game).teams;
   }
 
   /** the table is ranked right now (Bluff with Ranked on) */
@@ -589,6 +623,20 @@ export class Room {
     // every game starts with nobody away
     this.turnMisses.clear();
     this.turnClock = null;
+    const mod = maybeModule(this.config.game);
+    if (mod) {
+      this.game = null;
+      this.c7 = null;
+      this.rang = null;
+      // 2v2 plays in slot order, so partners sit opposite
+      const seats = this.teamGame ? (this.slotIds().filter((id) => id !== null) as string[]) : this.players().map((m) => m.id);
+      this.plugged = mod.create(seats, this.config, secureRandom, seats.filter((id) => this.isBot(id)));
+      // no secret cards or replay for registry games
+      this.secretCards.clear();
+      this.replay = null;
+      return;
+    }
+    this.plugged = null;
     if (this.config.game === 'rang') {
       this.game = null;
       this.c7 = null;
@@ -706,6 +754,7 @@ export class Room {
     this.game = null;
     this.c7 = null;
     this.rang = null;
+    this.plugged = null;
     this.replay = null;
     this.coinResults = null;
     this.sazaPick = null;
@@ -719,6 +768,7 @@ export class Room {
     this.assertHost(by);
     if (this.c7) throw new GameError('In Crazy 7 the first player out wins. Use Stop game instead');
     if (this.rang) throw new GameError('In Rang the first player out wins. Use Stop game instead');
+    if (this.plugged) throw new GameError(`${gameInfo(this.plugged.config.game).name} plays to the end. Use Stop game instead`);
     return this.requireGame().endEarly();
   }
 
@@ -737,6 +787,12 @@ export class Room {
   requireRang(): RangGame {
     if (!this.rang || this.rang.over) throw new GameError('No Rang game in progress');
     return this.rang;
+  }
+
+  /** the registry game on, for game:move */
+  requirePlugged(): PluggedGame {
+    if (!this.plugged || this.plugged.over) throw new GameError('No game in progress');
+    return this.plugged;
   }
 
   requireCrazy7(): Crazy7Game {
@@ -919,6 +975,7 @@ export class Room {
         : [],
       crazy7: this.c7 ? this.crazy7View(meId) : null,
       rang: this.rang ? this.rangView(meId, seatedIds.has(meId)) : null,
+      plugged: this.plugged && isPlugged(this.plugged.config.game) ? moduleOf(this.plugged.config.game).view(this.plugged, meId, seatedIds.has(meId)) : null,
       // set only at a Saza game's end, cleared back in the lobby
       sazaPick: this.sazaPick,
       // null until the game is over
@@ -1029,6 +1086,7 @@ export class Room {
     const n = (id: string | null) => this.members.find((m) => m.id === id)?.name ?? 'Someone';
     if (this.c7) return this.describeCrazy7(e, n);
     if (this.rang) return this.describeRang(e, n);
+    if (this.plugged && isPlugged(this.plugged.config.game)) return moduleOf(this.plugged.config.game).describe(this.plugged, e, n);
     switch (e.kind) {
       case 'play':
         return ['play', `${n(e.playerId)} played ${describeClaim(e.count, e.rank)}${e.shielded ? ' with a Card Shield 🔒' : ''}`];
@@ -1193,7 +1251,7 @@ export class Room {
   /** watchers waiting for a seat take free ones in the order they joined; those who chose to watch stay put */
   private fillSeats(): void {
     for (const m of this.members) {
-      if (m.watching && !m.watchByChoice && this.players().length < MAX_PLAYERS) {
+      if (m.watching && !m.watchByChoice && this.players().length < this.seatLimit) {
         m.watching = false;
         m.ready = false;
       }

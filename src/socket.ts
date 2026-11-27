@@ -6,6 +6,8 @@ import { Crazy7Bots } from './crazy7/driver.js';
 import { RangAuto } from './rang/auto.js';
 import { RangBots } from './rang/driver.js';
 import { RangClock } from './rang/clock.js';
+import { PluggedDriver } from './games/driver.js';
+import { moduleOf } from './games/registry.js';
 import { rankPlural } from './cards.js';
 import { GameError } from './game.js';
 import type { AccountInfo, GameEvent, GameRecord, Member, MemberAccount, PlayerLook, SocketHooks, SocketUser, WatchRequest } from './models.js';
@@ -27,6 +29,8 @@ import {
   type RtcSignal,
   type ServerInfo,
   stakeLevelOf,
+  GAME_CATALOG,
+  type GameKind,
 } from './types.js';
 import {
   asPayload,
@@ -39,6 +43,8 @@ import {
   parseCode,
   parseConfig,
   parseFlag,
+  parseGames,
+  parsePluggedMove,
   parseGift,
   parseMemberId,
   parseName,
@@ -128,6 +134,7 @@ export function registerHandlers(
     rangbots.wake(room);
     rangauto.wake(room);
     rangclock.wake(room);
+    plugged.wake(room);
   };
 
   const publish = (room: Room, notes: Announcement[]) => {
@@ -164,6 +171,7 @@ export function registerHandlers(
     bots.observe(room, all);
     c7bots.observe(room, all);
     rangbots.observe(room, all);
+    plugged.observe(room, all);
     const said = [...notes, ...room.announce(all), ...(over ? room.settleSaza() : [])];
     // the replay keeps each move with what the table heard
     if (all.length > 0 || said.length > 0) room.recordStep(said.map((a) => a.text), all);
@@ -184,6 +192,7 @@ export function registerHandlers(
     rangbots.forget(room);
     rangauto.forget(room);
     rangclock.forget(room);
+    plugged.forget(room);
     clock.forget(room);
     rooms.dropIfEmpty(room);
   };
@@ -204,7 +213,17 @@ export function registerHandlers(
     (room) => rooms.isOpen(room),
     botSpeed,
     // the same brain the bots use plays the turn
-    (room, id) => (room.rang ? rangbots.playFor(room, id) : room.c7 ? c7bots.playFor(room, id) : bots.playFor(room, id)),
+    (room, id) => (room.plugged ? plugged.playFor(room, id) : room.rang ? rangbots.playFor(room, id) : room.c7 ? c7bots.playFor(room, id) : bots.playFor(room, id)),
+  );
+
+  // registry games (Ludo and every game after it): automatic steps, bots, game time and timed-out turns
+  const plugged = new PluggedDriver(
+    {
+      onMove: (room, events) => afterMove(room, events),
+      onChat: (room, chat) => io.to(room.code).emit('chat', chat),
+    },
+    (room) => rooms.isOpen(room),
+    botSpeed,
   );
 
   // Crazy 7's automatic picks and passes, one at a time at a pace people can follow
@@ -407,6 +426,8 @@ export function registerHandlers(
     socket.data.hasTwists = (socket.handshake.auth as { twists?: unknown } | undefined)?.twists === true;
     // and apps with Rang and Crazy 7's power cards
     socket.data.hasRang = (socket.handshake.auth as { rang?: unknown } | undefined)?.rang === true;
+    // and the registry games (Ludo and after) the app has
+    socket.data.games = parseGames((socket.handshake.auth as { games?: unknown } | undefined)?.games);
     next();
   });
 
@@ -482,6 +503,7 @@ export function registerHandlers(
       member.hasReady = socket.data.hasReady === true;
       member.hasTwists = socket.data.hasTwists === true;
       member.hasRang = socket.data.hasRang === true;
+      member.games = Array.isArray(socket.data.games) ? [...(socket.data.games as string[])] : [];
       socket.join(room.code);
       seat = next;
     };
@@ -523,7 +545,7 @@ export function registerHandlers(
         if (member.socketId && member.socketId !== socket.id) {
           throw new GameError(`You're already in room ${room.code} on another device or tab. Leave it there first`);
         }
-        if (room.phase === 'playing' && room.table?.order.includes(member.id) && room.table.hand(member.id).length > 0) {
+        if (room.phase === 'playing' && room.table?.order.includes(member.id) && room.inPlay(member.id)) {
           throw new GameError(`You're in a game in room ${room.code}. Finish it or leave it first`);
         }
       }
@@ -548,6 +570,9 @@ export function registerHandlers(
       const name = nameFrom(p);
       releaseOthers(null);
       const next = rooms.create(name, await accountOf(user), ip);
+      // the game tapped on the home grid; older apps don't send it
+      const game = (p as { game?: unknown } | undefined)?.game;
+      if (typeof game === 'string' && GAME_CATALOG.some((g) => g.kind === game)) next.room.config = { ...next.room.config, game: game as GameKind };
       attach(next);
       // nobody else is in a new room yet, so there is nothing to announce
       publish(next.room, []);
@@ -852,6 +877,16 @@ export function registerHandlers(
       afterMove(room, room.requireRang().challenge(member.id));
     });
 
+    // registry games (Ludo and after): one event for every move, { kind, move }; the game's module checks and plays it
+    on('game:move', (p) => {
+      const { room, member } = current();
+      const g = room.requirePlugged();
+      const kind = g.config.game as Parameters<typeof moduleOf>[0];
+      const move = parsePluggedMove(p, kind);
+      room.markActive(member.id);
+      afterMove(room, moduleOf(kind).move(g, member.id, move));
+    });
+
     // Crazy 7: one card on the pile, pick from the deck, end the turn, or say last card
     on('c7:play', (p) => {
       const { room, member } = current();
@@ -993,6 +1028,7 @@ export function registerHandlers(
     rangbots.prune();
     rangauto.prune();
     rangclock.prune();
+    plugged.prune();
     clock.prune();
   }, SWEEP_EVERY_MS);
   timer.unref();
@@ -1005,6 +1041,7 @@ export function registerHandlers(
       rangbots.stop();
       rangauto.stop();
       rangclock.stop();
+      plugged.stop();
       clock.stop();
     },
     /** a player changed their avatar, card back or table: their seat in any room shows it at once */

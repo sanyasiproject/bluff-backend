@@ -111,6 +111,42 @@ Our own colour-card game: 108 cards (`RangCard`: 4 colours × 0, two each of 1�
   due), so the table can follow it. Bots think at least 1.1 s (0.8 s after a pick). Simulations and rule tests keep the instant mode.
 - Code: `src/crazy7/game.ts` (rules), `src/crazy7/auto.ts` (paced automatic steps), `src/crazy7/driver.ts` + `brain.ts` + `memory.ts` (bots that search ahead from what they've seen).
 
+## Game Baithak: the game registry
+
+The app is now **Game Baithak**, a home for many 2–4 player games. Bluff, Crazy 7 and Rang stay wired by hand; every new game
+plugs in through `src/games/`: `module.ts` (the `GameModule` interface), `registry.ts` (`MODULES`, `moduleOf`, one line per game)
+and `driver.ts` (one `PluggedDriver` for all of them: automatic steps, bots at a human pace, game time, the turn timer's stand-in).
+The room keeps the game in `room.plugged` (part of `room.table`), shows it as `RoomView.plugged` (`PluggedView`), takes every move
+through one socket event, `game:move` (`PluggedMove`: `{ kind, move }`), and announces through the module's `describe`.
+`GAME_CATALOG` (in `types.ts`) lists every game with its players, 2v2, bots and lobby options (`config.opts`, kept by `parseOpts`:
+known ids and choices only; missing means the default). Apps say which registry games they have with `auth.games` in the
+handshake; a game won't start while a seated person's app lacks it ("must update the app"). A game for fewer seats than the room
+(Ludo: 4) refuses the switch while too many sit, and newcomers past its seats watch. Every finished game adds
+`stats.perGame.<kind>.played/.wins` (all games), plus the registry game's own counters. No replay or secret cards for registry games.
+
+### Ludo (`config.game: 'ludo'`, `src/games/ludo/`)
+
+- 2–4 players, colours by count (2: red + yellow, 3: red, green, yellow, 4: all), turns clockwise from a random first player.
+  2v2 (`config.teams`, exactly 4): slot order, so partners sit opposite (red + yellow against green + blue).
+- Each goti's progress: -1 in base, 0..50 round the ring from its own start, 51..55 its lane, 56 home (exact roll only).
+  A 6 opens a goti; landing on an opponent off the safe squares (`LUDO_SAFE_RING`: starts and stars) sends all of theirs there
+  back to base (never a partner's). A 6, a kill or a goti home earns another roll; a 6 still rolls again when nothing can move;
+  three 6s in a row lose the turn.
+- After a roll the room plays the step itself when there's no choice: a pass (~0.9 s, so the dice is seen; 1.1 s after three 6s)
+  or the only move (~0.7 s; gotis on the same square count once). Otherwise the player sends a move.
+- Modes (`opts.mode`): **Classic** (all 4 home; play on until one is left), **Quick** (gotis start open, 2 home wins at once),
+  **Timed** (`opts.time` 5 or 10 min; ends at time up or the first finisher; ranked by points: a square 1, a kill 20, a goti home 15,
+  a knocked goti loses the squares it had covered), **Master** (no goti may pass square 50 before its player's first kill; if only the
+  lock keeps everyone still for 3 rounds, the gates open for all).
+- 2v2: a player whose gotis are all home rolls and moves for their partner (`LudoView.movesFor`); the team wins once both are home.
+- Winners: 1st place (Timed: most points, ties share; 2v2: the team); losers: everyone else (walk-outs too, removed players not).
+  Leaving mid-game is a forfeit (gotis leave the board); a kick pays nothing; host End game is refused (use Stop game).
+- Bots (`brain.ts`, the host's bot level): Normal mostly random with a light taste for kills, Hard greedy scoring (it slips now and
+  then), Expert adds the real chance of being hit, what's at stake, gotis to hunt next and its partner. Simulated Classic 1v1:
+  Expert beats Normal ~93%, Hard ~66%.
+- Counters per account: `stats.perGame.ludo.kills/killed/home/sixes`; missions `ludoGames`, `ludoWins`, `ludoKills`, `ludoHome`,
+  `ludoSixes`; awards Goti hunter and Lucky sixes.
+
 ## Rules worth knowing
 
 - **Bots** (`src/bots/`): the host adds them in the lobby (`room:addBot`). A person must be seated to start; when the last person leaves, the bots go and the room closes; once no person holds cards and the last play can't be called any more, the game ends at once (2v2 plays on), so a person who puts down every card still gets called. Bots can't host, watch or be invited; in 2v2 they accept swaps at once. They pause while no person is connected.
@@ -221,6 +257,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 |---|---|
 | `src/game.ts` | Game rules: deal, play, pass, bluff (both rules), finishing order, per-player stats |
 | `src/crazy7/` | Crazy 7: `game.ts` (rules), bots (`driver.ts`, `brain.ts`, `memory.ts`) |
+| `src/games/` | The game registry: `module.ts` (`GameModule`), `registry.ts` (`MODULES`), `driver.ts` (automatic steps, bots, game time for every registry game); `ludo/` (`game.ts` rules, `brain.ts` bots, `module.ts`) |
 | `src/bots/` | Bluff bots: `personality.ts` (styles, names), `levels.ts` (Normal / Hard / Expert), `memory.ts` (what a bot saw), `profile.ts` (how a player tends to play), `detector.ts` (how many fakes a play likely holds, and where), `brain.ts` (calls, peeks, its own plays), `driver.ts` (timers, the 2 s call window, moves through the same rules) |
 | `src/habits.ts` | Counts each player's true plays for the bots' saved habits |
 | `src/rooms.ts` | Rooms, seats and watchers, host, lobby settings, chat throttle, game snapshots, spoken announcements |
@@ -271,6 +308,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `rang:pass` | – (Rang: end the turn after picking) |
 | `rang:call` | – (Rang: "last card") |
 | `rang:challenge` | – (Rang: challenge the single +4 that hit you) |
+| `game:move` | `PluggedMove` `{ kind, move }` (registry games; `kind` must be the game on, else "That move is for another game"). Ludo: `{ kind: 'ludo', move: { type: 'roll' } }` or `{ kind: 'ludo', move: { type: 'move', token: 0..3 } }` (a goti in `LudoView.movable`). Errors come back in the ack as `{ ok: false, error }` (e.g. "Not your turn", "Roll the dice first", "Move a goti first", "That goti can't move 3", "Pick one of your gotis", "Invalid move") |
 | `chat:send` | `{ kind: 'reaction' \| 'message', index, on? }` (`on: 'pile'`, reactions only, while a game is on: the emoji lands on the last play instead of floating up; a Quick Chat line also goes into the room's chat list) |
 | `room:say` | `{ text }` (1–`ROOM_CHAT_LENGTH` 200 characters, one line): a typed line for everyone in the room, sent to all as `room:msg` |
 | `room:messages` | → `{ messages }`: the room's chat list, oldest first (last `ROOM_CHAT_MAX` 500 lines, kept in memory only and gone when the room closes) |
@@ -281,4 +319,4 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `room:kick` | `{ memberId }` (host only; mid-game the player's cards leave the game) |
 | `friend:invite` | `{ userId }` (logged in, friends only, not already in a room; once per friend per 30 s) → `{}` when online (popup), `{ pushed: true }` when offline and a notification went to their phone(s) |
 
-Connect with `io(url, { auth: { token, ready: true } })` to play as a logged-in account (`ready: true`: this app has the lobby's Ready button). Server → client: `server:info` (`{ accounts, guestsAllowed }`, on every connection and to a guest who is turned away, so the app shows Log in and the guest lock even when its `/health` check is blocked), `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud), `chat` (`{ from, kind, index }`), `invite` (`{ fromId, fromName, code }`), `friend:online` (`{ id, name, username, avatar }`: a friend's app opened after 15+ seconds away, not sent within the same room; see below), `friends:changed` (a friend request was sent, accepted or removed; both people's open apps get it, so the lobby reloads its friend buttons only then instead of polling), `throw` (`{ from, to, index }`), `voice` (`{ from, audio, mime, ms }`: someone else's voice note, binary), `gift` (`{ from, to, amount }`, member ids, only when both are in the same room), `gift:received` (`{ fromName, amount }`, to whoever got coins), `dm` (`DirectMessage`: a private message, to every open app of both people), `dm:read` (`{ reader, other }`: `reader` read everything `other` sent them), `room:msg` (`RoomMessage`: a new line in the room's chat list), `watch:admitted` (`{ code, token, name }`: the host let you in, rejoin with it), `watch:denied` (`{ code, reason? }`), `room:kicked`, `session:replaced`. `RoomView.crazy7` carries the Crazy 7 table (top card, deck and pile counts, waiting pick, my playable cards and choices, who said last card, the last move). The host's `RoomView.watchRequests` lists pending requests (empty for everyone else). `RoomView.leftPlayers` lists who used Leave game in the current game (for names, the pot and the results), cleared back in the lobby.
+Connect with `io(url, { auth: { token, ready: true, games: ['ludo'] } })` to play as a logged-in account (`ready: true`: this app has the lobby's Ready button; `games`: the registry games this app has, `PLUGGED_GAMES`). Server → client: `server:info` (`{ accounts, guestsAllowed }`, on every connection and to a guest who is turned away, so the app shows Log in and the guest lock even when its `/health` check is blocked), `state` (that player's `RoomView`), `announce` (`{ kind, text }`, read aloud), `chat` (`{ from, kind, index }`), `invite` (`{ fromId, fromName, code }`), `friend:online` (`{ id, name, username, avatar }`: a friend's app opened after 15+ seconds away, not sent within the same room; see below), `friends:changed` (a friend request was sent, accepted or removed; both people's open apps get it, so the lobby reloads its friend buttons only then instead of polling), `throw` (`{ from, to, index }`), `voice` (`{ from, audio, mime, ms }`: someone else's voice note, binary), `gift` (`{ from, to, amount }`, member ids, only when both are in the same room), `gift:received` (`{ fromName, amount }`, to whoever got coins), `dm` (`DirectMessage`: a private message, to every open app of both people), `dm:read` (`{ reader, other }`: `reader` read everything `other` sent them), `room:msg` (`RoomMessage`: a new line in the room's chat list), `watch:admitted` (`{ code, token, name }`: the host let you in, rejoin with it), `watch:denied` (`{ code, reason? }`), `room:kicked`, `session:replaced`. `RoomView.crazy7` carries the Crazy 7 table (top card, deck and pile counts, waiting pick, my playable cards and choices, who said last card, the last move). The host's `RoomView.watchRequests` lists pending requests (empty for everyone else). `RoomView.leftPlayers` lists who used Leave game in the current game (for names, the pot and the results), cleared back in the lobby.
