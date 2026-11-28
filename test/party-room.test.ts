@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RmcsGame } from '../src/games/rmcs/game.js';
 import type { SnakesGame } from '../src/games/snakes/game.js';
 import { Room } from '../src/rooms.js';
-import { LUDO_QUICK_MESSAGES, LUDO_REACTIONS, chatSetOf, speaksQuickChat } from '../src/types.js';
+import { RMCS_CHAT, SNAKES_CHAT, chatSetOf, speaksQuickChat } from '../src/types.js';
 import { parseConfig } from '../src/validate.js';
 
 const SNAKES = parseConfig({ decks: 1, bluffRule: 'one', game: 'snakes', opts: { exact: false } });
@@ -57,10 +57,11 @@ describe('Saanp Seedhi in a room', () => {
     expect(rec.players[0].stats.tallies).toEqual({ ladders: 0, snakes: 0, bites: 0 });
   });
 
-  it('uses Ludo’s chat set and voice', () => {
+  it('uses its own chat set and voice', () => {
+    expect(chatSetOf('snakes')).toBe(SNAKES_CHAT);
+    expect(chatSetOf('rmcs')).toBe(RMCS_CHAT);
     for (const k of ['snakes', 'rmcs'] as const) {
-      expect(chatSetOf(k).messages).toBe(LUDO_QUICK_MESSAGES);
-      expect(chatSetOf(k).reactions).toBe(LUDO_REACTIONS);
+      expect(chatSetOf(k).voice?.length).toBe(chatSetOf(k).messages.length);
       expect(speaksQuickChat(k)).toBe(true);
     }
     expect(speaksQuickChat('crazy7')).toBe(false);

@@ -1,7 +1,7 @@
 import { GameError } from '../game.js';
 import type { GameEvent } from '../models.js';
 import type { Room } from '../rooms.js';
-import { chatSetOf, isPlugged, type ChatEvent } from '../types.js';
+import { chatSetOf, isPlugged, type ChatEvent, type GameKind } from '../types.js';
 import { moduleOf } from './registry.js';
 import type { GameModule, PluggedGame } from './module.js';
 
@@ -16,13 +16,29 @@ type Timer = ReturnType<typeof setTimeout>;
 /** a bot's pause before rolling, and before picking a goti once it has rolled (ms at speed 1) */
 const THINK = { roll: [800, 1600], move: [700, 1300] } as const;
 
-// lines a bot may say after big moments
-const LINES = {
-  hunted: ['Kaat diya! 😈', 'Sorry, kaatna pada 😅', 'Hehe, phir se kaat diya 😜'],
-  hit: ['Please mera goti mat kaato 🥺', 'Arre yaar, mera goti! 😭', 'Agli baari tu gaya 😏'],
-  won: ['Main jeet raha hoon 🏆', 'GG 🎉'],
-  gameOver: ['GG 🎉', 'Ek aur game! 🔁'],
-} as const;
+// lines a bot may say after big moments, each from its own game's set
+interface BotLines {
+  hunted: readonly string[];
+  hit: readonly string[];
+  won: readonly string[];
+  gameOver: readonly string[];
+}
+const FINISH = { won: ['GG 🎉'], gameOver: ['GG 🎉', 'Ek aur game! 🔁'] } as const;
+export const PLUGGED_BOT_LINES: Partial<Record<GameKind, BotLines>> = {
+  ludo: {
+    hunted: ['Kaat diya! 😈', 'Sorry, kaatna pada 😅', 'Hehe, phir se kaat diya 😜'],
+    hit: ['Please mera goti mat kaato 🥺', 'Arre yaar, mera goti! 😭', 'Agli baari tu gaya 😏'],
+    won: ['Main jeet raha hoon 🏆', 'GG 🎉'],
+    gameOver: FINISH.gameOver,
+  },
+  snakes: {
+    hunted: ['Haha, neeche bhej diya 😈', 'Saanp mera dost hai 😎'],
+    hit: ['Mujhe kyun neeche bheja? 😭', 'Upar se seedha neeche 📉'],
+    won: ['Main aage hoon 🏆', 'GG 🎉'],
+    gameOver: FINISH.gameOver,
+  },
+};
+const linesOf = (game: GameKind): BotLines => PLUGGED_BOT_LINES[game] ?? { hunted: [], hit: [], ...FINISH };
 
 /** the registry game on in this room, with its module; null for Bluff, Crazy 7 and Rang */
 function pluggedOf(room: Room): { g: PluggedGame; mod: GameModule<PluggedGame> } | null {
@@ -84,6 +100,7 @@ export class PluggedDriver {
     const say = (id: string, lines: readonly string[], odds: number) => {
       if (bots.includes(id) && this.rand() < odds) this.say(room, id, lines);
     };
+    const LINES = linesOf(room.config.game);
     for (const e of events) {
       if (e.kind === 'ludo' && e.ev.type === 'move' && e.ev.captured.length > 0) {
         say(e.ev.playerId, LINES.hunted, 0.3);

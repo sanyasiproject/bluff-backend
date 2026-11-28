@@ -1,7 +1,7 @@
 import { GameError } from '../game.js';
 import type { GameEvent } from '../models.js';
 import type { Room } from '../rooms.js';
-import { QUICK_MESSAGES, REACTIONS, type ChatEvent } from '../types.js';
+import { CRAZY7_CHAT, type ChatEvent } from '../types.js';
 import type { Crazy7Action, Crazy7Personality, Rand } from './bot-models.js';
 import { decide, fallback, makePersonality, pickStyle, seatView } from './brain.js';
 import type { Crazy7Game } from './game.js';
@@ -34,16 +34,17 @@ interface Seat {
   forgot?: boolean;
 }
 
-// lines a bot may say after big moments
-const LINES = {
-  fired: ['Ab tu gaya 😈', 'Bhai tu toh gaya kaam se 💀', 'Kya chaal hai! 🔥'],
-  stacked: ['Nice try 😏', 'Bach gaya! 😅', 'Kya chaal hai! 🔥'],
-  hit: ['Kismat kharab hai yaar 🤦', 'Bas kar bhai 😂', 'Patte dekh ke rona aa gaya 😭'],
-  caught: ['Hasna mana hai 🤐', 'Bas kar bhai 😂', 'Nice try 😏'],
-  won: ['Aaj meri raat hai 😎', 'GG 🎉'],
+// lines a bot may say after big moments, from Crazy 7's own set
+export const CRAZY7_BOT_LINES = {
+  fired: ['Le, +2 😈', 'Saat aaya! 7️⃣', 'Kya chaal hai! 🔥'],
+  stacked: ['Wapas +2! 🔁', 'Bach gaya! 😅', 'Nice try 😏'],
+  hit: ['Kitne patte uthaun? 😭', 'Haath bhar gaya 🤦'],
+  caught: ['Bhool gaya last card 😂', 'Last card bola kya? 👀'],
+  won: ['Aaj meri raat hai 🌙', 'GG 🎉'],
   gameOver: ['GG 🎉', 'Ek aur round! 🔁'],
 } as const;
-const lineIndex = (text: string) => (QUICK_MESSAGES as readonly string[]).indexOf(text);
+const LINES = CRAZY7_BOT_LINES;
+const lineIndex = (text: string) => CRAZY7_CHAT.messages.indexOf(text);
 
 /** changes with every move; a planned move is dropped if the table moved on */
 const tableKey = (g: Crazy7Game) => `${g.moveSeq}|${g.turnId}|${g.penalty}|${g.picks}`;
@@ -214,7 +215,7 @@ export class Crazy7Bots {
       if (!this.isOpen(room) || !room.members.some((m) => m.id === id)) return;
       // now and then an emoji instead of words
       const asEmoji = this.rand() < 0.3;
-      const index = asEmoji ? Math.floor(this.rand() * REACTIONS.length) : lineIndex(lines[Math.floor(this.rand() * lines.length)]);
+      const index = asEmoji ? Math.floor(this.rand() * CRAZY7_CHAT.reactions.length) : lineIndex(lines[Math.floor(this.rand() * lines.length)]);
       if (index < 0) return;
       try {
         this.hooks.onChat(room, room.chat(id, asEmoji ? 'reaction' : 'message', index));

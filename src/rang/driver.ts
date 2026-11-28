@@ -1,7 +1,7 @@
 import { GameError } from '../game.js';
 import type { GameEvent } from '../models.js';
 import type { Room } from '../rooms.js';
-import { QUICK_MESSAGES, REACTIONS, type ChatEvent } from '../types.js';
+import { RANG_CHAT, type ChatEvent } from '../types.js';
 import type { Rand, RangAction, RangPersonality } from './bot-models.js';
 import { decide, fallback, makePersonality, pickStyle, seatView } from './brain.js';
 import type { RangGame } from './game.js';
@@ -34,18 +34,19 @@ interface Seat {
   forgot?: boolean;
 }
 
-// lines a bot may say after big moments
-const LINES = {
-  fired: ['Ab tu gaya 😈', 'Bhai tu toh gaya kaam se 💀', 'Kya chaal hai! 🔥'],
-  stacked: ['Nice try 😏', 'Bach gaya! 😅', 'Kya chaal hai! 🔥'],
-  hit: ['Kismat kharab hai yaar 🤦', 'Bas kar bhai 😂', 'Patte dekh ke rona aa gaya 😭'],
-  caught: ['Hasna mana hai 🤐', 'Bas kar bhai 😂', 'Nice try 😏'],
-  doubted: ['Pakka? 🤨', 'Chal jhooth mat bol 🙄', 'Mujhe sab pata hai 🧐'],
-  fair: ['Sach bol raha hoon 😇', 'Nice try 😏', 'Trust me 😉'],
-  won: ['Aaj meri raat hai 😎', 'GG 🎉'],
+// lines a bot may say after big moments, from Rang's own set
+export const RANG_BOT_LINES = {
+  fired: ['Le, +4 😈', 'Rang badal diya 🎨', 'Kya chaal hai! 🔥'],
+  stacked: ['Wapas de diya! 🔁', 'Kya chaal hai! 🔥'],
+  hit: ['Sar pe +4 aa gaya 🤯', 'Haath bhar gaya 😭'],
+  caught: ['Last card bhool gaya? 😂', 'Pakad liya! 👀'],
+  doubted: ['Pakka +4 sahi tha? 🤨', 'Pakad liya! 👀'],
+  fair: ['Mere paas aur rang nahi tha 😇', 'Check kar lo 😉'],
+  won: ['Aaj meri raat hai 🌙', 'GG 🎉'],
   gameOver: ['GG 🎉', 'Ek aur round! 🔁'],
 } as const;
-const lineIndex = (text: string) => (QUICK_MESSAGES as readonly string[]).indexOf(text);
+const LINES = RANG_BOT_LINES;
+const lineIndex = (text: string) => RANG_CHAT.messages.indexOf(text);
 
 /** changes with every move; a planned move is dropped if the table moved on */
 const tableKey = (g: RangGame) => `${g.moveSeq}|${g.turnId}|${g.penalty}|${g.picks}`;
@@ -252,7 +253,7 @@ export class RangBots {
       if (!this.isOpen(room) || !room.members.some((m) => m.id === id)) return;
       // now and then an emoji instead of words
       const asEmoji = this.rand() < 0.3;
-      const index = asEmoji ? Math.floor(this.rand() * REACTIONS.length) : lineIndex(lines[Math.floor(this.rand() * lines.length)]);
+      const index = asEmoji ? Math.floor(this.rand() * RANG_CHAT.reactions.length) : lineIndex(lines[Math.floor(this.rand() * lines.length)]);
       if (index < 0) return;
       try {
         this.hooks.onChat(room, room.chat(id, asEmoji ? 'reaction' : 'message', index));

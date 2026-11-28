@@ -50,8 +50,9 @@ describe.each([
     expect(rec.players[0].stats.tallies).toEqual(tallies);
   });
 
-  it('uses Ludo’s chat set', () => {
-    expect(chatSetOf(kind).messages).toBe(LUDO_QUICK_MESSAGES);
+  it('uses its own chat set', () => {
+    expect(chatSetOf(kind).messages).not.toBe(LUDO_QUICK_MESSAGES);
+    expect(chatSetOf(kind).voice?.length).toBe(chatSetOf(kind).messages.length);
   });
 });
 

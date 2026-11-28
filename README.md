@@ -400,7 +400,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 - Without `CLIENT_ORIGIN` only localhost and home-network (192.168.x / 10.x / 172.16–31.x) pages can connect.
 - Limits: 5 players + up to 7 watchers per room (12 people, bots included), 200 rooms, 40 events per 10 s per connection, one chat message per 0.7 s, names up to 16 characters.
 - When 5 are seated, newcomers watch; they take free seats when the room returns to the lobby. After a game has started, a join becomes a request the host approves; anyone still waiting is let in when the room returns to the lobby.
-- Chat only sends an index into the fixed `REACTIONS` / `QUICK_MESSAGES` lists in `src/types.ts`, so there is no free text to moderate.
+- Chat only sends an index into the table's fixed lists (`chatSetOf(game)`: every game has its own `ChatSet`) in `src/types.ts`, so there is no free text to moderate.
 
 ## Code map
 

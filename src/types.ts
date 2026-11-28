@@ -432,7 +432,7 @@ export const QUICK_MESSAGES = [
   'GG 🎉',
 ] as const;
 
-/** Ludo's own emoji and quick lines (Ludo tables use these instead of REACTIONS and QUICK_MESSAGES); spoken aloud at the table */
+/** Ludo's own emoji and quick lines (LUDO_CHAT); spoken aloud at the table */
 export const LUDO_REACTIONS = ['🎲', '🥺', '😈', '😭', '🙏', '🔥', '😂', '👏'] as const;
 export const LUDO_QUICK_MESSAGES = [
   'Please mera goti mat kaato 🥺',
@@ -462,7 +462,7 @@ export const LUDO_QUICK_MESSAGES = [
 /** how a spoken line should feel: the app bends pitch and speed to match */
 export type VoiceMood = 'plead' | 'sad' | 'happy' | 'excited' | 'cheeky' | 'calm';
 /** what the voice says for each LUDO_QUICK_MESSAGES line (same order): Hindi lines in Devanagari so a Hindi voice reads them naturally */
-export const LUDO_QUICK_VOICE: readonly { say: string; lang: 'hi' | 'en'; mood: VoiceMood }[] = [
+export const LUDO_QUICK_VOICE: readonly QuickLine[] = [
   { say: 'प्लीज़, मेरी गोटी मत काटो ना!', lang: 'hi', mood: 'plead' },
   { say: "Please don't cut my goti!", lang: 'en', mood: 'plead' },
   { say: 'छक्का दे दो भगवान!', lang: 'hi', mood: 'plead' },
@@ -487,20 +487,280 @@ export const LUDO_QUICK_VOICE: readonly { say: string; lang: 'hi' | 'en'; mood: 
   { say: 'एक और गेम!', lang: 'hi', mood: 'excited' },
 ];
 
-/** tables that use Ludo's emoji, quick lines and voice lines (Saanp Seedhi and Raja Mantri borrow them) */
-const LUDO_CHAT_GAMES: readonly GameKind[] = ['ludo', 'snakes', 'rmcs', 'darts', 'dots', 'colorwar', 'fruit', 'spikes'];
-
-/** the emoji and quick lines a table uses: Ludo's (also at Saanp Seedhi and Raja Mantri), every other game the shared ones */
-export function chatSetOf(game: GameKind | undefined | null): { reactions: readonly string[]; messages: readonly string[] } {
-  return game && LUDO_CHAT_GAMES.includes(game) ? { reactions: LUDO_REACTIONS, messages: LUDO_QUICK_MESSAGES } : { reactions: REACTIONS, messages: QUICK_MESSAGES };
+/** one spoken quick line: the words the voice reads, its language and how it should feel */
+export interface QuickLine {
+  say: string;
+  lang: 'hi' | 'en';
+  mood: VoiceMood;
 }
 
-/** quick lines are spoken aloud at these tables (no announcer there, so the voice is free) */
-export const speaksQuickChat = (game: GameKind | undefined | null): boolean => !!game && LUDO_CHAT_GAMES.includes(game);
+/** a table's emoji and quick lines; voice (same order as messages) where the lines are spoken aloud */
+export interface ChatSet {
+  reactions: readonly string[];
+  messages: readonly string[];
+  voice?: readonly QuickLine[];
+}
+
+/** builds a spoken set from [line, words to say, mood] rows; Devanagari words are read in Hindi */
+function spokenSet(reactions: readonly string[], rows: readonly (readonly [string, string, VoiceMood])[]): ChatSet {
+  return {
+    reactions,
+    messages: rows.map((r) => r[0]),
+    voice: rows.map(([, say, mood]) => ({ say, lang: /[ऀ-ॿ]/.test(say) ? 'hi' : 'en', mood })),
+  };
+}
+
+/** Bluff: the shared lists, unchanged */
+export const BLUFF_CHAT: ChatSet = { reactions: REACTIONS, messages: QUICK_MESSAGES };
+
+/** Ludo: its own lists and voice, unchanged */
+export const LUDO_CHAT: ChatSet = { reactions: LUDO_REACTIONS, messages: LUDO_QUICK_MESSAGES, voice: LUDO_QUICK_VOICE };
+
+export const SNAKES_CHAT: ChatSet = spokenSet(
+  ['🎲', '🐍', '🪜', '😱', '😭', '🙏', '😂', '👏'],
+  [
+    ['Seedhi mil gayi! 🪜', 'सीढ़ी मिल गई!', 'excited'],
+    ['Saanp ne kaat liya 🐍', 'साँप ने काट लिया!', 'sad'],
+    ['Phir se saanp! 😭', 'फिर से साँप!', 'sad'],
+    ['Saanp se bach gaya 😅', 'साँप से बच गया!', 'happy'],
+    ['Seedhi de do bhagwan 🙏', 'सीढ़ी दे दो भगवान!', 'plead'],
+    ['Chakka chahiye 🤞', 'छक्का चाहिए!', 'plead'],
+    ['Bas 100 tak pahunchna hai 💯', 'बस सौ तक पहुँचना है!', 'calm'],
+    ['99 pe saanp? Sach mein? 😱', 'निन्यानवे पे साँप? सच में?', 'sad'],
+    ['Upar se seedha neeche 📉', 'ऊपर से सीधा नीचे!', 'sad'],
+    ['Haha, neeche bhej diya 😈', 'हाहा, नीचे भेज दिया!', 'cheeky'],
+    ['Mujhe kyun neeche bheja? 😭', 'मुझे क्यों नीचे भेजा?', 'sad'],
+    ['Bach ke, saanp aa raha hai 👀', 'बच के, साँप आ रहा है!', 'cheeky'],
+    ['Saanp mera dost hai 😎', 'साँप मेरा दोस्त है!', 'cheeky'],
+    ['Ek seedhi aur, phir jeet 🏁', 'एक सीढ़ी और, फिर जीत!', 'excited'],
+    ['Kya kismat hai! 🍀', 'क्या किस्मत है!', 'happy'],
+    ['Jaldi roll karo ⏰', 'जल्दी रोल करो ना!', 'calm'],
+    ['Nice roll! 👏', 'Nice roll!', 'happy'],
+    ['Main aage hoon 🏆', 'मैं आगे हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
+export const RMCS_CHAT: ChatSet = spokenSet(
+  ['👑', '🧠', '🕵️', '👮', '😇', '😱', '😂', '👏'],
+  [
+    ['Main Raja hoon 👑', 'मैं राजा हूँ!', 'excited'],
+    ['Is baar Raja main 🤞', 'इस बार राजा मैं!', 'plead'],
+    ['Raja ka hukum hai 📜', 'राजा का हुक्म है!', 'calm'],
+    ['Mantri ji, soch ke 🧠', 'मंत्री जी, सोच के!', 'calm'],
+    ['Chor kaun hai? 🕵️', 'चोर कौन है?', 'cheeky'],
+    ['Pakad liya! 👮', 'पकड़ लिया!', 'excited'],
+    ['Galat pakda! 😂', 'ग़लत पकड़ा!', 'cheeky'],
+    ['Main Chor nahi hoon 😇', 'मैं चोर नहीं हूँ!', 'plead'],
+    ['Chor bach gaya 😅', 'चोर बच गया!', 'happy'],
+    ['Chehra dekh, Chor wahi hai 👀', 'चेहरा देख, चोर वही है!', 'cheeky'],
+    ['Sipahi hazir hai 🫡', 'सिपाही हाज़िर है!', 'happy'],
+    ['Mantri fail ho gaya 🤦', 'मंत्री फ़ेल हो गया!', 'sad'],
+    ['Phir se Chor mila 😭', 'फिर से चोर मिला!', 'sad'],
+    ['Kya acting hai! 🎭', 'क्या एक्टिंग है!', 'happy'],
+    ['Chit kholo jaldi ⏰', 'चिट खोलो जल्दी!', 'calm'],
+    ['Points dekh lo 💰', 'पॉइंट्स देख लो!', 'cheeky'],
+    ['Main jeet raha hoon 🏆', 'मैं जीत रहा हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
+export const DARTS_CHAT: ChatSet = spokenSet(
+  ['🎯', '🔥', '😱', '😭', '💪', '🙏', '😂', '👏'],
+  [
+    ['Bull! 🎯', 'Bull!', 'excited'],
+    ['Treble twenty! 🔥', 'Treble twenty!', 'excited'],
+    ['180! 🤯', 'One hundred and eighty!', 'excited'],
+    ['Checkout! ✅', 'चेकआउट!', 'excited'],
+    ['Bas double chahiye 🙏', 'बस डबल चाहिए!', 'plead'],
+    ['Bust ho gaya 😭', 'बस्ट हो गया!', 'sad'],
+    ['Haath kaanp gaya 🫨', 'हाथ काँप गया!', 'sad'],
+    ['Seedha nishana 💪', 'सीधा निशाना!', 'happy'],
+    ['Aim pakka tha 😎', 'एम पक्का था!', 'cheeky'],
+    ['Board pe toh maaro 😂', 'बोर्ड पे तो मारो!', 'cheeky'],
+    ['Deewar pe maara kya? 🧱', 'दीवार पे मारा क्या?', 'cheeky'],
+    ['Score dekh ke dar lag raha hai 😱', 'स्कोर देख के डर लग रहा है!', 'cheeky'],
+    ['Ek aur dart, ek aur chance 🤞', 'एक और डार्ट, एक और चांस!', 'calm'],
+    ['Jaldi phenko ⏰', 'जल्दी फेंको!', 'calm'],
+    ['Nice throw! 👏', 'Nice throw!', 'happy'],
+    ['Main aage hoon 🏆', 'मैं आगे हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
+export const DOTS_CHAT: ChatSet = spokenSet(
+  ['📦', '✏️', '😈', '😭', '🧠', '😬', '😂', '👏'],
+  [
+    ['Box mera! 📦', 'बॉक्स मेरा!', 'excited'],
+    ['Ek aur box! ➕', 'एक और बॉक्स!', 'happy'],
+    ['Saare box mere 😎', 'सारे बॉक्स मेरे!', 'excited'],
+    ['Chain de di, thanks 😈', 'चेन दे दी, थैंक्स!', 'cheeky'],
+    ['Arre, chain de di 😭', 'अरे, चेन दे दी!', 'sad'],
+    ['Lambi chain aa rahi hai 👀', 'लंबी चेन आ रही है!', 'cheeky'],
+    ['Teesri line mat lagana 🙅', 'तीसरी लाइन मत लगाना!', 'plead'],
+    ['Safe line khatam 😬', 'सेफ़ लाइन ख़त्म!', 'sad'],
+    ['Trap bichha diya 🪤', 'जाल बिछा दिया!', 'cheeky'],
+    ['Soch ke line kheench ✏️', 'सोच के लाइन खींच!', 'calm'],
+    ['Dimaag lagao 🧠', 'दिमाग़ लगाओ!', 'calm'],
+    ['Kya chaal hai! 🔥', 'क्या चाल है!', 'happy'],
+    ['Jaldi line lagao ⏰', 'जल्दी लाइन लगाओ!', 'calm'],
+    ['Nice move! 👏', 'नाइस मूव!', 'happy'],
+    ['Main aage hoon 🏆', 'मैं आगे हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
+export const COLORWAR_CHAT: ChatSet = spokenSet(
+  ['🎨', '💥', '😈', '😭', '🔥', '😱', '😂', '👏'],
+  [
+    ['Burst! 💥', 'बर्स्ट!', 'excited'],
+    ['Chain reaction! 🔥', 'Chain reaction!', 'excited'],
+    ['Abhi phatega 💣', 'अभी फटेगा!', 'cheeky'],
+    ['Mera rang chha gaya 🎨', 'मेरा रंग छा गया!', 'excited'],
+    ['Mera rang mat lo 🥺', 'मेरा रंग मत लो ना!', 'plead'],
+    ['Rang badal gaya 😱', 'रंग बदल गया!', 'sad'],
+    ['Poora board mera 😎', 'पूरा बोर्ड मेरा!', 'cheeky'],
+    ['Saaf kar diya 🧹', 'साफ़ कर दिया!', 'cheeky'],
+    ['Arre, sab gaya 😭', 'अरे, सब गया!', 'sad'],
+    ['Bas ek dot bacha hai 😬', 'बस एक डॉट बचा है!', 'sad'],
+    ['Wapas aa gaya 💪', 'वापस आ गया!', 'happy'],
+    ['Kone se shuru 🧠', 'कोने से शुरू!', 'calm'],
+    ['Jaldi tap karo ⏰', 'जल्दी टैप करो!', 'calm'],
+    ['Nice burst! 👏', 'Nice burst!', 'happy'],
+    ['Main jeet raha hoon 🏆', 'मैं जीत रहा हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
+export const FRUIT_CHAT: ChatSet = spokenSet(
+  ['🍉', '⚔️', '🧲', '😱', '😭', '🔥', '😂', '👏'],
+  [
+    ['Kaat diya! 🍉', 'काट दिया!', 'excited'],
+    ['Pehle maine kaata 😎', 'पहले मैंने काटा!', 'cheeky'],
+    ['Talwar tez hai ⚔️', 'तलवार तेज़ है!', 'cheeky'],
+    ['Talwar phisal gayi 🤦', 'तलवार फिसल गई!', 'sad'],
+    ['Magnet se bacho 🧲', 'मैग्नेट से बचो!', 'calm'],
+    ['Magnet laga, haath dheema 🐢', 'मैग्नेट लगा, हाथ धीमा!', 'sad'],
+    ['Bas ek pal late 😭', 'बस एक पल लेट!', 'sad'],
+    ['Galat waqt pe chala diya 😅', 'ग़लत वक़्त पे चला दिया!', 'sad'],
+    ['Ruko, ruko... ab! ⏳', 'रुको, रुको... अब!', 'calm'],
+    ['Aankh mat jhapkana 👀', 'आँख मत झपकाना!', 'cheeky'],
+    ['Kya reflex hai! 🔥', 'क्या रिफ़्लेक्स है!', 'happy'],
+    ['Fruit salad bana diya 🥗', 'फ्रूट सलाद बना दिया!', 'cheeky'],
+    ['Nice slice! 👏', 'Nice slice!', 'happy'],
+    ['Main jeet raha hoon 🏆', 'मैं जीत रहा हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
+export const SPIKES_CHAT: ChatSet = spokenSet(
+  ['📦', '🏃', '😱', '😅', '💀', '🛡️', '😂', '👏'],
+  [
+    ['Bach gaya! 😅', 'बच गया!', 'happy'],
+    ['Spikes aa rahe hain! 😱', 'स्पाइक्स आ रहे हैं!', 'excited'],
+    ['Bhaago! 🏃', 'भागो!', 'excited'],
+    ['Crate ke peeche chhupo 📦', 'क्रेट के पीछे छुपो!', 'calm'],
+    ['Mera crate hai, hato 😤', 'मेरा क्रेट है, हटो!', 'cheeky'],
+    ['Deewar se door! 🧱', 'दीवार से दूर!', 'plead'],
+    ['Beech mein raho 🎯', 'बीच में रहो!', 'calm'],
+    ['Spike lag gaya 💀', 'स्पाइक लग गया!', 'sad'],
+    ['Bas ek jaan bachi hai 💔', 'बस एक जान बची है!', 'sad'],
+    ['Kone mein phans gaya 😭', 'कोने में फँस गया!', 'sad'],
+    ['Shield mil gayi 🛡️', 'शील्ड मिल गई!', 'happy'],
+    ['Kya bachav tha! 🔥', 'क्या बचाव था!', 'happy'],
+    ['Aakhri tak tikunga 💪', 'आख़िरी तक टिकूँगा!', 'cheeky'],
+    ['Agli baari tu gaya 😏', 'अगली बारी तू गया!', 'cheeky'],
+    ['Nice dodge! 👏', 'Nice dodge!', 'happy'],
+    ['Main jeet raha hoon 🏆', 'मैं जीत रहा हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
+export const CRAZY7_CHAT: ChatSet = {
+  reactions: ['7️⃣', '🃏', '😈', '😭', '🔥', '😱', '😂', '👏'],
+  messages: [
+    'Saat aaya! 7️⃣',
+    'Colour badlo 🎨',
+    'Mera colour hi chalega 😎',
+    'Last card! ☝️',
+    'Last card bola kya? 👀',
+    'Bhool gaya last card 😂',
+    'Le, +2 😈',
+    'Wapas +2! 🔁',
+    'Kitne patte uthaun? 😭',
+    'Haath bhar gaya 🤦',
+    'Skip! ⏭️',
+    'Ulta ghoom gaya 🔄',
+    'Kya chaal hai! 🔥',
+    'Bach gaya! 😅',
+    'Nice try 😏',
+    'Jaldi chal bhai! ⏰',
+    'Aaj meri raat hai 🌙',
+    'GG 🎉',
+    'Ek aur round! 🔁',
+  ],
+};
+
+export const RANG_CHAT: ChatSet = {
+  reactions: ['🎨', '🃏', '😈', '😭', '🤨', '🔥', '😂', '👏'],
+  messages: [
+    'Rang badal diya 🎨',
+    'Mera rang chalega 😎',
+    'Last card! ☝️',
+    'Last card bhool gaya? 😂',
+    'Le, +4 😈',
+    'Wapas de diya! 🔁',
+    'Sar pe +4 aa gaya 🤯',
+    'Haath bhar gaya 😭',
+    'Haath khaali hone wala hai 🖐️',
+    'Pakka +4 sahi tha? 🤨',
+    'Pakad liya! 👀',
+    'Mere paas aur rang nahi tha 😇',
+    'Check kar lo 😉',
+    'Skip! ⏭️',
+    'Ulta chalo 🔄',
+    'Kya chaal hai! 🔥',
+    'Jaldi chal bhai! ⏰',
+    'Aaj meri raat hai 🌙',
+    'GG 🎉',
+    'Ek aur round! 🔁',
+  ],
+};
+
+/** every table's own emoji and quick lines */
+const CHAT_SETS: Record<GameKind, ChatSet> = {
+  bluff: BLUFF_CHAT,
+  crazy7: CRAZY7_CHAT,
+  rang: RANG_CHAT,
+  ludo: LUDO_CHAT,
+  snakes: SNAKES_CHAT,
+  rmcs: RMCS_CHAT,
+  darts: DARTS_CHAT,
+  dots: DOTS_CHAT,
+  colorwar: COLORWAR_CHAT,
+  fruit: FRUIT_CHAT,
+  spikes: SPIKES_CHAT,
+};
+
+/** the emoji and quick lines a table uses (no game yet: Bluff's) */
+export function chatSetOf(game: GameKind | undefined | null): ChatSet {
+  return (game && CHAT_SETS[game]) || BLUFF_CHAT;
+}
+
+/** quick lines are spoken aloud at these tables (no announcer there, so the voice is free); each has voice lines */
+const SPOKEN_GAMES: readonly GameKind[] = ['ludo', 'snakes', 'rmcs', 'darts', 'dots', 'colorwar', 'fruit', 'spikes'];
+export const speaksQuickChat = (game: GameKind | undefined | null): boolean => !!game && SPOKEN_GAMES.includes(game);
 
 export type ChatKind = 'reaction' | 'message';
 
-/** index points into the table's chatSetOf lists (REACTIONS / QUICK_MESSAGES, Ludo's own at a Ludo table), so no free text ever goes through the server */
+/** index points into the table's chatSetOf lists (each game has its own), so no free text ever goes through the server */
 export interface ChatEvent {
   from: string;
   kind: ChatKind;
