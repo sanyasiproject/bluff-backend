@@ -64,7 +64,8 @@ export class ColorWarGame implements TableGame<Card> {
     readonly jitter: () => number = Math.random,
   ) {
     if (order.length < 2 || order.length > PARTY_COLORS.length) throw new GameError('Colour Wars needs 2 to 4 players');
-    this.size = gameOpt<number>(config, 'size') === 7 ? 7 : 5;
+    const size = gameOpt<number>(config, 'size');
+    this.size = [5, 7, 8, 10].includes(size) ? size : 5;
     this.bots = new Set(botIds);
     this.cells = Array.from({ length: this.size * this.size }, () => ({ owner: null, dots: 0 }));
     for (const id of order) {

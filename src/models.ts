@@ -1,5 +1,5 @@
 import type { ChessFinish, ChessSettlement } from './services/chess.js';
-import type { Award, Card, ChessPerf, ChessRatingBadge, CoinResult, GameConfig, DartThrow, FruitItemKind, GameReplay, InviteEvent, LifetimeStats, LudoLookChoice, PlayReveal, Rank, RangCard, RangColor, RankDivisionId, SazaBadge, ShopLookKind, SnakesLastMove, SpikeDir, Suit } from './types.js';
+import type { Award, Card, CarromFoul, ChessPerf, ChessRatingBadge, CoinResult, GameConfig, DartThrow, FruitItemKind, GameReplay, InviteEvent, LifetimeStats, LudoLookChoice, PlayReveal, Rank, RangCard, RangColor, RankDivisionId, SazaBadge, ShopLookKind, SnakesLastMove, SpikeDir, Suit } from './types.js';
 
 /** one of a player's plays this game with the true cards (server only); open: it never stood or was called (still waiting, or cut off by a walk-out or End game) */
 export interface LoggedPlay extends PlayReveal {
@@ -365,7 +365,47 @@ export type GameEvent =
   | { kind: 'colorwar'; ev: ColorWarEvent }
   | { kind: 'fruit'; ev: FruitEvent }
   | { kind: 'spikes'; ev: SpikesEvent }
-  | { kind: 'chess'; ev: ChessEvent };
+  | { kind: 'chess'; ev: ChessEvent }
+  | { kind: 'carrom'; ev: CarromGameEvent }
+  | { kind: 'bomb'; ev: BombEvent }
+  | { kind: 'seabattle'; ev: SeaEvent }
+  | { kind: 'gomoku'; ev: GomokuEvent }
+  | { kind: 'uttt'; ev: UtttEvent }
+  | { kind: 'wordhunt'; ev: WordHuntEvent };
+
+/** Five in a Row: a stone (blocked: it cut off someone's four or open three) */
+export type GomokuEvent = { type: 'stone'; playerId: string; at: number; blocked: boolean };
+
+/** Ultimate Tic-Tac-Toe: a mark (won: it took its small board; free: the opponent may play anywhere) */
+export type UtttEvent = { type: 'mark'; playerId: string; board: number; cell: number; won: boolean; free: boolean };
+
+/** Word Grid Hunt: a round starts, a word counted (never the word itself), a round ends */
+export type WordHuntEvent =
+  | { type: 'round'; round: number }
+  | { type: 'word'; playerId: string; len: number }
+  | { type: 'reveal'; round: number; best: { playerId: string; word: string } | null };
+
+/** Carrom: a shot (pocketed, foul, queen news) and a finished board */
+export type CarromGameEvent =
+  | { type: 'shot'; playerId: string; pocketed: string[]; foul: CarromFoul | null; queen: 'pocketed' | 'covered' | 'returned' | null; again: boolean; auto: boolean }
+  | { type: 'board'; board: number; winners: string[]; points: number };
+
+/** Bomb Pass: play starts, a pass, a wrong answer, a new task, the fuse getting hot, a BOOM, a new round */
+export type BombEvent =
+  | { type: 'go' }
+  | { type: 'pass'; from: string; to: string; ms: number }
+  | { type: 'wrong'; playerId: string }
+  | { type: 'task'; playerId: string }
+  | { type: 'heat'; heat: number }
+  | { type: 'boom'; playerId: string; out: boolean; place: number | null }
+  | { type: 'round'; round: number; holder: string };
+
+/** Sea Battle: someone is ready, the battle starts, a shot or power (never a radar's count), a fleet sunk */
+export type SeaEvent =
+  | { type: 'ready'; playerId: string }
+  | { type: 'battle' }
+  | { type: 'shot'; by: string; target: string; kind: 'fire' | 'salvo' | 'torpedo' | 'radar'; hits: number; sunk: number[]; earned: string | null; again: boolean; auto: boolean }
+  | { type: 'out'; playerId: string; by: string; place: number };
 
 /** chess: a move (with its SAN), an offer made or answered, a takeback done */
 export type ChessEvent =
@@ -387,7 +427,8 @@ export type SpikesEvent =
   | { type: 'warn'; id: number; dir: SpikeDir }
   | { type: 'strike'; id: number; dir: SpikeDir; hit: string[] }
   | { type: 'out'; playerId: string; place: number }
-  | { type: 'timeUp' };
+  | { type: 'timeUp' }
+  | { type: 'shift'; phase: 'warn' | 'land' | 'cancel' };
 
 /** one Saanp Seedhi roll (moved: the token moved; lost: a third 6 lost the turn), then the move it made */
 export type SnakesEvent =

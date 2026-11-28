@@ -56,7 +56,7 @@ export class DotsGame implements TableGame<Card> {
   ) {
     if (order.length < 2 || order.length > PARTY_COLORS.length) throw new GameError('Dots and Boxes needs 2 to 4 players');
     const size = gameOpt<number>(config, 'size');
-    this.size = size === 4 || size === 6 ? size : 5;
+    this.size = [4, 5, 6, 8, 10].includes(size) ? size : 5;
     this.bots = new Set(botIds);
     for (const id of order) {
       this.scores.set(id, 0);

@@ -1,5 +1,8 @@
 import type { RandomInt } from '../../cards.js';
 import { SPIKES_RADIUS, spikeReach, type SpikeDir } from '../../types.js';
+import { boxCount, shieldedSpot } from './shield.js';
+
+export { boxCount, pairUp, shieldedSpot } from './shield.js';
 
 export type Point = [number, number];
 export type Cell = [number, number];
@@ -121,7 +124,9 @@ export function fairBoxes(size: number, boxes: readonly Cell[]): boolean {
   if (walk(size, boxes, [0, 0]).size !== size * size - boxes.length) return false;
   const reaches = reachesOf(size, boxes);
   const free = freeCells(size, boxes);
-  return SPIKE_DIRS.every((dir) => free.some((cell) => cellSafe(size, reaches, dir, cell)));
+  if (!SPIKE_DIRS.every((dir) => free.some((cell) => cellSafe(size, reaches, dir, cell)))) return false;
+  // no spot hidden from all four walls, anywhere a body fits (between squares and in crates' corners too)
+  return shieldedSpot(size, boxes, SPIKES_RADIUS * SPIKES_HIT_SHARE) === null;
 }
 
 export const freeCells = (size: number, boxes: readonly Cell[]): Cell[] => {
@@ -131,22 +136,51 @@ export const freeCells = (size: number, boxes: readonly Cell[]): Cell[] => {
   return out;
 };
 
-/** boxes for one game: 4 on size 5, 6 on size 6, drawn with the game's random until fair */
+/** boxes for one game (boxCount by size), drawn with the game's random until fair */
 export function makeBoxes(size: number, rand: RandomInt): Cell[] {
-  const count = size >= 6 ? 6 : 4;
-  const spots = boxSpots(size);
-  for (let tries = 0; tries < 500; tries++) {
+  return drawBoxes(size, rand) ?? fallbackBoxes(size);
+}
+
+/**
+ * a fair layout of boxCount(size) boxes, none on a cell `avoid` rules out (a player stands there), or null after `tries`.
+ * Up to 6 × 6 a random pick; bigger arenas add boxes one by one, skipping any beside one already placed
+ */
+export function drawBoxes(size: number, rand: RandomInt, avoid: (cell: Cell) => boolean = () => false, tries = 500): Cell[] | null {
+  const count = boxCount(size);
+  const spots = boxSpots(size).filter((c) => !avoid(c));
+  for (let t = 0; t < tries; t++) {
     const pool = [...spots];
     for (let i = pool.length - 1; i > 0; i--) {
       const j = rand(i + 1);
       [pool[i], pool[j]] = [pool[j], pool[i]];
     }
-    const pick = pool.slice(0, count).sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+    let pick: Cell[];
+    if (size <= 6) pick = pool.slice(0, count);
+    else {
+      pick = [];
+      const has = new Set<string>();
+      for (const [c, r] of pool) {
+        if (pick.length >= count) break;
+        if (has.has(key([c + 1, r])) || has.has(key([c - 1, r])) || has.has(key([c, r + 1])) || has.has(key([c, r - 1]))) continue;
+        pick.push([c, r]);
+        has.add(key([c, r]));
+      }
+      if (pick.length < count) continue;
+    }
+    pick.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
     if (fairBoxes(size, pick)) return pick;
   }
-  // never needed in practice: a known fair layout
-  const m = Math.floor(size / 2);
-  return size >= 6 ? [[2, 0], [m, 2], [0, 3], [5, 2], [2, 4], [3, 5]] : [[m, 0], [0, m], [size - 1, m], [m, size - 1]];
+  return null;
+}
+
+/** never needed in practice: a fair layout found with a fixed seed */
+function fallbackBoxes(size: number): Cell[] {
+  let a = 12345;
+  const lcg: RandomInt = (n) => {
+    a = (Math.imul(a, 1103515245) + 12345) >>> 0;
+    return Math.floor((a / 4294967296) * n);
+  };
+  return drawBoxes(size, lcg, () => false, 5_000) ?? [];
 }
 
 /** pairs of sides that may fire together: some free cell is safe from both */

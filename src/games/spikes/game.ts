@@ -2,7 +2,7 @@ import { secureRandom, type RandomInt } from '../../cards.js';
 import { GameError } from '../../game.js';
 import type { BetResult, GameEvent, PlayerStats, SpikesEvent, TableGame } from '../../models.js';
 import { gameOpt, SPIKES_LIVES, SPIKES_RADIUS, SPIKES_SPEED, type BotLevel, type Card, type GameConfig, type SpikeDir, type SpikesView, type SpikeWarning } from '../../types.js';
-import { hitBy, makeBoxes, reachesOf, safePairs, slide, SPIKE_DIRS, type Cell, type Point, type Reaches } from './arena.js';
+import { drawBoxes, hitBy, makeBoxes, pairUp, reachesOf, safePairs, slide, SPIKE_DIRS, type Cell, type Point, type Reaches } from './arena.js';
 import { botSpeedOf, botThink, botThinkMs, type SpikesBotLevel } from './brain.js';
 
 export { inBand, SPIKES_HIT_SHARE, type Point } from './arena.js';
@@ -25,6 +25,20 @@ const STRIKES_KEPT = 8;
 
 /** the first wall is warned this long into play (ms) */
 export const SPIKES_FIRST_WARN_MS = 800;
+/** crates shift on arenas this big and up */
+export const SPIKES_SHIFT_FROM = 8;
+/** time between crate shifts (ms) */
+export const SPIKES_SHIFT_MS = 40_000;
+/** the ghost outlines show this long before the crates land (ms) */
+export const SPIKES_SHIFT_WARN_MS = 2_000;
+/** no wall is warned until this long after the crates land (ms) */
+export const SPIKES_SHIFT_CALM_MS = 700;
+/** a shift blocked by players this many times in a row is called off until the next one */
+export const SPIKES_SHIFT_TRIES = 3;
+/** the chance a wall is aimed at the side that hits the most players where they stand */
+export const SPIKES_AIM = 0.6;
+/** extra warning on big arenas (ms per size above 6): +0.25 s on 8 × 8, +0.5 s on 10 × 10 */
+export const SPIKES_WARN_PER_SIZE = 125;
 
 /**
  * warning time, and the gap from one strike to the next warning (a range), going from their start values to their end values
@@ -84,8 +98,14 @@ export class SpikesGame implements TableGame<Card> {
   readonly startsAt: number;
   readonly bots: Set<string>;
   readonly level: SpikesBotLevel;
-  /** solid box squares [col, row], fixed for the game */
+  /** solid box squares [col, row]; changed in place when the crates shift */
   readonly boxes: Cell[];
+  /** a crate shift on the way: boxesNext[i] is where boxes[i] lands at boxesAt */
+  boxesNext: Cell[] | null = null;
+  boxesAt = 0;
+  /** when the next crate shift is warned (Infinity on small arenas) */
+  nextShiftAt: number;
+  private shiftTries = 0;
   /** each side's reach per row/column (spikeReach) */
   readonly reaches: Reaches;
   /** sides that may fire together: a free square is safe from both */
@@ -128,6 +148,7 @@ export class SpikesGame implements TableGame<Card> {
     this.boxes = makeBoxes(this.size, rand);
     this.reaches = reachesOf(this.size, this.boxes);
     this.pairs = safePairs(this.size, this.boxes);
+    this.nextShiftAt = this.size >= SPIKES_SHIFT_FROM ? this.startsAt + SPIKES_SHIFT_MS : Infinity;
     const lo = 0.5;
     const hi = this.size - 0.5;
     // the four corner boxes' centres; two players sit opposite
@@ -198,7 +219,7 @@ export class SpikesGame implements TableGame<Card> {
     const k = Math.min(1, played / p.ramp);
     const lerp = (a: number, b: number) => Math.round(a - (a - b) * k);
     return {
-      warn: lerp(p.warn[0], p.warn[1]),
+      warn: lerp(p.warn[0], p.warn[1]) + Math.max(0, this.size - 6) * SPIKES_WARN_PER_SIZE,
       gap: [lerp(p.gap[0][0], p.gap[1][0]), lerp(p.gap[0][1], p.gap[1][1])],
       two: played >= p.twoFrom && this.pairs.length > 0 ? p.two : 0,
     };
@@ -242,7 +263,7 @@ export class SpikesGame implements TableGame<Card> {
 
   /** a new wall: one side (later sometimes two that leave a square safe from both), not the side(s) just warned */
   warn(): GameEvent[] {
-    if (this.over || this.phase !== 'play' || this.warnings.length > 0) return [];
+    if (this.over || this.phase !== 'play' || this.warnings.length > 0 || this.boxesNext) return [];
     const now = this.now();
     const pace = this.pace(now);
     this.stepSeq++;
@@ -251,7 +272,13 @@ export class SpikesGame implements TableGame<Card> {
     const pairs = this.pairs.filter((p) => !(p[0] === this.lastDirs[0] && p[1] === this.lastDirs[1]));
     if (pace.two > 0 && pairs.length > 0 && this.jitter() < pace.two) dirs = [...pairs[this.rand(pairs.length)]];
     else {
-      const sides = SPIKE_DIRS.filter((d) => !(this.lastDirs.length === 1 && this.lastDirs[0] === d));
+      let sides = SPIKE_DIRS.filter((d) => !(this.lastDirs.length === 1 && this.lastDirs[0] === d));
+      // often aimed at whoever stands still: the sides that would hit the most players right now
+      if (this.jitter() < SPIKES_AIM) {
+        const count = (d: SpikeDir) => this.aliveIds().filter((id) => this.hits(d, this.pos.get(id)!)).length;
+        const best = Math.max(...sides.map(count));
+        if (best > 0) sides = sides.filter((d) => count(d) === best);
+      }
       dirs = [sides[this.rand(sides.length)]];
     }
     this.lastDirs = dirs;
@@ -392,9 +419,78 @@ export class SpikesGame implements TableGame<Card> {
     // a strike goes before anything planned for the same moment; the next warning waits for it
     if (this.warnings.length > 0) steps.push({ at: Math.min(...this.warnings.map((w) => w.strikeAt)), run: () => this.strike() });
     steps.push({ at: this.nextWarnAt, run: () => this.warn() });
+    // crates move only between walls: the ghosts show after a strike and the next wall waits for the landing
+    if (this.boxesNext) steps.push({ at: this.boxesAt, run: () => this.shiftLand() });
+    else if (this.nextShiftAt < Infinity && this.warnings.length === 0) steps.push({ at: this.nextShiftAt, run: () => this.shiftWarn() });
     const bots = this.nextBotAt();
     if (bots < Infinity) steps.push({ at: bots, run: () => this.botTurns() });
     return steps.reduce((a, b) => (b.at < a.at ? b : a));
+  }
+
+  /** a player's circle overlaps square [c, r] (with `margin` to spare) */
+  private onCell([c, r]: Cell, margin: number): boolean {
+    return this.aliveIds().some((id) => {
+      const [x, y] = this.pos.get(id)!;
+      return Math.hypot(x - Math.min(c + 1, Math.max(c, x)), y - Math.min(r + 1, Math.max(r, y))) < SPIKES_RADIUS + margin;
+    });
+  }
+
+  /** a new fair layout clear of every player, paired crate by crate with the current one; null if none turns up */
+  private drawShift(): Cell[] | null {
+    const was = new Set(this.boxes.map(([c, r]) => `${c},${r}`));
+    for (let t = 0; t < 4; t++) {
+      const next = drawBoxes(this.size, this.rand, (cell) => this.onCell(cell, 0.15), 120);
+      if (next && next.some(([c, r]) => !was.has(`${c},${r}`))) return pairUp(this.boxes, next);
+    }
+    return null;
+  }
+
+  /** the ghosts of the next layout show; walls wait until the crates have landed */
+  shiftWarn(): GameEvent[] {
+    if (this.over || this.phase !== 'play' || this.warnings.length > 0 || this.boxesNext) return [];
+    const now = this.now();
+    this.stepSeq++;
+    return this.planShift(now);
+  }
+
+  private planShift(now: number): GameEvent[] {
+    const next = this.drawShift();
+    if (!next) return this.callOffShift(now);
+    this.boxesNext = next;
+    this.boxesAt = now + SPIKES_SHIFT_WARN_MS;
+    this.nextWarnAt = Math.max(this.nextWarnAt, this.boxesAt + SPIKES_SHIFT_CALM_MS);
+    // bots look again so they keep off the ghosts
+    for (const run of this.botRun.values()) run.thinkAt = now;
+    return [ev({ type: 'shift', phase: 'warn' })];
+  }
+
+  private callOffShift(now: number): GameEvent[] {
+    const had = this.boxesNext !== null;
+    this.boxesNext = null;
+    this.shiftTries = 0;
+    this.nextShiftAt = now + SPIKES_SHIFT_MS;
+    return had ? [ev({ type: 'shift', phase: 'cancel' })] : [];
+  }
+
+  /** the crates land, unless a player stands on a target square: then another layout is warned (a few times at most) */
+  shiftLand(): GameEvent[] {
+    if (this.over || !this.boxesNext) return [];
+    const now = this.now();
+    this.stepSeq++;
+    if (this.boxesNext.some((cell) => this.onCell(cell, 0))) {
+      if (++this.shiftTries >= SPIKES_SHIFT_TRIES) return this.callOffShift(now);
+      return this.planShift(now);
+    }
+    const next = this.boxesNext;
+    this.boxes.splice(0, this.boxes.length, ...next);
+    Object.assign(this.reaches, reachesOf(this.size, next));
+    this.pairs.splice(0, this.pairs.length, ...safePairs(this.size, next));
+    this.boxesNext = null;
+    this.shiftTries = 0;
+    this.nextShiftAt = now + SPIKES_SHIFT_MS;
+    // bots drop their routes, which went round the old crates
+    for (const run of this.botRun.values()) Object.assign(run, { path: [], plan: '', thinkAt: now });
+    return [ev({ type: 'shift', phase: 'land' })];
   }
 
   private end(): GameEvent[] {
@@ -485,6 +581,7 @@ export class SpikesGame implements TableGame<Card> {
       lives: rec(this.lives),
       safeUntil: rec(this.safeUntil),
       boxes: this.boxes.map(([c, r]) => [c, r] as [number, number]),
+      ...(this.boxesNext ? { boxesNext: this.boxesNext.map(([c, r]) => [c, r] as [number, number]), boxesAt: this.boxesAt } : {}),
       warnings: this.warnings.map(({ id, dir, warnAt, strikeAt }) => ({ id, dir, warnAt, strikeAt })),
       strikes: this.strikes.map((s) => ({ ...s, hit: [...s.hit] })),
       places: Object.fromEntries([...this.placeMap].filter(([id]) => !this.isOut(id))),

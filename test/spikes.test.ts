@@ -133,7 +133,8 @@ describe('Spike Attack arena: reach, hits, boxes', () => {
         expect(makeBoxes(size, randInt(seed))).toEqual(boxes);
         seen.add(JSON.stringify(boxes));
       }
-      expect(seen.size).toBeGreaterThan(5);
+      // 5 × 5 has only its four T layouts left: a crate on each arm of the middle would hide the centre from every wall
+      expect(seen.size).toBeGreaterThan(size === 5 ? 3 : 5);
     }
     // corners and their neighbours are never boxes
     expect(boxSpots(5).map((c) => c.join()).sort()).toEqual(['0,2', '1,2', '2,0', '2,1', '2,2', '2,3', '2,4', '3,2', '4,2']);

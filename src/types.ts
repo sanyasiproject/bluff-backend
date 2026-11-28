@@ -1,6 +1,8 @@
 // Shapes shared with the client. Keep in sync with bluff-frontend/src/types.ts
 import type { ChessVariant } from './chess/variants.js';
 import type { ChessEndReason, Color as ChessColor } from './chess/position.js';
+import type { CarromCoin, CarromSide } from './carrom/board.js';
+import type { CarromEvent } from './carrom/physics.js';
 export const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'] as const;
 export type Rank = (typeof RANKS)[number];
 
@@ -100,7 +102,7 @@ export const SHIELD_MAX_CARDS = 2;
 export const BET_STEPS = [50, 100, 250, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000] as const;
 
 /** which game a room plays */
-export type GameKind = 'bluff' | 'crazy7' | 'rang' | 'ludo' | 'snakes' | 'rmcs' | 'darts' | 'dots' | 'colorwar' | 'fruit' | 'spikes' | 'chess';
+export type GameKind = 'bluff' | 'crazy7' | 'rang' | 'ludo' | 'snakes' | 'rmcs' | 'darts' | 'dots' | 'colorwar' | 'fruit' | 'spikes' | 'chess' | 'carrom' | 'bomb' | 'seabattle' | 'gomoku' | 'uttt' | 'wordhunt';
 
 /** how well Bluff bots play; the host picks it in the lobby (Crazy 7 bots always play their best) */
 export const BOT_LEVELS = ['normal', 'hard', 'expert'] as const;
@@ -708,6 +710,151 @@ export const CHESS_CHAT: ChatSet = spokenSet(
   ],
 );
 
+export const CARROM_CHAT: ChatSet = spokenSet(
+  ['⚪', '⚫', '🔴', '🎯', '😱', '😭', '😂', '👏'],
+  [
+    ['Seedha pocket mein! 🎯', 'सीधा पॉकेट में!', 'excited'],
+    ['Queen meri! 👑', 'क्वीन मेरी!', 'excited'],
+    ['Queen cover karo! 🔴', 'क्वीन कवर करो!', 'plead'],
+    ['Cover ho gayi 😎', 'कवर हो गई!', 'happy'],
+    ['Queen wapas chali gayi 😭', 'क्वीन वापस चली गई!', 'sad'],
+    ['Striker andar gaya 🤦', 'स्ट्राइकर अंदर गया!', 'sad'],
+    ['Foul! 🚫', 'फ़ाउल!', 'cheeky'],
+    ['Kya cut maara! 🔥', 'क्या कट मारा!', 'happy'],
+    ['Rebound se gaya 😮', 'रिबाउंड से गया!', 'excited'],
+    ['Halka haath rakho 🤏', 'हल्का हाथ रखो!', 'calm'],
+    ['Zor se maaro 💪', 'ज़ोर से मारो!', 'cheeky'],
+    ['Mera coin mat giraao 🥺', 'मेरा कोइन मत गिराओ!', 'plead'],
+    ['Thanks for the coin 😈', 'कोइन के लिए थैंक्स!', 'cheeky'],
+    ['Partner, sambhal lo 🤝', 'पार्टनर, संभाल लो!', 'plead'],
+    ['Jaldi maaro ⏰', 'जल्दी मारो!', 'calm'],
+    ['Nice shot! 👏', 'Nice shot!', 'happy'],
+    ['Main aage hoon 🏆', 'मैं आगे हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
+export const BOMB_CHAT: ChatSet = spokenSet(
+  ['💣', '🔥', '💥', '😱', '😅', '🧠', '😂', '👏'],
+  [
+    ['Le, pakad! 💣', 'ले, पकड़!', 'cheeky'],
+    ['Bomb mere paas mat bhejo 🙏', 'बम मेरे पास मत भेजो!', 'plead'],
+    ['Jaldi, jaldi! ⏰', 'जल्दी, जल्दी!', 'excited'],
+    ['Phatne wala hai! 😱', 'फटने वाला है!', 'excited'],
+    ['BOOM! 💥', 'बूम!', 'excited'],
+    ['Mere haath mein phat gaya 😭', 'मेरे हाथ में फट गया!', 'sad'],
+    ['Bach gaya! 😅', 'बच गया!', 'happy'],
+    ['Galat button daba diya 🤦', 'ग़लत बटन दबा दिया!', 'sad'],
+    ['Dimaag tez hai 🧠', 'दिमाग़ तेज़ है!', 'cheeky'],
+    ['Itna aasaan sawaal? 😏', 'इतना आसान सवाल?', 'cheeky'],
+    ['Dhuaan nikal raha hai 🔥', 'धुआँ निकल रहा है!', 'calm'],
+    ['Bas ek dil bacha hai 💔', 'बस एक दिल बचा है!', 'sad'],
+    ['Aakhri tak tikunga 💪', 'आख़िरी तक टिकूँगा!', 'cheeky'],
+    ['Kya speed hai! ⚡', 'क्या स्पीड है!', 'happy'],
+    ['Nice pass! 👏', 'Nice pass!', 'happy'],
+    ['Main jeet raha hoon 🏆', 'मैं जीत रहा हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
+export const SEABATTLE_CHAT: ChatSet = spokenSet(
+  ['🚢', '💥', '🌊', '🎯', '😱', '😭', '😂', '👏'],
+  [
+    ['Hit! 💥', 'हिट!', 'excited'],
+    ['Dooba diya! 🚢', 'डुबा दिया!', 'excited'],
+    ['Paani mein gaya 🌊', 'पानी में गया!', 'cheeky'],
+    ['Mera jahaaz! 😭', 'मेरा जहाज़!', 'sad'],
+    ['Mujhe mat maaro 🙏', 'मुझे मत मारो!', 'plead'],
+    ['Radar on 📡', 'रडार ऑन!', 'calm'],
+    ['Torpedo chhoda! 🚀', 'टॉरपीडो छोड़ा!', 'excited'],
+    ['Teen gole ek saath 💣', 'तीन गोले एक साथ!', 'excited'],
+    ['Pata chal gaya kahaan ho 👀', 'पता चल गया कहाँ हो!', 'cheeky'],
+    ['Mera bedaa chhupa hai 😎', 'मेरा बेड़ा छुपा है!', 'cheeky'],
+    ['Bas ek jahaaz bacha 😬', 'बस एक जहाज़ बचा!', 'sad'],
+    ['Seedha nishana 🎯', 'सीधा निशाना!', 'happy'],
+    ['Soch ke chalao 🧠', 'सोच के चलाओ!', 'calm'],
+    ['Jaldi fire karo ⏰', 'जल्दी फ़ायर करो!', 'calm'],
+    ['Nice shot! 👏', 'Nice shot!', 'happy'],
+    ['Main aage hoon 🏆', 'मैं आगे हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
+export const GOMOKU_CHAT: ChatSet = spokenSet(
+  ['⚫', '⚪', '🔥', '😱', '🤔', '😭', '😂', '👏'],
+  [
+    ['Paanch ho gaye! 🏆', 'पाँच हो गए!', 'excited'],
+    ['Chaar khule hain 😱', 'चार खुले हैं!', 'excited'],
+    ['Rok diya! 🛑', 'रोक दिया!', 'cheeky'],
+    ['Teen ki line ban rahi hai 👀', 'तीन की लाइन बन रही है!', 'calm'],
+    ['Mera raasta mat roko 🙏', 'मेरा रास्ता मत रोको!', 'plead'],
+    ['Kahin se bhi aa jaaunga 😎', 'कहीं से भी आ जाऊँगा!', 'cheeky'],
+    ['Do taraf se khatra 🔥', 'दो तरफ़ से ख़तरा!', 'excited'],
+    ['Yeh toh dekha hi nahi 😭', 'यह तो देखा ही नहीं!', 'sad'],
+    ['Tirchhi line! ↗️', 'तिरछी लाइन!', 'happy'],
+    ['Soch ke rakho 🧠', 'सोच के रखो!', 'calm'],
+    ['Jaldi chalo ⏰', 'जल्दी चलो!', 'calm'],
+    ['Kis ko rokun? 🤔', 'किस को रोकूँ?', 'calm'],
+    ['Phans gaye 😈', 'फँस गए!', 'cheeky'],
+    ['Bach gaya! 😅', 'बच गया!', 'happy'],
+    ['Nice move! 👏', 'नाइस मूव!', 'happy'],
+    ['Main aage hoon 🏆', 'मैं आगे हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
+export const UTTT_CHAT: ChatSet = spokenSet(
+  ['❌', '⭕', '🔥', '😱', '🤔', '😭', '😂', '👏'],
+  [
+    ['Yeh board mera! ❌', 'यह बोर्ड मेरा!', 'excited'],
+    ['Wahan mat bhejo 🙏', 'वहाँ मत भेजो!', 'plead'],
+    ['Free move mil gaya 😎', 'फ़्री मूव मिल गया!', 'happy'],
+    ['Free move mat do 🤦', 'फ़्री मूव मत दो!', 'calm'],
+    ['Wahin bhej diya 😈', 'वहीं भेज दिया!', 'cheeky'],
+    ['Bade board pe line 🔥', 'बड़े बोर्ड पे लाइन!', 'excited'],
+    ['Beech wala board chahiye 🎯', 'बीच वाला बोर्ड चाहिए!', 'calm'],
+    ['Board bhar gaya, kisi ka nahi 😮', 'बोर्ड भर गया, किसी का नहीं!', 'calm'],
+    ['Yeh chaal nahi dekhi 😭', 'यह चाल नहीं देखी!', 'sad'],
+    ['Do board aur 👀', 'दो बोर्ड और!', 'cheeky'],
+    ['Soch ke chalo 🧠', 'सोच के चलो!', 'calm'],
+    ['Jaldi chalo ⏰', 'जल्दी चलो!', 'calm'],
+    ['Phans gaye 😈', 'फँस गए!', 'cheeky'],
+    ['Bach gaya! 😅', 'बच गया!', 'happy'],
+    ['Nice move! 👏', 'नाइस मूव!', 'happy'],
+    ['Main aage hoon 🏆', 'मैं आगे हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
+export const WORDHUNT_CHAT: ChatSet = spokenSet(
+  ['🔤', '📖', '🔥', '😱', '🤔', '😭', '😂', '👏'],
+  [
+    ['Lamba word mila! 🔥', 'लंबा वर्ड मिला!', 'excited'],
+    ['Sirf mere paas hai 😎', 'सिर्फ़ मेरे पास है!', 'cheeky'],
+    ['Yeh word hota hai? 🤔', 'यह वर्ड होता है?', 'calm'],
+    ['Dictionary dekho 📖', 'डिक्शनरी देखो!', 'cheeky'],
+    ['Ek bhi nahi mil raha 😭', 'एक भी नहीं मिल रहा!', 'sad'],
+    ['Kitne words ho gaye? 👀', 'कितने वर्ड्स हो गए?', 'calm'],
+    ['Q kahan lagaun? 😅', 'क्यू कहाँ लगाऊँ?', 'plead'],
+    ['Kya grid hai! 😱', 'क्या ग्रिड है!', 'excited'],
+    ['Wahi word mera bhi tha 😤', 'वही वर्ड मेरा भी था!', 'sad'],
+    ['Aankhen khol ke dhundho 👁️', 'आँखें खोल के ढूँढो!', 'cheeky'],
+    ['Time khatam hone wala hai ⏰', 'टाइम ख़त्म होने वाला है!', 'excited'],
+    ['Thoda time aur do 🙏', 'थोड़ा टाइम और दो!', 'plead'],
+    ['Spelling bhool gaya 🤦', 'स्पेलिंग भूल गया!', 'sad'],
+    ['Word master! 🧠', 'वर्ड मास्टर!', 'happy'],
+    ['Nice word! 👏', 'नाइस वर्ड!', 'happy'],
+    ['Main aage hoon 🏆', 'मैं आगे हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
 export const CRAZY7_CHAT: ChatSet = {
   reactions: ['7️⃣', '🃏', '😈', '😭', '🔥', '😱', '😂', '👏'],
   messages: [
@@ -773,6 +920,12 @@ const CHAT_SETS: Record<GameKind, ChatSet> = {
   fruit: FRUIT_CHAT,
   spikes: SPIKES_CHAT,
   chess: CHESS_CHAT,
+  carrom: CARROM_CHAT,
+  bomb: BOMB_CHAT,
+  seabattle: SEABATTLE_CHAT,
+  gomoku: GOMOKU_CHAT,
+  uttt: UTTT_CHAT,
+  wordhunt: WORDHUNT_CHAT,
 };
 
 /** the emoji and quick lines a table uses (no game yet: Bluff's) */
@@ -781,7 +934,7 @@ export function chatSetOf(game: GameKind | undefined | null): ChatSet {
 }
 
 /** quick lines are spoken aloud at these tables (no announcer there, so the voice is free); each has voice lines */
-const SPOKEN_GAMES: readonly GameKind[] = ['ludo', 'snakes', 'rmcs', 'darts', 'dots', 'colorwar', 'fruit', 'spikes', 'chess'];
+const SPOKEN_GAMES: readonly GameKind[] = ['ludo', 'snakes', 'rmcs', 'darts', 'dots', 'colorwar', 'fruit', 'spikes', 'chess', 'carrom', 'bomb', 'seabattle', 'gomoku', 'uttt', 'wordhunt'];
 export const speaksQuickChat = (game: GameKind | undefined | null): boolean => !!game && SPOKEN_GAMES.includes(game);
 
 export type ChatKind = 'reaction' | 'message';
@@ -2146,7 +2299,7 @@ export interface RoomMessage {
 export const APP_NAME = 'Game Baithak';
 
 /** games built on the game registry (one folder per game on each side); Bluff, Crazy 7 and Rang are wired by hand */
-export const PLUGGED_GAMES = ['ludo', 'snakes', 'rmcs', 'darts', 'dots', 'colorwar', 'fruit', 'spikes', 'chess'] as const;
+export const PLUGGED_GAMES = ['ludo', 'snakes', 'rmcs', 'darts', 'dots', 'colorwar', 'fruit', 'spikes', 'chess', 'carrom', 'bomb', 'seabattle', 'gomoku', 'uttt', 'wordhunt'] as const;
 export type PluggedKind = (typeof PLUGGED_GAMES)[number];
 export const isPlugged = (k: GameKind | undefined | null): k is PluggedKind => (PLUGGED_GAMES as readonly string[]).includes(k ?? '');
 
@@ -2321,7 +2474,7 @@ export const GAME_CATALOG: readonly GameInfo[] = [
     options: [{ id: 'rounds', label: 'Rounds', default: 5, choices: [{ value: 5, label: '5 rounds' }, { value: 10, label: '10 rounds' }] }] },
   { kind: 'spikes', name: 'Spike Attack', emoji: '🔺', tagline: 'Dodge the spikes, keep your 3 lives', category: 'arcade', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#ff1744', '#651fff'],
     options: [
-      { id: 'size', label: 'Arena', default: 5, choices: [{ value: 5, label: '5 × 5' }, { value: 6, label: '6 × 6' }] },
+      { id: 'size', label: 'Arena', default: 8, choices: [{ value: 5, label: '5 × 5' }, { value: 6, label: '6 × 6' }, { value: 8, label: '8 × 8' }, { value: 10, label: '10 × 10' }] },
       { id: 'speed', label: 'Speed', default: 'normal', choices: [{ value: 'normal', label: 'Normal', hint: '3 second warnings to start' }, { value: 'fast', label: 'Fast', hint: '2 second warnings to start' }] },
     ] },
   { kind: 'fruit', name: 'Fruit Slice Duel', emoji: '🍉', tagline: 'Fastest sword takes the fruit. Never cut the magnet!', category: 'arcade', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#ff5252', '#00c853'],
@@ -2329,9 +2482,37 @@ export const GAME_CATALOG: readonly GameInfo[] = [
   { kind: 'darts', name: 'Darts', emoji: '🎯', tagline: 'Count down from 301, land exactly on zero', category: 'arcade', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#263238', '#d32f2f'],
     options: [{ id: 'start', label: 'Start at', default: 301, choices: [{ value: 301, label: '301' }, { value: 501, label: '501' }] }] },
   { kind: 'colorwar', name: 'Colour Wars', emoji: '🎨', tagline: 'Grow dots, burst and take over the board', category: 'board', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#00b0ff', '#ff4081'],
-    options: [{ id: 'size', label: 'Board', default: 5, choices: [{ value: 5, label: '5 × 5' }, { value: 7, label: '7 × 7' }] }] },
+    options: [{ id: 'size', label: 'Board', default: 8, choices: [{ value: 5, label: '5 × 5' }, { value: 7, label: '7 × 7' }, { value: 8, label: '8 × 8' }, { value: 10, label: '10 × 10' }] }] },
   { kind: 'dots', name: 'Dots and Boxes', emoji: '⬛', tagline: 'Draw lines, close boxes, steal the board', category: 'board', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#3949ab', '#26c6da'],
-    options: [{ id: 'size', label: 'Board', default: 5, choices: [{ value: 4, label: '4 × 4' }, { value: 5, label: '5 × 5' }, { value: 6, label: '6 × 6' }] }] },
+    options: [{ id: 'size', label: 'Board', default: 8, choices: [{ value: 4, label: '4 × 4' }, { value: 5, label: '5 × 5' }, { value: 6, label: '6 × 6' }, { value: 8, label: '8 × 8' }, { value: 10, label: '10 × 10' }] }] },
+  { kind: 'carrom', name: 'Carrom', emoji: '⚪', tagline: 'Flick the striker, pocket your coins, cover the queen', category: 'board', minPlayers: 2, maxPlayers: 4, teams: true, bots: true, isNew: true, colors: ['#d7b27a', '#7b2d1a'],
+    options: [
+      { id: 'mode', label: 'Mode', default: 'classic', choices: [
+        { value: 'classic', label: 'Classic', hint: 'Your colour only, cover the queen. 4 play as 2v2' },
+        { value: 'freestyle', label: 'Freestyle', hint: 'Any coin scores: white 20, black 10, queen 50' },
+      ] },
+      { id: 'length', label: 'Length', default: 'quick', choices: [
+        { value: 'quick', label: 'Quick', hint: 'One board' },
+        { value: 'full', label: 'Full', hint: 'Classic: first to 25. Freestyle: 3 boards' },
+      ] },
+    ] },
+  { kind: 'seabattle', name: 'Sea Battle', emoji: '🚢', tagline: 'Hide your fleet, hunt everyone else’s', category: 'board', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#0277bd', '#1a237e'],
+    options: [{ id: 'powers', label: 'Powers', default: 'on', choices: [
+      { value: 'on', label: 'On', hint: 'Sink a ship to earn Radar, Salvo or Torpedo' },
+      { value: 'off', label: 'Off', hint: 'Plain shots only' },
+    ] }] },
+  { kind: 'bomb', name: 'Bomb Pass', emoji: '💣', tagline: 'Solve it fast, pass the bomb before it blows', category: 'arcade', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#ff6d00', '#3e2723'],
+    options: [
+      { id: 'hearts', label: 'Hearts', default: 3, choices: [{ value: 2, label: '2 hearts' }, { value: 3, label: '3 hearts' }] },
+      { id: 'speed', label: 'Fuse', default: 'normal', choices: [{ value: 'normal', label: 'Normal', hint: '12 to 30 seconds' }, { value: 'fast', label: 'Fast', hint: '8 to 20 seconds' }] },
+    ] },
+  { kind: 'gomoku', name: 'Five in a Row', emoji: '⚫', tagline: 'Line up five stones before anyone else', category: 'board', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#c58b4a', '#3e2723'], options: [] },
+  { kind: 'uttt', name: 'Ultimate Tic-Tac-Toe', emoji: '❌', tagline: 'Nine boards in one. Every move sends your rival', category: 'board', minPlayers: 2, maxPlayers: 2, teams: false, bots: true, isNew: true, colors: ['#26a69a', '#283593'], options: [] },
+  { kind: 'wordhunt', name: 'Word Grid Hunt', emoji: '🔤', tagline: 'Trace words in the letter grid, all at once', category: 'party', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#ffb300', '#6d4c41'],
+    options: [
+      { id: 'grid', label: 'Grid', default: 4, choices: [{ value: 4, label: '4 × 4', hint: 'Words of 3+ letters' }, { value: 5, label: '5 × 5', hint: 'Words of 4+ letters' }] },
+      { id: 'time', label: 'Round', default: 120, choices: [{ value: 90, label: '1.5 min' }, { value: 120, label: '2 min' }, { value: 180, label: '3 min' }] },
+    ] },
   CHESS_CATALOG,
   { kind: 'bluff', name: 'Bluff', emoji: '🃏', tagline: 'Lie with a straight face, catch the liars', category: 'cards', minPlayers: 2, maxPlayers: 8, teams: true, bots: true, colors: ['#2e7d32', '#004d40'], options: [] },
   { kind: 'crazy7', name: 'Crazy 7', emoji: '7️⃣', tagline: 'Match suit or number, 7s make them pick', category: 'cards', minPlayers: 2, maxPlayers: 8, teams: false, bots: true, colors: ['#6a1b9a', '#283593'], options: [] },
@@ -2358,7 +2539,13 @@ export type PluggedView =
   | { kind: 'colorwar'; colorwar: ColorWarView }
   | { kind: 'fruit'; fruit: FruitView }
   | { kind: 'spikes'; spikes: SpikesView }
-  | { kind: 'chess'; chess: ChessView };
+  | { kind: 'chess'; chess: ChessView }
+  | { kind: 'carrom'; carrom: CarromView }
+  | { kind: 'bomb'; bomb: BombView }
+  | { kind: 'seabattle'; seabattle: SeaView }
+  | { kind: 'gomoku'; gomoku: GomokuView }
+  | { kind: 'uttt'; uttt: UtttView }
+  | { kind: 'wordhunt'; wordhunt: WordHuntView };
 
 /** a registry game's move, sent with game:move */
 export type PluggedMove =
@@ -2370,7 +2557,13 @@ export type PluggedMove =
   | { kind: 'colorwar'; move: ColorWarMoveInput }
   | { kind: 'fruit'; move: FruitMoveInput }
   | { kind: 'spikes'; move: SpikesMoveInput }
-  | { kind: 'chess'; move: ChessMoveInput };
+  | { kind: 'chess'; move: ChessMoveInput }
+  | { kind: 'carrom'; move: CarromMoveInput }
+  | { kind: 'bomb'; move: BombMoveInput }
+  | { kind: 'seabattle'; move: SeaMoveInput }
+  | { kind: 'gomoku'; move: GomokuMoveInput }
+  | { kind: 'uttt'; move: UtttMoveInput }
+  | { kind: 'wordhunt'; move: WordHuntMoveInput };
 
 /** per-account numbers for one game (stats.perGame[kind]); counters are the game's own (Ludo: kills, home, sixes, killed) */
 export type GameTally = { played: number; wins: number } & Partial<Record<string, number>>;
@@ -2962,8 +3155,12 @@ export interface SpikesView {
   lives: Record<string, number>;
   /** players hit just now can't be hit again until this time (ms since epoch) */
   safeUntil: Record<string, number>;
-  /** box squares [col, row]: solid (nobody walks through) and they stop the spikes; fixed for the game */
+  /** box squares [col, row]: solid (nobody walks through) and they stop the spikes; on 8 × 8 and up they shift now and then */
   boxes: [number, number][];
+  /** a crate shift on the way: boxesNext[i] is where boxes[i] slides to */
+  boxesNext?: [number, number][];
+  /** when the crates land on boxesNext (ms since epoch, server clock) */
+  boxesAt?: number;
   warnings: SpikeWarning[];
   /** recent wall strikes, for the animation: who they hit */
   strikes: { id: number; dir: SpikeDir; at: number; hit: string[] }[];
@@ -3137,3 +3334,524 @@ export interface ChessGameRecord extends ChessGameSummary {
 
 /** how many finished chess games each account keeps */
 export const CHESS_GAMES_KEEP = 100;
+
+// ─── Carrom ───────────────────────────────────────────────────────────────────────────────
+
+/** the carrom library's names (src/carrom/, the same files in every repo) */
+export type { CarromCoin, CarromSide, CarromEvent };
+export type CarromMode = 'classic' | 'freestyle';
+export type CarromLength = 'quick' | 'full';
+/** time to shoot once the coins have stopped (ms); then a soft straight shot goes */
+export const CARROM_TURN_MS = 20_000;
+/** Classic full: first to 25 points or the leader after 8 boards. Freestyle full: 3 boards. Freestyle points per coin, foul −10 */
+export const CARROM_RULES = { target: 25, maxBoards: 8, freeBoards: 3, queenBonus: 3, points: { w: 20, b: 10, q: 50 }, foul: 10 } as const;
+/** Carrom stats counters kept per account in stats.perGame.carrom */
+export const CARROM_TALLIES = ['pocketed', 'queens', 'fouls'] as const;
+/** striker: the striker dropped; miss: it touched no coin; lastCoin: own last coin pocketed before the queen was covered */
+export type CarromFoul = 'striker' | 'miss' | 'lastCoin';
+export const CARROM_FOUL_TEXT: Record<CarromFoul, string> = {
+  striker: 'Foul: the striker went in',
+  miss: 'Foul: the striker touched nothing',
+  lastCoin: 'Foul: last coin before the queen was covered',
+};
+
+/** one shot as played; animate it with simulate(before, launchOf(side, x, dx, dy, power)) from src/carrom */
+export interface CarromShotView {
+  seq: number;
+  playerId: string;
+  side: CarromSide;
+  /** the shot as the server played it (the direction normalised and turned into the board) */
+  x: number;
+  dx: number;
+  dy: number;
+  power: number;
+  /** the coins before the shot */
+  before: CarromCoin[];
+  /** coin ids that dropped, in order */
+  pocketed: string[];
+  strikerPocketed: boolean;
+  foul: CarromFoul | null;
+  /** queen news from this shot: pocketed (cover her next!), covered, or returned to the centre */
+  queen: 'pocketed' | 'covered' | 'returned' | null;
+  /** coin ids put back on the centre after the rules (a foul's penalty, the queen, a last coin) */
+  returned: string[];
+  /** Freestyle: points this shot made (a foul's −10 included); Classic: 0 */
+  points: number;
+  /** the same player shoots again */
+  again: boolean;
+  /** how long the coins move (ms) */
+  ms: number;
+  /** played for a player whose time ran out */
+  auto: boolean;
+}
+
+export interface CarromView {
+  mode: CarromMode;
+  length: CarromLength;
+  /** board number (1-based) and the most boards planned (Classic full may go on while tied) */
+  board: number;
+  boards: number;
+  /** each player's side: 0 bottom, 1 left, 2 top, 3 right on the board; apps turn the board so mine is at the bottom */
+  sides: Record<string, CarromSide>;
+  /** Classic: each player's colour ('w' broke first); null in Freestyle */
+  colors: Record<string, 'w' | 'b'> | null;
+  /** Classic 2v2: partners (they sit opposite), else null */
+  teams: [string[], string[]] | null;
+  /** coins on the board now */
+  coins: CarromCoin[];
+  /** coin ids each player pocketed this board and keeps, shown near their seat */
+  pocketed: Record<string, string[]>;
+  /** board: on the board; pending: `by` pocketed her and must cover her; covered: `by` covered her */
+  queen: { state: 'board' | 'pending' | 'covered'; by: string | null };
+  /** Classic: game points (partners share theirs); Freestyle: points */
+  scores: Record<string, number>;
+  /** each finished board: who won it and the points it gave */
+  results: { board: number; winners: string[]; points: number }[];
+  turnId: string | null;
+  /** the last shot is still rolling on phones until then (server time); shots before it are refused */
+  settleAt: number;
+  /** the player up must shoot by then (server time); null when nobody is up */
+  deadline: number | null;
+  last: CarromShotView | null;
+  places: Record<string, number>;
+  /** server time when this view was made */
+  now: number;
+}
+
+/**
+ * shoot: x 0..1 along my baseline from my left; (dx, dy) a unit direction in my own frame with my baseline at the
+ * bottom: dx to my right, dy > 0 into the board (screen up); power 0..1. The striker may not overlap a coin
+ */
+export type CarromMoveInput = { type: 'shot'; x: number; dx: number; dy: number; power: number };
+
+// ─── Bomb Pass ────────────────────────────────────────────────────────────────────────────
+
+export const BOMB_TASK_KINDS = ['sum', 'bigger', 'colour', 'odd', 'count', 'arrow'] as const;
+export type BombTaskKind = (typeof BOMB_TASK_KINDS)[number];
+/** colour task inks and how to draw them */
+export const BOMB_INKS = ['red', 'blue', 'green', 'yellow'] as const;
+export type BombInk = (typeof BOMB_INKS)[number];
+export const BOMB_INK_HEX: Record<BombInk, string> = { red: '#e53935', blue: '#1e88e5', green: '#43a047', yellow: '#fdd835' };
+export type BombArrow = 'up' | 'right' | 'down' | 'left';
+/** the arrow task's buttons, always in this order */
+export const BOMB_ARROWS: readonly BombArrow[] = ['up', 'right', 'down', 'left'];
+/** a wrong answer shakes the bomb this long, then a new task comes (ms) */
+export const BOMB_SHAKE_MS = 800;
+/** the break after a BOOM (ms) */
+export const BOMB_BREAK_MS = 3_000;
+/** Bomb Pass stats counters (fastest: passes answered within BOMB_FAST_MS) */
+export const BOMB_TALLIES = ['passes', 'booms', 'fastest'] as const;
+export const BOMB_FAST_MS = 1_500;
+
+/**
+ * a quick task for the bomb's holder, answered with one tap on a choice. sum: prompt '7 + 8', number choices;
+ * bigger: 2 number choices; colour: `word` written in `ink`, tap the ink's name; odd: 4 emoji, one isn't like the
+ * others; count: count `dots` (centres in 0..1 of the card); arrow: tap BOMB_ARROWS[i] matching `arrow`
+ */
+export interface BombTask {
+  id: number;
+  kind: BombTaskKind;
+  prompt: string;
+  word?: string;
+  ink?: BombInk;
+  dots?: [number, number][];
+  arrow?: BombArrow;
+  choices: string[];
+}
+
+export interface BombView {
+  phase: 'countdown' | 'play' | 'boom' | 'over';
+  /** the first round starts then (server time) */
+  startsAt: number;
+  round: number;
+  speed: 'normal' | 'fast';
+  maxHearts: number;
+  hearts: Record<string, number>;
+  /** who holds the lit bomb (null between rounds) */
+  holder: string | null;
+  /** 0 calm; 1..3 the last 30% of the hidden fuse, hotter and faster ticking */
+  heat: 0 | 1 | 2 | 3;
+  /** the holder's task (everyone sees it) */
+  task: BombTask | null;
+  /** a wrong answer: the bomb shakes until then (server time), then a new task comes */
+  shakeUntil: number;
+  /** the last pass: who solved it, to whom, and how fast (ms) */
+  lastPass: { from: string; to: string; at: number; ms: number } | null;
+  /** the last BOOM and whether it put the holder out */
+  lastBoom: { playerId: string; at: number; out: boolean } | null;
+  /** after a BOOM: when the next round starts (server time) */
+  nextAt: number | null;
+  /** finishing order (out first = last place) */
+  places: Record<string, number>;
+  /** server time when this view was made */
+  now: number;
+}
+
+/** answer the task with this id by the index of a choice */
+export type BombMoveInput = { type: 'answer'; task: number; choice: number };
+
+// ─── Sea Battle ───────────────────────────────────────────────────────────────────────────
+
+export const SEA_SIZE = 10;
+/** ship lengths in the fleet */
+export const SEA_FLEET = [5, 4, 3, 3, 2] as const;
+/** placement time, time per shot (ms), and the most powers one player holds */
+export const SEA_PLACE_MS = 60_000;
+export const SEA_TURN_MS = 20_000;
+export const SEA_MAX_POWERS = 2;
+export const SEA_COLS = 'ABCDEFGHIJ';
+/** Sea Battle stats counters */
+export const SEA_TALLIES = ['hits', 'sunk', 'shots'] as const;
+export type SeaPower = 'radar' | 'salvo' | 'torpedo';
+export const SEA_POWERS: readonly SeaPower[] = ['radar', 'salvo', 'torpedo'];
+
+/** a ship by its top-left cell; v: it runs down, else right */
+export interface SeaShip {
+  x: number;
+  y: number;
+  len: number;
+  v: boolean;
+}
+
+/** a ship's cells [x, y] */
+export function seaShipCells(s: SeaShip): [number, number][] {
+  const out: [number, number][] = [];
+  for (let i = 0; i < s.len; i++) out.push(s.v ? [s.x, s.y + i] : [s.x + i, s.y]);
+  return out;
+}
+
+/** why a layout isn't allowed (the fleet's lengths, on the sea, no overlap or touching, not even corners), or null */
+export function seaFleetError(ships: readonly SeaShip[]): string | null {
+  const want = [...SEA_FLEET].sort().join(',');
+  if (ships.map((s) => s.len).sort().join(',') !== want) return 'Place the whole fleet: 5, 4, 3, 3 and 2';
+  const taken = new Map<number, number>();
+  for (let i = 0; i < ships.length; i++) {
+    for (const [x, y] of seaShipCells(ships[i])) {
+      if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= SEA_SIZE || y >= SEA_SIZE) return 'Ships must stay on the sea';
+      if (taken.has(y * SEA_SIZE + x)) return 'Ships may not overlap';
+      taken.set(y * SEA_SIZE + x, i);
+    }
+  }
+  for (let i = 0; i < ships.length; i++) {
+    for (const [x, y] of seaShipCells(ships[i])) {
+      for (let ox = -1; ox <= 1; ox++) {
+        for (let oy = -1; oy <= 1; oy++) {
+          const o = taken.get((y + oy) * SEA_SIZE + (x + ox));
+          if (x + ox >= 0 && x + ox < SEA_SIZE && o !== undefined && o !== i) return 'Ships may not touch, not even at the corners';
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** a random legal layout (Shuffle) */
+export function seaRandomFleet(rand: () => number = Math.random): SeaShip[] {
+  for (;;) {
+    const ships: SeaShip[] = [];
+    for (const len of SEA_FLEET) {
+      for (let tries = 0; tries < 200; tries++) {
+        const v = rand() < 0.5;
+        const s: SeaShip = { len, v, x: Math.floor(rand() * (v ? SEA_SIZE : SEA_SIZE - len + 1)), y: Math.floor(rand() * (v ? SEA_SIZE - len + 1 : SEA_SIZE)) };
+        const next = [...ships, s];
+        if (seaLayoutClash(next) === null) {
+          ships.push(s);
+          break;
+        }
+      }
+    }
+    if (ships.length === SEA_FLEET.length) return ships;
+  }
+}
+
+// a partial layout's clash (overlap or touching), or null
+function seaLayoutClash(ships: readonly SeaShip[]): string | null {
+  const cells = new Map<number, number>();
+  for (let i = 0; i < ships.length; i++) for (const [x, y] of seaShipCells(ships[i])) cells.set(y * SEA_SIZE + x, i);
+  for (let i = 0; i < ships.length; i++) {
+    for (const [x, y] of seaShipCells(ships[i])) {
+      for (let ox = -1; ox <= 1; ox++) {
+        for (let oy = -1; oy <= 1; oy++) {
+          const o = cells.get((y + oy) * SEA_SIZE + (x + ox));
+          if (x + ox >= 0 && x + ox < SEA_SIZE && o !== undefined && o !== i) return 'clash';
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export interface SeaShipView extends SeaShip {
+  sunk: boolean;
+  /** cells of it hit so far */
+  hits: number;
+}
+
+/** one player's sea as a viewer sees it */
+export interface SeaBoardView {
+  /** SEA_SIZE × SEA_SIZE cells, index y * SEA_SIZE + x: 0 not shot, 1 miss, 2 hit, 3 part of a sunk ship */
+  shots: number[];
+  /** the ships this viewer may see: all of their own, anyone else's only once sunk */
+  ships: SeaShipView[];
+  /** lengths of the ships still afloat (everyone knows these) */
+  afloat: number[];
+}
+
+/** one shot or power as played; count (radar) only in the view of the player who scanned */
+export interface SeaShotView {
+  seq: number;
+  by: string;
+  target: string;
+  kind: 'fire' | 'salvo' | 'torpedo' | 'radar';
+  cells: { x: number; y: number; hit: boolean; sunk: boolean }[];
+  /** torpedo: its row (cells is empty when it crossed the whole row) */
+  row?: number;
+  /** radar: the 3 × 3's top-left cell */
+  area?: [number, number];
+  count?: number;
+  /** a power earned by sinking a ship */
+  earned: SeaPower | null;
+  /** the shooter fires again */
+  again: boolean;
+  /** the target's last ship went down */
+  out: boolean;
+  /** played for a player whose time ran out */
+  auto: boolean;
+}
+
+export interface SeaView {
+  phase: 'place' | 'battle' | 'over';
+  /** powers are on in this game */
+  powers: boolean;
+  /** placement ends then (server time) */
+  placeEndsAt: number;
+  ready: Record<string, boolean>;
+  /** every player's sea, hidden ships left out */
+  seas: Record<string, SeaBoardView>;
+  turnId: string | null;
+  /** the shooter must fire by then (server time), else a random shot goes */
+  deadline: number | null;
+  /** powers each player holds (public) */
+  held: Record<string, SeaPower[]>;
+  /** my own radar scans: the 3 × 3's top-left on the target's sea and how many unhit ship cells it held */
+  radars: { target: string; x: number; y: number; count: number }[];
+  last: SeaShotView | null;
+  /** finishing order (sunk first = last place) */
+  places: Record<string, number>;
+  /** server time when this view was made */
+  now: number;
+}
+
+/**
+ * place: my whole layout (no ships: a random one); ready: done placing (places at random if nothing placed).
+ * fire / radar (3 × 3 round x, y; doesn't end the turn) / salvo (3 different cells, one sea) / torpedo (a row from the left)
+ */
+export type SeaMoveInput =
+  | { type: 'place'; ships?: SeaShip[] }
+  | { type: 'ready' }
+  | { type: 'fire'; target: string; x: number; y: number }
+  | { type: 'radar'; target: string; x: number; y: number }
+  | { type: 'salvo'; target: string; cells: [number, number][] }
+  | { type: 'torpedo'; target: string; row: number };
+
+// ─── Five in a Row ────────────────────────────────────────────────────────────────────────
+
+/** board size by players: 15 × 15 for 2, 19 × 19 for 3 or 4 */
+export const gomokuSizeOf = (players: number): number => (players <= 2 ? 15 : 19);
+/** stones in a line that win (more also wins) */
+export const GOMOKU_WIN = 5;
+/** the centre point, where the first stone must go */
+export const gomokuCentre = (size: number): number => Math.floor(size / 2) * size + Math.floor(size / 2);
+/** Five in a Row stats counters (blocks: an opponent's four or open three cut off) */
+export const GOMOKU_TALLIES = ['fives', 'blocks'] as const;
+
+export interface GomokuView {
+  size: number;
+  /** size × size points, index y * size + x: -1 empty, else the seat (index into seats) whose stone it is */
+  cells: number[];
+  /** players in seat order; a seat's stone colour is PARTY_COLORS[seat] */
+  seats: string[];
+  turnId: string | null;
+  /** stones on the board */
+  moves: number;
+  last: { seq: number; playerId: string; at: number } | null;
+  /** once someone makes five: the winning line's points end to end (5 or more) */
+  line: number[] | null;
+  winner: string | null;
+  /** the board filled with no five */
+  draw: boolean;
+  /** each player's longest line so far (with 3–4 players the rest are placed by it) */
+  best: Record<string, number>;
+  /** once over: finishing places */
+  places: Record<string, number>;
+}
+
+/** put a stone on point at (y * size + x) */
+export type GomokuMoveInput = { type: 'place'; at: number };
+
+// ─── Ultimate Tic-Tac-Toe ─────────────────────────────────────────────────────────────────
+
+export type UtttMark = 'X' | 'O';
+/** a small board: won by X or O, 'draw' (full with no line, counts for nobody), or null (still open) */
+export type UtttBoardState = UtttMark | 'draw' | null;
+/** the 8 lines of a 3 × 3, row-major indexes */
+export const UTTT_LINES: readonly (readonly [number, number, number])[] = [
+  [0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6],
+];
+/** Ultimate Tic-Tac-Toe stats counters */
+export const UTTT_TALLIES = ['boardsWon'] as const;
+
+/** the line three of one mark make in nine cells (a small board, or the big board's states), or null */
+export function utttLineOf(marks: readonly (string | null)[]): { mark: UtttMark; line: number[] } | null {
+  for (const l of UTTT_LINES) {
+    const m = marks[l[0]];
+    if ((m === 'X' || m === 'O') && marks[l[1]] === m && marks[l[2]] === m) return { mark: m, line: [...l] };
+  }
+  return null;
+}
+
+/** where mark playing (board, cell) sends the opponent: board `cell`, or null for a free move (that board is won or full) */
+export function utttSendAfter(cells: readonly (UtttMark | null)[], boards: readonly UtttBoardState[], board: number, cell: number, mark: UtttMark): number | null {
+  let target = boards[cell];
+  if (board === cell && target === null) {
+    const small = cells.slice(board * 9, board * 9 + 9);
+    small[cell] = mark;
+    target = utttLineOf(small)?.mark ?? (small.every((c) => c !== null) ? 'draw' : null);
+  }
+  return target === null ? cell : null;
+}
+
+export interface UtttView {
+  /** 81 cells, index board * 9 + cell (both row-major 0..8 from the top left); null empty */
+  cells: (UtttMark | null)[];
+  /** the 9 small boards */
+  boards: UtttBoardState[];
+  /** boards the player to move may play in: the one they were sent to, or every open board on a free move; [] when over */
+  active: number[];
+  /** who plays X (moves first) and O */
+  x: string;
+  o: string;
+  turnId: string | null;
+  moves: number;
+  /** the last move; won: it took its small board */
+  last: { seq: number; playerId: string; board: number; cell: number; mark: UtttMark; won: boolean } | null;
+  /** once won: the 3 boards of the winning big line */
+  line: number[] | null;
+  winner: string | null;
+  /** every board decided or full with no big line */
+  draw: boolean;
+}
+
+/** put my mark in a cell of a small board */
+export type UtttMoveInput = { type: 'place'; board: number; cell: number };
+
+// ─── Word Grid Hunt ───────────────────────────────────────────────────────────────────────
+
+export const WORDHUNT_ROUNDS = 3;
+/** grid sizes (opts.grid) and round lengths in seconds (opts.time) */
+export const WORDHUNT_SIZES = [4, 5] as const;
+export const WORDHUNT_TIMES = [90, 120, 180] as const;
+/** the shortest word, by grid size */
+export const wordHuntMinLen = (size: number): number => (size >= 5 ? 4 : 3);
+/** the countdown before each round and the reveal after it (ms) */
+export const WORDHUNT_COUNTDOWN_MS = 3_000;
+export const WORDHUNT_REVEAL_MS = 12_000;
+/** words one player may send per second */
+export const WORDHUNT_RATE = 4;
+/** words this long or longer count as long words (stats) */
+export const WORDHUNT_LONG = 7;
+/** Word Grid Hunt stats counters */
+export const WORDHUNT_TALLIES = ['words', 'uniqueWords', 'longWords'] as const;
+
+/** a word's points by its length in letters (Qu is two): 3 and 4: 1, 5: 2, 6: 3, 7: 5, 8+: 11; a word only you found scores double */
+export function wordHuntPoints(len: number): number {
+  return len >= 8 ? 11 : len === 7 ? 5 : len === 6 ? 3 : len === 5 ? 2 : 1;
+}
+
+/** whether two tiles of a size × size grid touch (8 directions) */
+export function wordHuntTouches(size: number, a: number, b: number): boolean {
+  if (a === b) return false;
+  return Math.abs((a % size) - (b % size)) <= 1 && Math.abs(Math.floor(a / size) - Math.floor(b / size)) <= 1;
+}
+
+/** the word a path spells, lowercase ('qu' for the Qu tile) */
+export const wordHuntWordOf = (grid: readonly string[], path: readonly number[]): string => path.map((i) => grid[i] ?? '').join('');
+
+/**
+ * why a word I sent didn't count: again (I already have it), short (below minLen), unknown (not in the dictionary),
+ * path (tiles not touching or used twice), late (round over)
+ */
+export type WordHuntVerdict = 'ok' | 'again' | 'short' | 'unknown' | 'path' | 'late';
+
+/** one of my words this round; points before the unique bonus */
+export interface WordHuntFound {
+  word: string;
+  points: number;
+}
+
+/** the server's answer to my last word (seq goes up with each word I send) */
+export interface WordHuntTry {
+  seq: number;
+  word: string;
+  path: number[];
+  verdict: WordHuntVerdict;
+  points: number;
+}
+
+/** a word at the reveal; points with the unique bonus */
+export interface WordHuntRevealWord {
+  word: string;
+  points: number;
+  unique: boolean;
+}
+
+/** everything about a finished round */
+export interface WordHuntReveal {
+  round: number;
+  grid: string[];
+  /** every player's words in the order found */
+  words: Record<string, WordHuntRevealWord[]>;
+  /** each player's points this round */
+  points: Record<string, number>;
+  /** the round's best word (longest, then most points, then first found) */
+  best: { playerId: string; word: string; points: number } | null;
+  /** the longest words nobody found (up to 5, from the solver) */
+  missed: string[];
+  /** words the grid held in all */
+  total: number;
+}
+
+export interface WordHuntView {
+  size: 4 | 5;
+  /** shortest word in letters */
+  minLen: number;
+  /** round length (s) */
+  time: number;
+  /** size × size tiles, row-major: 'a'..'z' or 'qu'; [] during the countdown (nobody sees it early) */
+  grid: string[];
+  round: number;
+  rounds: number;
+  phase: 'countdown' | 'play' | 'reveal' | 'over';
+  /** this round's play starts and ends (server time) */
+  startsAt: number;
+  endsAt: number;
+  /** reveal: the next round's countdown starts then; else null */
+  nextAt: number | null;
+  /** my words this round, oldest first (watchers: []) */
+  mine: WordHuntFound[];
+  /** my last word's result (watchers: null) */
+  lastTry: WordHuntTry | null;
+  /** words each player has this round (others' words stay hidden until the reveal) */
+  counts: Record<string, number>;
+  /** the round just finished (reveal and over), else null */
+  reveal: WordHuntReveal | null;
+  /** totals over finished rounds */
+  scores: Record<string, number>;
+  /** once over: finishing places (ties share) */
+  places: Record<string, number>;
+  /** server time when this view was made */
+  now: number;
+}
+
+/** a traced word: the tiles in order; round is the round it was traced in */
+export type WordHuntMoveInput = { type: 'word'; round: number; path: number[] };

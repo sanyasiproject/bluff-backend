@@ -1,4 +1,4 @@
-import { SPIKES_SPEED, type BotLevel } from '../../types.js';
+import { SPIKES_RADIUS, SPIKES_SPEED, type BotLevel } from '../../types.js';
 import { cellSafe, freeCells, pathTo, pushOut, SPIKE_DIRS, walk, type Cell, type Point } from './arena.js';
 import type { SpikesGame } from './game.js';
 
@@ -22,6 +22,9 @@ export function botThinkMs(level: BotLevel, rand: () => number): number {
 }
 
 const centre = ([c, r]: Cell): Point => [c + 0.5, r + 0.5];
+
+/** how far a point is from square [c, r] */
+const gapTo = ([c, r]: Cell, [x, y]: Point): number => Math.hypot(x - Math.min(c + 1, Math.max(c, x)), y - Math.min(r + 1, Math.max(r, y)));
 
 /** the cell a body's centre is in */
 const cellOf = (g: SpikesGame, [x, y]: Point): Cell => [Math.min(g.size - 1, Math.max(0, Math.floor(x))), Math.min(g.size - 1, Math.max(0, Math.floor(y)))];
@@ -50,7 +53,10 @@ export function botThink(g: SpikesGame, id: string, now: number, rand: () => num
   const seen = g.warnings.filter((w) => (w.notice.get(id) ?? Infinity) <= now);
   const plan = seen.map((w) => w.id).join(',');
   if (seen.length > 0 && run?.plan === plan) return null;
-  const found = walk(g.size, g.boxes, cellOf(g, me));
+  // while crates are about to shift, their target squares count as taken
+  const ghosts = g.boxesNext ?? [];
+  const blocks = ghosts.length > 0 ? [...g.boxes, ...ghosts] : g.boxes;
+  const found = walk(g.size, blocks, cellOf(g, me));
   const route = (to: Cell): Point[] => {
     const cells = pathTo(found, to);
     const path = cells.length > 0 ? cells.map(centre) : [centre(to)];
@@ -68,11 +74,16 @@ export function botThink(g: SpikesGame, id: string, now: number, rand: () => num
     const score = (f: (typeof safe)[number]) => f.steps * 10 - (g.level === 'normal' ? 0 : shelter(g, f.cell));
     return { path: route(safe.reduce((a, b) => (score(b) < score(a) ? b : a)).cell), plan };
   }
+  // standing on (or touching) a square a crate is about to land on: step off to the nearest clear one
+  if (ghosts.some((c) => gapTo(c, me) < SPIKES_RADIUS + 0.1)) {
+    const off = [...found.values()].filter((f) => f.steps > 0 && !ghosts.some((c) => gapTo(c, centre(f.cell)) < SPIKES_RADIUS + 0.1));
+    if (off.length > 0) return { path: route(off.reduce((a, b) => (b.steps < a.steps ? b : a)).cell), plan: 'shift' };
+  }
   // walls gone: forget the plan, keep any run
   if (run && run.plan !== '') return { path: run.path, plan: '' };
   if (run && run.path.length > 0) return null;
   if (rand() >= WANDER[g.level]) return null;
-  const near = freeCells(g.size, g.boxes).filter((c) => (found.get(`${c[0]},${c[1]}`)?.steps ?? 99) <= 3);
+  const near = freeCells(g.size, blocks).filter((c) => (found.get(`${c[0]},${c[1]}`)?.steps ?? 99) <= 3);
   if (near.length === 0) return null;
   // better bots drift to well-sheltered squares, normal ones anywhere close
   if (g.level !== 'normal' && rand() < 0.6) return { path: route(near.reduce((a, b) => (shelter(g, b) > shelter(g, a) ? b : a))), plan: '' };

@@ -586,6 +586,7 @@ export class Room {
       const old = this.players().filter((m) => !m.bot && !m.games.includes(this.config.game));
       if (old.length > 0) throw new GameError(`${old.map((m) => m.name).join(', ')} must update the app (reload it) to play ${info.name}`);
     }
+    maybeModule(this.config.game)?.checkStart?.(this.config, this.players().length);
     const waiting = this.waitingFor();
     if (waiting.length > 0) throw new GameError(`Waiting for ${waiting.map((m) => m.name).join(', ')} to be ready`);
   }

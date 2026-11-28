@@ -10,6 +10,7 @@ import {
   VAPID_PUBLIC_KEY,
   VAPID_SUBJECT,
 } from './config.js';
+import { dictionary } from './games/wordhunt/dictionary.js';
 import { createBluffServer } from './server.js';
 import { createStore, type Store } from './services/store.js';
 
@@ -41,6 +42,11 @@ httpServer.listen(PORT, () => {
       : 'CLIENT_ORIGIN not set: only localhost and home-network origins can connect',
   );
   if (store && !ADMIN_API_KEY) console.log('ADMIN_API_KEY not set: only existing admins can make new admins');
+  // Word Grid Hunt's dictionary loads just after start, so the first game doesn't wait for it
+  setTimeout(() => {
+    const d = dictionary();
+    console.log(`Word list: ${d.words} words, ${d.nodes} trie nodes (${Math.round(d.bytes / 1024)} KB) in ${d.loadMs} ms`);
+  }, 1_000).unref();
 });
 
 const shutdown = async () => {

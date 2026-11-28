@@ -33,6 +33,8 @@ export interface GameModule<G extends PluggedGame = PluggedGame> {
   botMove(game: G, botId: string, level: BotLevel, rand: () => number): unknown;
   /** right after create, with the seats as the room knows them (accounts, host) */
   onStart?(game: G, seats: { id: string; userId: string | null; name: string; bot: boolean; host: boolean }[]): void;
+  /** refuses a start this game can't play (Classic carrom with 3); throws GameError */
+  checkStart?(config: GameConfig, players: number): void;
   /** bots that think off the event loop (chess: a worker pool); the driver plays the move it resolves with if the turn is still the same */
   botThink?(game: G, botId: string, rand: () => number): Promise<unknown>;
   /** the game runs its own clocks: no room turn timer and no stand-in moves */

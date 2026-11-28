@@ -20,16 +20,29 @@ function safe(b: Board, free: number[]): number[] {
 /** boxes the next player takes if they grab every box they can after this line */
 export function giveaway(b: Board, line: number): number {
   const lines = new Set(b.lines);
-  lines.add(line);
-  const sim: Board = { size: b.size, lines };
+  const count = new Map<number, number>();
+  const ready: number[] = [];
   let taken = 0;
-  for (;;) {
-    const free = [...Array(2 * b.size * (b.size + 1)).keys()].filter((l) => !lines.has(l));
-    const c = closing(sim, free)[0];
-    if (c === undefined) return taken;
-    lines.add(c);
-    taken += dotsBoxesOf(b.size, c).filter((x) => sides(sim, x) === 4).length;
+  // draws a line: each box it borders gains a side; a third side makes it takeable, a fourth takes it
+  const draw = (l: number) => {
+    lines.add(l);
+    for (const x of dotsBoxesOf(b.size, l)) {
+      const n = (count.get(x) ?? sides(b, x)) + 1;
+      count.set(x, n);
+      if (n === 3) ready.push(x);
+      if (n === 4) taken++;
+    }
+  };
+  // boxes already on three sides are takeable too
+  for (let x = 0; x < b.size * b.size; x++) if (sides(b, x) === 3) ready.push(x);
+  draw(line);
+  // the next player keeps closing boxes with three sides: each box is looked at a few times at most
+  while (ready.length > 0) {
+    const x = ready.pop()!;
+    const open = dotsBoxLines(b.size, Math.floor(x / b.size), x % b.size).find((l) => !lines.has(l));
+    if (open !== undefined) draw(open);
   }
+  return taken;
 }
 
 const pick = <T>(xs: T[], rand: () => number): T => xs[Math.floor(rand() * xs.length) % xs.length];
