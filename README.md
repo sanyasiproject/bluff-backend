@@ -266,26 +266,37 @@ handshake; a game won't start while a seated person's app lacks it ("must update
 
 ### Spike Attack (`config.game: 'spikes'`, `src/games/spikes/`)
 
-- Free movement. 2–4 players, `opts.size` 5 or 6 (the arena is size × size units, y 0 at the top), `opts.speed` normal or fast.
-  Players start at the corner boxes' centres (`pos` `[x, y]` floats, rounded to 3 decimals in views) with `SPIKES_LIVES` (3).
-  3 s countdown (`startsAt`), then play.
+- Free movement round fixed boxes. 2–4 players, `opts.size` 5 or 6 (the arena is size × size units, y 0 at the top), `opts.speed`
+  normal or fast. Players start at the corner squares' centres (`pos` `[x, y]` floats, rounded to 3 decimals in views) with
+  `SPIKES_LIVES` (3). 3 s countdown (`startsAt`), then play.
+- Boxes (`boxes` `[col, row][]`, fixed for the game, `arena.ts` `makeBoxes`): 4 on 5 × 5, 6 on 6 × 6, drawn with the game's
+  random until fair: never on a start corner's 2 × 2, no two side by side, every free square reachable, every side shields at least
+  one free square.
 - Move `{ type: 'move', x, y }` (finite, |v| < 100, else "Invalid move"), sent ~12 times a second. Never refused for speed: it is
-  cut back along the line to `SPIKES_SPEED` (3.2/s) × ms since your last accepted move + slack, then kept within
-  [`SPIKES_RADIUS`, size − `SPIKES_RADIUS`] (0.32). The slack is unused allowance carried over, at most `SPIKES_SLACK` (0.35), so it
-  absorbs bunched packets but never adds up. Errors: "Wait for the countdown", "You're out", "The game is over".
-- Warnings: the first 0.6 s into play, then every gap + 0–0.4 s; each shows `warn` ms before `strikeAt`. Normal: warn 3 s → 1 s and
-  gap 1.7 s → 0.55 s over 75 s of play; fast: 2 s → 1 s and 1.25 s → 0.45 s over 50 s. At most 1 + one per 15 s of play at once
-  (never more than size − 1, so a safe lane is left); a row or column is never warned twice at once.
-- A strike at `strikeAt` hits everyone whose body overlaps the band, not `safeUntil` (1 s after a hit): row r is hit when
-  |y − (r + 0.5)| < 0.5 + 0.85 × `SPIKES_RADIUS` (0.772), columns the same with x. -1 life; 0 lives = out (`places`; players out on
-  the same strike share the place). Last one standing wins (`finish` event); the last players out together share first. After 3
-  minutes of play (`SPIKES_MAX_MS`) most lives left wins. When no person is left standing, bots still up are ranked by lives.
-- Bots run continuously (a step every 100 ms while running, at 85 / 95 / 100 % of `SPIKES_SPEED`), look around every 250–480 /
-  170–340 / 110–220 ms (Normal / Hard / Expert) and only see a warning after a reaction time (Expert 0.2–0.5 s, Hard 0.3–0.8 s,
-  Normal 0.55–1.3 s; now and then 0.8–1.1 s later). In a warned band they run to the nearest safe spot whose path crosses no band
-  near its strike; otherwise they now and then wander (better levels drift to the middle).
-- Counters `stats.perGame.spikes.dodges` (left a band you were in when it was warned) and `hits`. Announcer: "Dodge the spikes! 🔺",
-  "Asha is out 💀 (3rd)", "Ravi is the last one standing! 🏆", "Time's up! Most lives left wins", "Game over. Ravi wins 🎉".
+  cut back along the line to `SPIKES_SPEED` (3.2/s) × ms since your last accepted move + slack (unused allowance, at most
+  `SPIKES_SLACK` 0.35; a move blocked by a box still uses its length), then walked from where the server has you in steps of at
+  most 0.2 units; after each step the body (radius `SPIKES_RADIUS` 0.32) is kept inside [0.32, size − 0.32] and pushed out of each
+  box it overlaps (out along the line from the box's nearest point to the centre; a centre inside a box goes out through the
+  nearest face; two passes), so it slides along box edges. Errors: "Wait for the countdown", "You're out", "The game is over".
+- Walls (`warnings` `{ id, dir, warnAt, strikeAt }`): a whole side fires at `strikeAt`. The first is warned 0.8 s into play; the
+  next only after the strike, a gap later. Normal: warn 3 s → 1.5 s, gap 1.5–3 s → 0.7–1.5 s over 90 s of play; fast: 2 s → 1.3 s,
+  1.2–2.4 s → 0.6–1.2 s over 60 s. Never the same side twice in a row. From 45 s (fast 30 s) on, 35 % (fast 40 %) of walls are two
+  sides at once (same `strikeAt`), only a pair where some free square is safe from both.
+- In every row (left/right walls) or column (top/bottom) the spikes reach up to the first box (`spikeReach` in `types.ts`, arena
+  units from that side; size when the line has no box). A wall hits a body when, in any line its circle overlaps
+  (|across − (line + 0.5)| < 0.5 + 0.85 × 0.32), its near edge is inside the reach (left: x − 0.272 < reach; right:
+  size − x − 0.272 < reach; top/bottom the same with y), unless `safeUntil` (1 s after a hit). So the squares behind a box are safe.
+  -1 life (one at most when two walls strike together); 0 lives = out (`places`; players out on the same strike share the place).
+  Last one standing wins (`finish` event); the last players out together share first. After 3 minutes of play (`SPIKES_MAX_MS`)
+  most lives left wins. When no person is left standing, bots still up are ranked by lives. `strikes` (last 8): `{ id, dir, at, hit }`.
+- Bots run continuously (a step every 100 ms while running, at 85 / 95 / 100 % of `SPIKES_SPEED`, with the same collision), look
+  around every 250–480 / 170–340 / 110–220 ms (Normal / Hard / Expert) and only see a wall after a reaction time (Expert 0.2–0.5 s,
+  Hard 0.3–0.8 s, Normal 0.55–1.3 s; now and then 0.8–1.1 s later). In a wall's reach they take the shortest path between square
+  centres round the boxes to the nearest square safe from every wall they've seen (better bots prefer squares that hide from more
+  sides); they misread a wall 20 / 8 / 3 % of the time and run somewhere random. Otherwise they now and then wander.
+- Counters `stats.perGame.spikes.dodges` (out of a wall's reach at its strike after being in it when it was warned) and `hits`.
+  Announcer: "Dodge the spikes! 🔺", "Asha is out 💀 (3rd)", "Ravi is the last one standing! 🏆", "Time's up! Most lives left wins",
+  "Game over. Ravi wins 🎉".
 
 ## Rules worth knowing
 

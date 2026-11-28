@@ -2307,7 +2307,7 @@ export const PARTY_COLORS = ['#ff5252', '#40c4ff', '#69f0ae', '#ffd740'] as cons
 /** numbers round the board, clockwise from the top */
 export const DART_NUMBERS = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5] as const;
 /** ring radii as a share of the board's scoring radius (1 = outer edge of the double ring); arcade-wide so 2x and 3x can be hit on a phone */
-export const DART_RINGS = { bull: 0.07, outerBull: 0.16, trebleIn: 0.5, trebleOut: 0.64, doubleIn: 0.86, doubleOut: 1 } as const;
+export const DART_RINGS = { bull: 0.07, outerBull: 0.16, trebleIn: 0.54, trebleOut: 0.64, doubleIn: 0.86, doubleOut: 1 } as const;
 export const DARTS_PER_TURN = 3;
 
 export type DartRing = 'bull' | 'outerBull' | 'single' | 'treble' | 'double' | 'miss';
@@ -2529,30 +2529,50 @@ export type FruitMoveInput = { type: 'strike'; round: number; reaction: number }
 
 export const SPIKES_LIVES = 3;
 export type SpikeDir = 'left' | 'right' | 'top' | 'bottom';
-/** a spike on the way: it shoots in from `dir` along row (left/right) or column (top/bottom) `line`, right across to the far side */
+/**
+ * a spike wall on the way: the whole `dir` side fires at strikeAt. In every row (left/right walls) or column
+ * (top/bottom walls) the spikes shoot across until they reach a box, so the squares behind a box are safe
+ */
 export interface SpikeWarning {
   id: number;
   dir: SpikeDir;
-  line: number;
-  /** when the warning showed and when the spike strikes (ms since epoch, server clock) */
+  /** when the warning showed and when the wall strikes (ms since epoch, server clock) */
   warnAt: number;
   strikeAt: number;
 }
-/** Spike Attack movement: free, in arena units (the arena is size × size, a player is a circle) */
+/** how far a wall from `dir` reaches along each row/column, as the box edge it stops at (arena units from that side; size = all the way) */
+export function spikeReach(size: number, boxes: readonly [number, number][], dir: SpikeDir): number[] {
+  const out: number[] = [];
+  for (let line = 0; line < size; line++) {
+    // distance from the wall's side to the near edge of the first box in this line
+    let reach = size;
+    for (const [c, r] of boxes) {
+      const onLine = dir === 'left' || dir === 'right' ? r === line : c === line;
+      if (!onLine) continue;
+      const along = dir === 'left' ? c : dir === 'right' ? size - 1 - c : dir === 'top' ? r : size - 1 - r;
+      reach = Math.min(reach, along);
+    }
+    out.push(reach);
+  }
+  return out;
+}
+/** Spike Attack movement: free, in arena units (the arena is size × size, a player is a circle; boxes are solid) */
 export const SPIKES_SPEED = 3.2;
 export const SPIKES_RADIUS = 0.32;
 export interface SpikesView {
   size: number;
   phase: 'countdown' | 'play' | 'over';
   startsAt: number;
-  /** each player's centre [x, y] in arena units (0..size), y 0 at the top; a spike on row r hits anyone whose circle overlaps r..r+1 */
+  /** each player's centre [x, y] in arena units (0..size), y 0 at the top */
   pos: Record<string, [number, number]>;
   lives: Record<string, number>;
   /** players hit just now can't be hit again until this time (ms since epoch) */
   safeUntil: Record<string, number>;
+  /** box squares [col, row]: solid (nobody walks through) and they stop the spikes; fixed for the game */
+  boxes: [number, number][];
   warnings: SpikeWarning[];
-  /** recent strikes, for the animation: who they hit */
-  strikes: { id: number; dir: SpikeDir; line: number; at: number; hit: string[] }[];
+  /** recent wall strikes, for the animation: who they hit */
+  strikes: { id: number; dir: SpikeDir; at: number; hit: string[] }[];
   /** finishing order (out first = last place) */
   places: Record<string, number>;
   /** server time when this view was made, so the app can line up its clock */

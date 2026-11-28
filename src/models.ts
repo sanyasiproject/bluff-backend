@@ -368,12 +368,12 @@ export type FruitEvent =
   | { type: 'strike'; playerId: string; round: number }
   | { type: 'result'; round: number; kind: FruitItemKind; winner: string | null; points: number; slowed: string[] };
 
-/** Spike Attack: play starts, a player moves (to: [x, y] in arena units; live, coalesced into views), a warning shows, a spike strikes (hit: players who lost a life), a player is out, time runs out */
+/** Spike Attack: play starts, a player moves (to: [x, y] in arena units; live, coalesced into views), a side's wall is warned, a wall strikes (hit: players who lost a life), a player is out, time runs out */
 export type SpikesEvent =
   | { type: 'go' }
   | { type: 'step'; playerId: string; to: [number, number] }
-  | { type: 'warn'; id: number; dir: SpikeDir; line: number }
-  | { type: 'strike'; id: number; dir: SpikeDir; line: number; hit: string[] }
+  | { type: 'warn'; id: number; dir: SpikeDir }
+  | { type: 'strike'; id: number; dir: SpikeDir; hit: string[] }
   | { type: 'out'; playerId: string; place: number }
   | { type: 'timeUp' };
 

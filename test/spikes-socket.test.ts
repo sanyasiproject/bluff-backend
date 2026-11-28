@@ -61,6 +61,9 @@ describe('Spike Attack over sockets', () => {
     const [ida, idb] = [a.state!.meId, b.state!.meId];
     const v = spikesOf(a);
     expect(v.pos[ida]).toEqual([0.5, 0.5]);
+    // 4 fixed boxes, never in a start corner's 2 × 2
+    expect(v.boxes).toHaveLength(4);
+    expect(v.boxes.every(([c, r]) => !((c <= 1 || c >= 3) && (r <= 1 || r >= 3)))).toBe(true);
     expect(v.pos[idb]).toEqual([4.5, 4.5]);
     expect(a.state!.turnId).toBeNull();
     expect(a.state!.turnMsLeft).toBeNull();
@@ -78,9 +81,10 @@ describe('Spike Attack over sockets', () => {
     const statesBefore = b.states.length;
     let windowStates = -1;
     for (let i = 0; Date.now() - t0 < 10_500; i++) {
+      // each runs back and forth inside its own corner, where there are never boxes
       const phase = (i % 48) / 48;
-      const x = 2.5 + 1.8 * Math.sin(phase * 2 * Math.PI);
-      const res = await Promise.all([move(a, x, 2.5), move(b, 5 - x, 2.5)]);
+      const x = 1 + 0.6 * Math.sin(phase * 2 * Math.PI);
+      const res = await Promise.all([move(a, x, 0.5), move(b, 5 - x, 4.5)]);
       sent += 2;
       for (const r of res) if (r.error) errors.push(r.error);
       // views during the first 2 s of moving: at most one push per 80 ms, plus warnings
@@ -93,8 +97,8 @@ describe('Spike Attack over sockets', () => {
     expect(windowStates).toBeGreaterThan(8);
     expect(windowStates).toBeLessThanOrEqual(2000 / 80 + 4);
     expect(b.states.length).toBeGreaterThan(statesBefore);
-    // B's view follows A moving on the middle row
-    expect(spikesOf(b).pos[ida][1]).toBeCloseTo(2.5, 3);
+    // B's view follows A moving along the top row
+    expect(spikesOf(b).pos[ida][1]).toBeCloseTo(0.5, 3);
     const texts = a.notes.map((n) => n.text);
     expect(texts).toContain('Dodge the spikes! 🔺');
     // sparse: no line per move, warning or hit
@@ -110,6 +114,7 @@ describe('Spike Attack over sockets', () => {
     await until(() => a.state?.plugged?.kind === 'spikes');
     const bot = a.state!.players.find((p) => p.bot)!.id;
     expect(spikesOf(a).pos[bot]).toEqual([5.5, 5.5]);
+    expect(spikesOf(a).boxes).toHaveLength(6);
     await until(() => spikesOf(a).pos[bot].join() !== '5.5,5.5' || a.state!.phase === 'over', 20_000);
     const p = spikesOf(a).pos[bot];
     // somewhere between box centres while it runs, or already arrived

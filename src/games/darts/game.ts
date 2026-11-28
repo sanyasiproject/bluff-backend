@@ -7,8 +7,8 @@ import { dartScore, DARTS_PER_TURN, gameOpt, PARTY_COLORS, type Card, type DartT
 /** Darts' per-account counters (stats.perGame.darts) */
 export type DartsTally = { t180: number; bulls: number; checkouts: number };
 
-/** the hand's own shake the server adds to every throw (board units) */
-export const DART_SHAKE = 0.03;
+/** extra shake the server adds to a person's throw: none, the sweep aim is the skill (bots aim with their own noise) */
+export const DART_SHAKE = 0;
 /** how long the board shows a finished turn's darts before the next player steps up (ms) */
 export const DARTS_TURN_PAUSE_MS = 1_600;
 /** a bot's pause before each dart (ms: from, plus up to) */

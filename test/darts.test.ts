@@ -98,11 +98,11 @@ describe('Darts rules', () => {
     expect(dartsModule.tallies(g, 'A')).toEqual({ t180: 0, bulls: 1, checkouts: 1 });
   });
 
-  it('the server adds a small shake to every throw', () => {
+  it("a person's dart lands exactly where the sweep locked it", () => {
     const g = new DartsGame(['A', 'B'], cfg(), () => 0, [], seeded(9));
     g.throw('A', 0.3, 0.3);
-    expect(g.last!.x).not.toBe(0.3);
-    expect(Math.hypot(g.last!.x - 0.3, g.last!.y - 0.3)).toBeLessThan(0.2);
+    expect(g.last!.x).toBe(0.3);
+    expect(g.last!.y).toBe(0.3);
   });
 
   it('parses throws and rejects bad ones', () => {

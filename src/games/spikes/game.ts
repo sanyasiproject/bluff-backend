@@ -2,18 +2,18 @@ import { secureRandom, type RandomInt } from '../../cards.js';
 import { GameError } from '../../game.js';
 import type { BetResult, GameEvent, PlayerStats, SpikesEvent, TableGame } from '../../models.js';
 import { gameOpt, SPIKES_LIVES, SPIKES_RADIUS, SPIKES_SPEED, type BotLevel, type Card, type GameConfig, type SpikeDir, type SpikesView, type SpikeWarning } from '../../types.js';
+import { hitBy, makeBoxes, reachesOf, safePairs, slide, SPIKE_DIRS, type Cell, type Point, type Reaches } from './arena.js';
 import { botSpeedOf, botThink, botThinkMs, type SpikesBotLevel } from './brain.js';
+
+export { inBand, SPIKES_HIT_SHARE, type Point } from './arena.js';
 
 /** Spike Attack's per-account counters (stats.perGame.spikes) */
 export type SpikesTally = { dodges: number; hits: number };
-export type Point = [number, number];
 
 /** the 3-2-1 before the first warning (ms) */
 export const SPIKES_COUNTDOWN_MS = 3_000;
 /** how far a move may run ahead of SPIKES_SPEED (arena units), for network bunching; it never adds up past this */
 export const SPIKES_SLACK = 0.35;
-/** a band is hit when a body overlaps it by this share of its radius (a little forgiving) */
-export const SPIKES_HIT_SHARE = 0.85;
 /** bots move this often while running (ms) */
 export const SPIKES_BOT_TICK_MS = 100;
 /** no second hit this soon after one (ms) */
@@ -23,10 +23,16 @@ export const SPIKES_MAX_MS = 180_000;
 /** recent strikes kept in the view for the animation */
 const STRIKES_KEPT = 8;
 
-/** warning time and the gap between warnings: from the start, shrinking to the end values over `ramp` ms of play */
+/** the first wall is warned this long into play (ms) */
+export const SPIKES_FIRST_WARN_MS = 800;
+
+/**
+ * warning time, and the gap from one strike to the next warning (a range), going from their start values to their end values
+ * over `ramp` ms of play; from `twoFrom` ms on, `two` is the chance two sides fire together
+ */
 export const SPIKES_PACE = {
-  normal: { warn: [3_000, 1_000], gap: [1_700, 550], ramp: 75_000 },
-  fast: { warn: [2_000, 1_000], gap: [1_250, 450], ramp: 50_000 },
+  normal: { warn: [3_000, 1_500], gap: [[1_500, 3_000], [700, 1_500]], ramp: 90_000, twoFrom: 45_000, two: 0.35 },
+  fast: { warn: [2_000, 1_300], gap: [[1_200, 2_400], [600, 1_200]], ramp: 60_000, twoFrom: 30_000, two: 0.4 },
 } as const;
 
 const emptyStats = (): PlayerStats & { tallies: SpikesTally } => ({
@@ -42,26 +48,21 @@ const emptyStats = (): PlayerStats & { tallies: SpikesTally } => ({
 
 const ev = (e: SpikesEvent): GameEvent => ({ kind: 'spikes', ev: e });
 
-/** a warning with who stood on its line when it showed, and when each bot notices it */
+/** a warned wall with who stood in its reach when it showed, and when each bot notices it */
 export interface LiveWarning extends SpikeWarning {
-  onLine: Set<string>;
+  inDanger: Set<string>;
   notice: Map<string, number>;
 }
 
-/** a body centred at v overlaps lane `line` (the lane spans line..line+1) */
-export const inBand = (v: number, line: number): boolean => Math.abs(v - (line + 0.5)) < 0.5 + SPIKES_RADIUS * SPIKES_HIT_SHARE;
-
-/** a spike from `dir` runs along a row (left/right: tests y) or a column (top/bottom: tests x) */
-export const covers = (w: Pick<SpikeWarning, 'dir' | 'line'>, [x, y]: Point): boolean => (w.dir === 'left' || w.dir === 'right' ? inBand(y, w.line) : inBand(x, w.line));
-
-/** a bot's run: where it heads, when it next thinks, when it last moved */
+/** a bot's run: the cell centres it heads through, the walls it planned for, when it next thinks, when it last moved */
 export interface BotRun {
-  target: Point | null;
+  path: Point[];
+  plan: string;
   thinkAt: number;
   movedAt: number;
 }
 
-/** Spike Attack: everyone moves freely at once, spikes shoot across warned rows and columns; last one standing wins */
+/** Spike Attack: everyone moves freely round fixed boxes, whole-side spike walls stop at the boxes; last one standing wins */
 export class SpikesGame implements TableGame<Card> {
   readonly hands = new Map<string, Card[]>();
   readonly stats = new Map<string, PlayerStats>();
@@ -83,6 +84,12 @@ export class SpikesGame implements TableGame<Card> {
   readonly startsAt: number;
   readonly bots: Set<string>;
   readonly level: SpikesBotLevel;
+  /** solid box squares [col, row], fixed for the game */
+  readonly boxes: Cell[];
+  /** each side's reach per row/column (spikeReach) */
+  readonly reaches: Reaches;
+  /** sides that may fire together: a free square is safe from both */
+  readonly pairs: [SpikeDir, SpikeDir][];
   readonly pos = new Map<string, Point>();
   readonly lives = new Map<string, number>();
   readonly safeUntil = new Map<string, number>();
@@ -92,8 +99,10 @@ export class SpikesGame implements TableGame<Card> {
   strikes: SpikesView['strikes'] = [];
   /** goes up with every timed step (not with people's moves): drivers key their timers on it */
   stepSeq = 0;
-  /** when the next warning shows */
+  /** when the next warning shows (Infinity while a wall is warned) */
   nextWarnAt: number;
+  /** the sides warned last, not picked again straight away */
+  private lastDirs: SpikeDir[] = [];
   /** each bot's run */
   readonly botRun = new Map<string, BotRun>();
   /** each person's last accepted move time and unused slack */
@@ -113,9 +122,12 @@ export class SpikesGame implements TableGame<Card> {
     this.size = gameOpt<number>(config, 'size');
     this.speed = gameOpt<string>(config, 'speed') === 'fast' ? 'fast' : 'normal';
     this.startsAt = this.now() + SPIKES_COUNTDOWN_MS;
-    this.nextWarnAt = this.startsAt + 600;
+    this.nextWarnAt = this.startsAt + SPIKES_FIRST_WARN_MS;
     this.bots = new Set(botIds);
     this.level = (config.botLevel ?? 'hard') as BotLevel;
+    this.boxes = makeBoxes(this.size, rand);
+    this.reaches = reachesOf(this.size, this.boxes);
+    this.pairs = safePairs(this.size, this.boxes);
     const lo = 0.5;
     const hi = this.size - 0.5;
     // the four corner boxes' centres; two players sit opposite
@@ -125,7 +137,7 @@ export class SpikesGame implements TableGame<Card> {
       this.pos.set(id, [...corners[i]]);
       this.lives.set(id, SPIKES_LIVES);
       this.safeUntil.set(id, 0);
-      if (this.bots.has(id)) this.botRun.set(id, { target: null, thinkAt: this.startsAt + 300 + this.jitter() * 500, movedAt: this.startsAt });
+      if (this.bots.has(id)) this.botRun.set(id, { path: [], plan: '', thinkAt: this.startsAt + 300 + this.jitter() * 500, movedAt: this.startsAt });
       else this.lastMove.set(id, { at: this.startsAt, slack: SPIKES_SLACK });
     });
   }
@@ -169,13 +181,27 @@ export class SpikesGame implements TableGame<Card> {
     return Math.min(this.size - SPIKES_RADIUS, Math.max(SPIKES_RADIUS, v));
   }
 
-  /** the pace at this point of the game, from its start values towards the end values */
-  pace(at: number): { warn: number; gap: number; most: number } {
+  /** a wall from `dir` would hit a body at p */
+  hits(dir: SpikeDir, p: Point): boolean {
+    return hitBy(this.size, this.reaches[dir], dir, p);
+  }
+
+  /** walks a body from `from` towards `to`, sliding along boxes and kept inside the arena */
+  slide(from: Point, to: Point): Point {
+    return slide(this.size, this.boxes, from, to);
+  }
+
+  /** the pace at this point of the game: warning ms, the gap range to the next warning, the chance of two sides at once */
+  pace(at: number): { warn: number; gap: [number, number]; two: number } {
     const p = SPIKES_PACE[this.speed];
-    const k = Math.min(1, this.played(at) / p.ramp);
-    // more warnings overlap as the game goes on; always fewer than the lines, so a safe box is left
-    const most = Math.min(this.size - 1, 1 + Math.floor(this.played(at) / 15_000));
-    return { warn: Math.round(p.warn[0] - (p.warn[0] - p.warn[1]) * k), gap: Math.round(p.gap[0] - (p.gap[0] - p.gap[1]) * k), most };
+    const played = this.played(at);
+    const k = Math.min(1, played / p.ramp);
+    const lerp = (a: number, b: number) => Math.round(a - (a - b) * k);
+    return {
+      warn: lerp(p.warn[0], p.warn[1]),
+      gap: [lerp(p.gap[0][0], p.gap[1][0]), lerp(p.gap[0][1], p.gap[1][1])],
+      two: played >= p.twoFrom && this.pairs.length > 0 ? p.two : 0,
+    };
   }
 
   /** the countdown is over */
@@ -186,7 +212,7 @@ export class SpikesGame implements TableGame<Card> {
     return [ev({ type: 'go' })];
   }
 
-  /** a person's position: never refused for speed, cut back along the line to what SPIKES_SPEED allows, kept inside the arena */
+  /** a person's position: never refused for speed, cut back along the line to what SPIKES_SPEED allows, then walked round boxes */
   moveTo(id: string, x: number, y: number): GameEvent[] {
     if (this.over) throw new GameError('The game is over');
     if (!this.order.includes(id) || this.isOut(id)) throw new GameError("You're not playing this game");
@@ -196,66 +222,84 @@ export class SpikesGame implements TableGame<Card> {
     const from = this.pos.get(id)!;
     const last = this.lastMove.get(id) ?? { at: now, slack: 0 };
     const allowed = (SPIKES_SPEED * Math.max(0, now - last.at)) / 1000 + last.slack;
-    const to = this.reach(from, [x, y], allowed);
-    // unused allowance carries over, but never more than SPIKES_SLACK
-    const used = Math.hypot(to[0] - from[0], to[1] - from[1]);
+    const cut = this.cut(from, [x, y], allowed);
+    // unused allowance carries over, but never more than SPIKES_SLACK; a move blocked by a box still uses its length
+    const used = Math.hypot(cut[0] - from[0], cut[1] - from[1]);
     this.lastMove.set(id, { at: now, slack: Math.min(SPIKES_SLACK, Math.max(0, allowed - used)) });
+    const to = this.slide(from, cut);
     this.pos.set(id, to);
     return [ev({ type: 'step', playerId: id, to: [...to] })];
   }
 
-  /** from `from` towards `to`, at most `most` units, inside the arena */
-  reach(from: Point, to: Point, most: number): Point {
+  /** from `from` towards `to`, at most `most` units (boxes not looked at) */
+  cut(from: Point, to: Point, most: number): Point {
     const dx = to[0] - from[0];
     const dy = to[1] - from[1];
     const d = Math.hypot(dx, dy);
     const k = d > most && d > 0 ? most / d : 1;
-    return [this.clamp(from[0] + dx * k), this.clamp(from[1] + dy * k)];
+    return [from[0] + dx * k, from[1] + dy * k];
   }
 
-  /** a new warning on a line nobody is warned about yet */
+  /** a new wall: one side (later sometimes two that leave a square safe from both), not the side(s) just warned */
   warn(): GameEvent[] {
-    if (this.over || this.phase !== 'play') return [];
+    if (this.over || this.phase !== 'play' || this.warnings.length > 0) return [];
     const now = this.now();
     const pace = this.pace(now);
     this.stepSeq++;
-    this.nextWarnAt = now + pace.gap + this.jitter() * 400;
-    if (this.warnings.length >= pace.most) return [];
-    const dirs: SpikeDir[] = ['left', 'right', 'top', 'bottom'];
-    const free = dirs.flatMap((dir) => Array.from({ length: this.size }, (_, line) => ({ dir, line }))).filter((w) => !this.warnings.some((x) => (x.dir === 'left' || x.dir === 'right') === (w.dir === 'left' || w.dir === 'right') && x.line === w.line));
-    if (free.length === 0) return [];
-    const pick = free[this.rand(free.length)];
-    const w: LiveWarning = { id: ++this.warnSeq, ...pick, warnAt: now, strikeAt: now + pace.warn, onLine: new Set(), notice: new Map() };
-    for (const id of this.aliveIds()) {
-      if (covers(w, this.pos.get(id)!)) w.onLine.add(id);
-      if (this.bots.has(id)) w.notice.set(id, now + noticeDelay(this.level, this.jitter));
+    this.nextWarnAt = Infinity;
+    let dirs: SpikeDir[];
+    const pairs = this.pairs.filter((p) => !(p[0] === this.lastDirs[0] && p[1] === this.lastDirs[1]));
+    if (pace.two > 0 && pairs.length > 0 && this.jitter() < pace.two) dirs = [...pairs[this.rand(pairs.length)]];
+    else {
+      const sides = SPIKE_DIRS.filter((d) => !(this.lastDirs.length === 1 && this.lastDirs[0] === d));
+      dirs = [sides[this.rand(sides.length)]];
     }
-    this.warnings.push(w);
-    return [ev({ type: 'warn', id: w.id, dir: w.dir, line: w.line })];
+    this.lastDirs = dirs;
+    const events: GameEvent[] = [];
+    for (const dir of dirs) {
+      const w: LiveWarning = { id: ++this.warnSeq, dir, warnAt: now, strikeAt: now + pace.warn, inDanger: new Set(), notice: new Map() };
+      for (const id of this.aliveIds()) {
+        if (this.hits(dir, this.pos.get(id)!)) w.inDanger.add(id);
+        if (this.bots.has(id)) w.notice.set(id, now + noticeDelay(this.level, this.jitter));
+      }
+      this.warnings.push(w);
+      events.push(ev({ type: 'warn', id: w.id, dir }));
+    }
+    return events;
   }
 
-  /** the earliest warning's spike shoots across: everyone whose body overlaps its band and isn't safe loses a life */
+  /** the earliest wall(s) strike: everyone a wall reaches who isn't safe loses a life (one at most, thanks to the safe time) */
   strike(): GameEvent[] {
     if (this.over || this.warnings.length === 0) return [];
-    const w = this.warnings.reduce((a, b) => (b.strikeAt < a.strikeAt ? b : a));
-    this.warnings = this.warnings.filter((x) => x !== w);
+    const at = Math.min(...this.warnings.map((w) => w.strikeAt));
+    const due = this.warnings.filter((w) => w.strikeAt === at).sort((a, b) => a.id - b.id);
+    this.warnings = this.warnings.filter((w) => !due.includes(w));
     const now = this.now();
     this.stepSeq++;
-    const hit: string[] = [];
-    for (const id of this.aliveIds()) {
-      if (!covers(w, this.pos.get(id)!)) {
-        if (w.onLine.has(id)) this.tallyOf(id).dodges++;
-        continue;
+    const events: GameEvent[] = [];
+    const allHit: string[] = [];
+    for (const w of due) {
+      const hit: string[] = [];
+      for (const id of this.aliveIds()) {
+        if (!this.hits(w.dir, this.pos.get(id)!)) {
+          if (w.inDanger.has(id)) this.tallyOf(id).dodges++;
+          continue;
+        }
+        if ((this.safeUntil.get(id) ?? 0) > now) continue;
+        hit.push(id);
+        allHit.push(id);
+        this.lives.set(id, (this.lives.get(id) ?? 0) - 1);
+        this.safeUntil.set(id, now + SPIKES_SAFE_MS);
+        this.tallyOf(id).hits++;
       }
-      if ((this.safeUntil.get(id) ?? 0) > now) continue;
-      hit.push(id);
-      this.lives.set(id, (this.lives.get(id) ?? 0) - 1);
-      this.safeUntil.set(id, now + SPIKES_SAFE_MS);
-      this.tallyOf(id).hits++;
+      this.strikes = [...this.strikes, { id: w.id, dir: w.dir, at: now, hit }].slice(-STRIKES_KEPT);
+      events.push(ev({ type: 'strike', id: w.id, dir: w.dir, hit }));
     }
-    this.strikes = [...this.strikes, { id: w.id, dir: w.dir, line: w.line, at: now, hit }].slice(-STRIKES_KEPT);
-    const events = [ev({ type: 'strike', id: w.id, dir: w.dir, line: w.line, hit })];
-    const dead = hit.filter((id) => (this.lives.get(id) ?? 0) <= 0);
+    if (this.warnings.length === 0) {
+      const [lo, hi] = this.pace(now).gap;
+      this.nextWarnAt = now + Math.round(lo + this.jitter() * (hi - lo));
+    }
+    const dead = allHit.filter((id) => (this.lives.get(id) ?? 0) <= 0);
     if (dead.length > 0) events.push(...this.knockOut(dead));
     return events;
   }
@@ -278,7 +322,7 @@ export class SpikesGame implements TableGame<Card> {
     return events;
   }
 
-  /** bots run towards their targets, and those due to look around pick a new one */
+  /** bots run along their paths, and those due to look around plan again */
   botTurns(): GameEvent[] {
     if (this.over) return [];
     const now = this.now();
@@ -289,18 +333,35 @@ export class SpikesGame implements TableGame<Card> {
         this.botRun.delete(id);
         continue;
       }
-      if (run.target) {
+      if (run.path.length > 0) {
         const from = this.pos.get(id)!;
-        const to = this.reach(from, run.target, (botSpeedOf(this.level) * Math.max(0, now - run.movedAt)) / 1000);
-        if (to[0] !== from[0] || to[1] !== from[1]) {
-          this.pos.set(id, to);
-          events.push(ev({ type: 'step', playerId: id, to: [...to] }));
+        let p: Point = from;
+        let budget = (botSpeedOf(this.level) * Math.max(0, now - run.movedAt)) / 1000;
+        // along the path's cell centres, as far as this tick's running allows
+        while (budget > 1e-9 && run.path.length > 0) {
+          const next = run.path[0];
+          const d = Math.hypot(next[0] - p[0], next[1] - p[1]);
+          if (d <= budget) {
+            p = this.slide(p, next);
+            budget -= d;
+            run.path.shift();
+          } else {
+            p = this.slide(p, this.cut(p, next, budget));
+            budget = 0;
+          }
         }
-        if (Math.hypot(run.target[0] - to[0], run.target[1] - to[1]) < 0.01) run.target = null;
+        if (p[0] !== from[0] || p[1] !== from[1]) {
+          this.pos.set(id, p);
+          events.push(ev({ type: 'step', playerId: id, to: [...p] }));
+        }
       }
       run.movedAt = now;
       if (run.thinkAt <= now) {
-        run.target = botThink(this, id, now, this.jitter) ?? run.target;
+        const plan = botThink(this, id, now, this.jitter);
+        if (plan) {
+          run.path = plan.path;
+          run.plan = plan.plan;
+        }
         run.thinkAt = now + botThinkMs(this.level, this.jitter);
       }
     }
@@ -310,7 +371,7 @@ export class SpikesGame implements TableGame<Card> {
   /** when the bots next need a step: a tick while any runs, else the next look around */
   private nextBotAt(): number {
     let at = Infinity;
-    for (const run of this.botRun.values()) at = Math.min(at, run.thinkAt, run.target ? run.movedAt + SPIKES_BOT_TICK_MS : Infinity);
+    for (const run of this.botRun.values()) at = Math.min(at, run.thinkAt, run.path.length > 0 ? run.movedAt + SPIKES_BOT_TICK_MS : Infinity);
     return at;
   }
 
@@ -328,7 +389,7 @@ export class SpikesGame implements TableGame<Card> {
     if (this.over) return null;
     if (this.phase === 'countdown') return { at: this.startsAt, run: () => this.go() };
     const steps: { at: number; run: () => GameEvent[] }[] = [{ at: this.startsAt + SPIKES_MAX_MS, run: () => this.endOnTime() }];
-    // a strike goes before anything planned for the same moment
+    // a strike goes before anything planned for the same moment; the next warning waits for it
     if (this.warnings.length > 0) steps.push({ at: Math.min(...this.warnings.map((w) => w.strikeAt)), run: () => this.strike() });
     steps.push({ at: this.nextWarnAt, run: () => this.warn() });
     const bots = this.nextBotAt();
@@ -423,7 +484,8 @@ export class SpikesGame implements TableGame<Card> {
       pos: Object.fromEntries(this.order.map((id) => [id, this.pos.get(id)!.map(r3) as [number, number]])),
       lives: rec(this.lives),
       safeUntil: rec(this.safeUntil),
-      warnings: this.warnings.map(({ id, dir, line, warnAt, strikeAt }) => ({ id, dir, line, warnAt, strikeAt })),
+      boxes: this.boxes.map(([c, r]) => [c, r] as [number, number]),
+      warnings: this.warnings.map(({ id, dir, warnAt, strikeAt }) => ({ id, dir, warnAt, strikeAt })),
       strikes: this.strikes.map((s) => ({ ...s, hit: [...s.hit] })),
       places: Object.fromEntries([...this.placeMap].filter(([id]) => !this.isOut(id))),
       now: this.now(),

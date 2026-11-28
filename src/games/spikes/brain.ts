@@ -1,14 +1,15 @@
 import { SPIKES_SPEED, type BotLevel } from '../../types.js';
-import { covers, type LiveWarning, type Point, type SpikesGame } from './game.js';
+import { cellSafe, freeCells, pathTo, pushOut, SPIKE_DIRS, walk, type Cell, type Point } from './arena.js';
+import type { SpikesGame } from './game.js';
 
 export type SpikesBotLevel = BotLevel;
 
 /** a bot's running speed, as a share of SPIKES_SPEED */
 const PACE: Record<BotLevel, number> = { normal: 0.85, hard: 0.95, expert: 1 };
-/** chance a bot standing safe wanders somewhere else each time it looks around */
+/** chance a bot with nothing warned wanders somewhere else each time it looks around */
 const WANDER: Record<BotLevel, number> = { normal: 0.07, hard: 0.06, expert: 0.05 };
-/** a path crossing a band this close to its strike is not taken (ms) */
-const CROSS_MS = 220;
+/** chance a bot misreads a wall: runs to a random square instead of a shielded one */
+const BLUNDER: Record<BotLevel, number> = { normal: 0.2, hard: 0.08, expert: 0.03 };
 
 /** a bot's speed in arena units per second */
 export const botSpeedOf = (level: BotLevel): number => SPIKES_SPEED * PACE[level];
@@ -20,58 +21,60 @@ export function botThinkMs(level: BotLevel, rand: () => number): number {
   return 250 + rand() * 230;
 }
 
-const dist = (a: Point, b: Point) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+const centre = ([c, r]: Cell): Point => [c + 0.5, r + 0.5];
 
-/** a bot's new target: off any band it has noticed is about to strike, now and then a wander; null keeps its run */
-export function botThink(g: SpikesGame, id: string, now: number, rand: () => number): Point | null {
-  const me = g.pos.get(id)!;
-  const run = g.botRun.get(id);
-  // only warnings this bot has noticed by now
-  const seen = g.warnings.filter((w) => (w.notice.get(id) ?? Infinity) <= now);
-  const safe = (p: Point) => !seen.some((w) => covers(w, p));
-  const speed = botSpeedOf(g.level) / 1000;
-  const pathOk = (to: Point) => clearPath(seen, me, to, now, speed);
-  // a target still safe and reachable: carry on
-  if (run?.target && safe(run.target) && pathOk(run.target)) return null;
-  const spots = candidates(g, me);
-  const mid = g.size / 2;
-  const fromMid = (p: Point) => Math.abs(p[0] - mid) + Math.abs(p[1] - mid);
-  if (safe(me)) {
-    // standing safe: stop a run that turned bad, sometimes stroll somewhere new
-    if (rand() >= WANDER[g.level]) return run?.target ? [...me] : null;
-    const ok = spots.filter((p) => safe(p) && pathOk(p) && dist(p, me) > 0.4);
-    if (ok.length === 0) return null;
-    // better bots drift towards the middle, where there's room to run
-    if (g.level !== 'normal' && rand() < 0.5) return ok.reduce((a, b) => (fromMid(b) < fromMid(a) ? b : a));
-    return ok[Math.floor(rand() * ok.length)];
-  }
-  // run: the nearest safe spot whose path crosses no band near its strike
-  const good = spots.filter((p) => safe(p) && pathOk(p));
-  if (good.length > 0) return good.reduce((a, b) => (dist(b, me) + (g.level === 'normal' ? 0 : fromMid(b) * 0.05) < dist(a, me) + (g.level === 'normal' ? 0 : fromMid(a) * 0.05) ? b : a));
-  // nowhere clean: the nearest safe spot anyway
-  const any = spots.filter(safe);
-  return any.length > 0 ? any.reduce((a, b) => (dist(b, me) < dist(a, me) ? b : a)) : null;
-}
+/** the cell a body's centre is in */
+const cellOf = (g: SpikesGame, [x, y]: Point): Cell => [Math.min(g.size - 1, Math.max(0, Math.floor(x))), Math.min(g.size - 1, Math.max(0, Math.floor(y)))];
 
-/** box centres, and the centres straight across from where the bot stands */
-function candidates(g: SpikesGame, me: Point): Point[] {
-  const out: Point[] = [];
-  for (let i = 0; i < g.size; i++) {
-    out.push([g.clamp(me[0]), i + 0.5], [i + 0.5, g.clamp(me[1])]);
-    for (let j = 0; j < g.size; j++) out.push([i + 0.5, j + 0.5]);
-  }
-  return out;
-}
-
-/** no point on the way sits in a band when its spike strikes */
-function clearPath(seen: LiveWarning[], from: Point, to: Point, now: number, speed: number): boolean {
-  const total = dist(from, to) / speed;
-  const parts = 6;
-  for (let k = 0; k <= parts; k++) {
-    const f = k / parts;
-    const p: Point = [from[0] + (to[0] - from[0]) * f, from[1] + (to[1] - from[1]) * f];
-    const t = now + total * f;
-    if (seen.some((w) => covers(w, p) && Math.abs(w.strikeAt - t) <= CROSS_MS)) return false;
+/** a body can run straight from a to b without touching a box */
+function clear(g: SpikesGame, a: Point, b: Point): boolean {
+  for (let k = 1; k <= 8; k++) {
+    const p: Point = [a[0] + ((b[0] - a[0]) * k) / 8, a[1] + ((b[1] - a[1]) * k) / 8];
+    const q = pushOut(g.size, g.boxes, p);
+    if (Math.abs(q[0] - p[0]) > 1e-9 || Math.abs(q[1] - p[1]) > 1e-9) return false;
   }
   return true;
+}
+
+/** how many sides a cell hides from */
+const shelter = (g: SpikesGame, cell: Cell): number => SPIKE_DIRS.filter((d) => cellSafe(g.size, g.reaches, d, cell)).length;
+
+/**
+ * a bot's new plan: when it has noticed walls, a path round the boxes to the nearest square shielded from all of them (planned
+ * once per set of walls); otherwise now and then a wander. null keeps its run
+ */
+export function botThink(g: SpikesGame, id: string, now: number, rand: () => number): { path: Point[]; plan: string } | null {
+  const me = g.pos.get(id)!;
+  const run = g.botRun.get(id);
+  // only walls this bot has noticed by now
+  const seen = g.warnings.filter((w) => (w.notice.get(id) ?? Infinity) <= now);
+  const plan = seen.map((w) => w.id).join(',');
+  if (seen.length > 0 && run?.plan === plan) return null;
+  const found = walk(g.size, g.boxes, cellOf(g, me));
+  const route = (to: Cell): Point[] => {
+    const cells = pathTo(found, to);
+    const path = cells.length > 0 ? cells.map(centre) : [centre(to)];
+    // a straight line to the first centre would rub a box: go by this square's centre first
+    return clear(g, me, path[0]) ? path : [centre(cellOf(g, me)), ...path];
+  };
+  if (seen.length > 0) {
+    // already out of reach where it stands: stay
+    if (!seen.some((w) => g.hits(w.dir, me))) return { path: [], plan };
+    const reachable = [...found.values()];
+    if (rand() < BLUNDER[g.level]) return { path: route(reachable[Math.floor(rand() * reachable.length)].cell), plan };
+    const safe = reachable.filter((f) => seen.every((w) => cellSafe(g.size, g.reaches, w.dir, f.cell)));
+    if (safe.length === 0) return { path: [], plan };
+    // nearest first; better bots break ties towards squares that hide from more sides
+    const score = (f: (typeof safe)[number]) => f.steps * 10 - (g.level === 'normal' ? 0 : shelter(g, f.cell));
+    return { path: route(safe.reduce((a, b) => (score(b) < score(a) ? b : a)).cell), plan };
+  }
+  // walls gone: forget the plan, keep any run
+  if (run && run.plan !== '') return { path: run.path, plan: '' };
+  if (run && run.path.length > 0) return null;
+  if (rand() >= WANDER[g.level]) return null;
+  const near = freeCells(g.size, g.boxes).filter((c) => (found.get(`${c[0]},${c[1]}`)?.steps ?? 99) <= 3);
+  if (near.length === 0) return null;
+  // better bots drift to well-sheltered squares, normal ones anywhere close
+  if (g.level !== 'normal' && rand() < 0.6) return { path: route(near.reduce((a, b) => (shelter(g, b) > shelter(g, a) ? b : a))), plan: '' };
+  return { path: route(near[Math.floor(rand() * near.length)]), plan: '' };
 }
