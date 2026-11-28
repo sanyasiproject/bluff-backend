@@ -1,6 +1,6 @@
 import type { Collection, ObjectId } from 'mongodb';
 import type { Habits, PlayerStats } from '../models.js';
-import type { AuditAction, GameConfig, GameKind, GameReplay, LeagueStats, LifetimeStats, Role, SeasonResult, ShopLookKind } from '../types.js';
+import type { AuditAction, ChessColor, ChessEndReason, ChessGamePlayer, ChessPerf, ChessRating, ChessSpeed, ChessVariant, GameConfig, GameKind, GameReplay, LeagueStats, LifetimeStats, Role, SeasonResult, ShopLookKind } from '../types.js';
 
 /** database and collection names, all overridable from env */
 export interface DbNames {
@@ -19,6 +19,10 @@ export interface DbNames {
   messages?: string;
   /** running head-to-head totals per pair of accounts; rival_tallies by default */
   rivals?: string;
+  /** chess ratings, one document per account; chess_ratings by default */
+  chessRatings?: string;
+  /** finished chess games (PGN, players, ratings); chess_games by default */
+  chessGames?: string;
 }
 
 export interface UserDoc {
@@ -286,6 +290,8 @@ export interface Collections {
   seasons: Collection<SeasonDoc>;
   messages: Collection<MessageDoc>;
   rivals: Collection<RivalTallyDoc>;
+  chessRatings: Collection<ChessRatingDoc>;
+  chessGames: Collection<ChessGameDoc>;
 }
 
 /** one private message between two friends; the newest DM_KEEP per pair are kept */
@@ -329,4 +335,36 @@ export interface RivalTallyDoc {
   /** times a caught b lying, and b caught a */
   aCaught: number;
   bCaught: number;
+}
+
+/** an account's chess ratings: one Glicko-2 rating per perf (perfs never played are missing) */
+export interface ChessRatingDoc {
+  /** the account's id */
+  _id: ObjectId;
+  perfs: Partial<Record<ChessPerf, ChessRating>>;
+  /** ids of the last rated games applied, so a game never counts twice */
+  applied: string[];
+  /** bumped with every write; writes are guarded on it */
+  rev: number;
+}
+
+/** a finished chess game; userIds lists the accounts that still keep it (each keeps its newest CHESS_GAMES_KEEP) */
+export interface ChessGameDoc {
+  _id: ObjectId;
+  userIds: ObjectId[];
+  variant: ChessVariant;
+  time: string;
+  speed: ChessSpeed;
+  perf: ChessPerf;
+  rated: boolean;
+  players: { w: ChessGamePlayer; b: ChessGamePlayer };
+  result: { winner: ChessColor | null; reason: ChessEndReason };
+  plies: number;
+  opening: { eco: string; name: string } | null;
+  initialFen: string;
+  moves: string[];
+  pgn: string;
+  roomCode: string;
+  startedAt: Date;
+  endedAt: Date;
 }

@@ -653,6 +653,10 @@ export class Room {
       // 2v2 plays in slot order, so partners sit opposite
       const seats = this.teamGame ? (this.slotIds().filter((id) => id !== null) as string[]) : this.players().map((m) => m.id);
       this.plugged = mod.create(seats, this.config, secureRandom, seats.filter((id) => this.isBot(id)));
+      mod.onStart?.(this.plugged, seats.map((id) => {
+        const m = this.member(id);
+        return { id, userId: m.userId, name: m.name, bot: m.bot, host: id === this.hostId };
+      }));
       // no secret cards or replay for registry games
       this.secretCards.clear();
       this.replay = null;

@@ -9,6 +9,7 @@ import { ApiError } from './errors.js';
 import { rateLimit, userRateLimit } from './middleware.js';
 import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
+import { chessRoutes } from './routes/chess.js';
 import { friendRoutes, type NotifyFriends, type RoomOfUser } from './routes/friends.js';
 import { meRoutes } from './routes/me.js';
 import { messageRoutes, type DeliverDm, type DmRead } from './routes/messages.js';
@@ -64,6 +65,7 @@ export function createApi(store: Store | null, opts: ApiOptions): express.Expres
     app.use('/api/friends', messageRoutes(store, opts.onDirectMessage ?? (() => {}), opts.onDmRead ?? (() => {})));
     app.use('/api/players', playerRoutes(store, opts.presence, social));
     app.use('/api/push', pushRoutes(store, social));
+    app.use('/api/chess', chessRoutes(store));
     app.use('/api/admin', adminRoutes(store, opts.adminApiKey, limited, opts.onSettingsChanged ?? (() => {})));
   } else {
     app.use('/api', (_req, _res, next) => next(new ApiError(503, 'Accounts are not set up on this server')));

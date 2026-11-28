@@ -1,4 +1,5 @@
 import { isPlugged, type GameKind, type PluggedKind } from '../types.js';
+import { chessModule } from './chess/module.js';
 import { colorwarModule } from './colorwar/module.js';
 import { dartsModule } from './darts/module.js';
 import { dotsModule } from './dots/module.js';
@@ -20,6 +21,7 @@ export const MODULES: Record<PluggedKind, GameModule<any>> = {
   colorwar: colorwarModule,
   fruit: fruitModule,
   spikes: spikesModule,
+  chess: chessModule,
 };
 
 export const moduleOf = (kind: PluggedKind): GameModule<PluggedGame> => MODULES[kind];

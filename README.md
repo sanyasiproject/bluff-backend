@@ -225,6 +225,35 @@ handshake; a game won't start while a seated person's app lacks it ("must update
 - Leaving is a forfeit (their cells empty); one player left wins. Counters `stats.perGame.colorwar.captures/bursts`; awards Colour
   thief and Chain reactor. Announcer: "Asha is wiped out, 3rd place 💥", "Chain reaction! Asha took 7 cells 💥" (5+ waves).
 
+### Chess (`config.game: 'chess'`, `src/games/chess/`, rules in `src/chess/`)
+
+- 2 players (more can watch). `opts.variant`: standard, chess960, crazyhouse, kingOfTheHill, threeCheck, antichess, atomic, horde,
+  racingKings (Lichess rules, `src/chess/`). `opts.time`: `1+0 2+1 3+0 3+2 5+0 5+3 10+0 10+5 15+10 30+0 30+20` or `none` (untimed);
+  speed from minutes×60 + 40×increment (<180 s bullet, <480 blitz, <1500 rapid, else classical). `opts.rated` `yes|no`,
+  `opts.color` (`random|white|black`, the host's colour; a rematch between the same pair within an hour swaps colours),
+  `opts.level` 1–8 (bots, ≈ 800 … 2200+).
+- `ChessView` (in `RoomView.plugged`): FEN, initial FEN, UCI and SAN lists, turn, last move, players by colour, bots' levels,
+  `clock { w, b, runningSince, inc }` (ms left when `runningSince` was set; the side to move runs; `now` lines up the phone),
+  `abortAt`, checks (three-check), pockets (crazyhouse), status/result, draw and takeback offers, rated, perf, ratings, `ratingDiff`
+  and `gameId` once saved, opening (Standard).
+- The server's clock is the truth: clocks start once both sides have moved, the increment is added after each move, and the flag
+  falls on a timer (`GameModule.clock` with a `key`, re-armed after each move). A flag against a side that can't mate is a draw.
+  The side to move must make a first move in 30 s (rapid 45 s, classical 60 s; untimed: no limit) or the game is aborted.
+  Threefold repetition and the 50-move rule end the game by themselves. No room turn timer (`GameModule.ownClock`).
+- Draw offers (moving declines the other side's), takebacks in casual games (one ply if the asker moved last, else two),
+  abort before both have moved (resigning or leaving then is an abort too), resign, leaving = resign.
+- Bots think in a `worker_threads` pool (`pool.ts`, `botWorker.ts`, `think.ts`; `GameModule.botThink`), within their level's time
+  and never more than 1/30 of their clock plus most of the increment. They accept takebacks and decline draws.
+- Rated: host chose Rated, two different logged-in accounts, no bots, timed. Glicko-2 (`glicko.ts`, τ 0.75), start 800 / RD 500 /
+  volatility 0.09, RD 45–500, provisional ("?") above RD 110, RD grows back with days away. One rating per perf: bullet, blitz,
+  rapid, classical (Standard) and one per variant. Aborted games count for nothing and aren't kept.
+- Storage (`services/chess.ts`): `chess_ratings` (one document per account: `perfs.<perf>` = `ChessRating` with W/L/D, peak,
+  streaks and a history point per rated game; `applied` game ids and `rev` guard every write) and `chess_games` (PGN, UCI moves,
+  players with ratings before/after, result, perf, opening; each account keeps its newest 100). Both ratings and the game are
+  written in one transaction on replica sets (Atlas); a standalone server falls back to guarded writes.
+- Counters `stats.perGame.chess.moves` and `mates`. Announcer: "Checkmate. Asha wins with White 🎉", "Draw agreed. It's a draw 🤝",
+  "Game aborted. Nothing counts"; offers are shown, not spoken.
+
 ### Real-time registry games (Fruit Slice Duel, Spike Attack)
 
 - Everyone moves at once: `turnId` stays null, so the turn timer, its stand-in moves and "away" never apply. The countdown, every
@@ -338,6 +367,10 @@ All bodies are JSON. Protected routes need `Authorization: Bearer <token>` (the 
 | `GET /api/me/league` | logged in | – | `LeagueResponse`: this week's board of me and my friends, the crowns, last week's final board, `resetAt`, `hidden` |
 | `POST /api/me/league/hide` | logged in | `{ hidden: boolean }` | `LeagueResponse`; hidden players are left off their friends' boards |
 | `GET /api/me/rivals` | logged in | – | `RivalsResponse`: my record against every friend I've finished a game with |
+| `GET /api/chess/ratings/:userId` | logged in | `me` or an account id | `ChessRatingsResponse` `{ userId, perfs }`: every perf played (`ChessRating`: r, rd, vol, games, w/l/d, peak, streak, bestStreak, history `[ms, r][]`) |
+| `GET /api/chess/leaderboard/:perf` | logged in | a `ChessPerf` | `ChessLeaderboard` `{ perf, top, me }`: top 50 non-provisional, my rank (null while provisional) and rating; 400 for an unknown perf |
+| `GET /api/chess/games` | logged in | `?user=me\|<id>&limit=30&before=<endedAt ms>` | `{ games: ChessGameSummary[] }` newest first |
+| `GET /api/chess/games/:id` | logged in | – | `{ game: ChessGameRecord }` with UCI moves, start FEN and PGN; 404 when not kept |
 | `GET /api/players/:username/rival` | logged in | – | `{ record }`: my record against that friend, or null (not a friend, or no games together) |
 | `POST /api/me/missions/swap` | logged in | `{ id }` | `MissionsResponse`; once a day, an unfinished mission is swapped for another; 400 "You already swapped a mission today", "That mission is done", "That isn't one of your missions" |
 | `GET /api/me/pass` | logged in | – | `PassResponse`: the free season pass for the ranked season now on: `season`, `startedAt`, `endsAt` (null until the next season is booked), pass `xp`, `tier`, all 30 `tiers` (`{ tier, reward, reached, claimed }`) and `claimable`; a new season starts it again. Pass XP comes from games that count (`PASS_XP`: per game, per win, per mission finished) |
@@ -459,7 +492,7 @@ Rules: usernames are 3–20 lowercase letters, numbers or `_`; passwords 8–128
 | `rang:pass` | – (Rang: end the turn after picking) |
 | `rang:call` | – (Rang: "last card") |
 | `rang:challenge` | – (Rang: challenge the single +4 that hit you) |
-| `game:move` | `PluggedMove` `{ kind, move }` (registry games; `kind` must be the game on, else "That move is for another game"). Ludo: `{ kind: 'ludo', move: { type: 'roll' } }` or `{ kind: 'ludo', move: { type: 'move', token: 0..3 } }` (a goti in `LudoView.movable`). Saanp Seedhi: `{ kind: 'snakes', move: { type: 'roll' } }`. Raja Mantri: `{ kind: 'rmcs', move: { type: 'open' } }` or `{ kind: 'rmcs', move: { type: 'guess', target: memberId } }`. Darts: `{ kind: 'darts', move: { type: 'throw', x, y } }`. Dots and Boxes: `{ kind: 'dots', move: { type: 'line', line } }`. Colour Wars: `{ kind: 'colorwar', move: { type: 'tap', cell } }`. Fruit: `{ kind: 'fruit', move: { type: 'strike', round, reaction } }`. Spike Attack: `{ kind: 'spikes', move: { type: 'move', x, y } }`. Errors come back in the ack as `{ ok: false, error }` (e.g. "Not your turn", "Roll the dice first", "Move a goti first", "That goti can't move 3", "Pick one of your gotis", "Invalid move"; Raja Mantri: "Your chit is already open", "Wait for everyone to open their chit", "Only the Mantri finds the Chor", "Pick one of the two players left", "This round is over"; Darts: "Aim at the board", "Wait for the next turn"; Dots: "Pick a line between two dots", "That line is already drawn"; Colour Wars: "Tap a cell on the board", "Pick an empty cell to start", "Tap one of your own cells"; Fruit: "Wait for the countdown", "Wait for the item to show", "Too late, that item is over", "You already struck this one", "Too fast to be real, that strike did not count", "That strike doesn't match the clock, it did not count"; Spikes: "Wait for the countdown", "You're out") |
+| `game:move` | `PluggedMove` `{ kind, move }` (registry games; `kind` must be the game on, else "That move is for another game"). Ludo: `{ kind: 'ludo', move: { type: 'roll' } }` or `{ kind: 'ludo', move: { type: 'move', token: 0..3 } }` (a goti in `LudoView.movable`). Saanp Seedhi: `{ kind: 'snakes', move: { type: 'roll' } }`. Raja Mantri: `{ kind: 'rmcs', move: { type: 'open' } }` or `{ kind: 'rmcs', move: { type: 'guess', target: memberId } }`. Darts: `{ kind: 'darts', move: { type: 'throw', x, y } }`. Dots and Boxes: `{ kind: 'dots', move: { type: 'line', line } }`. Colour Wars: `{ kind: 'colorwar', move: { type: 'tap', cell } }`. Fruit: `{ kind: 'fruit', move: { type: 'strike', round, reaction } }`. Spike Attack: `{ kind: 'spikes', move: { type: 'move', x, y } }`. Chess: `{ kind: 'chess', move: { type: 'move', uci, ply } }` (`ply` = moves so far), `{ type: 'resign' }`, `{ type: 'draw', offer: boolean }` (offer/accept, or decline/withdraw), `{ type: 'takeback', accept?: boolean }` (ask, or answer), `{ type: 'abort' }`, `{ type: 'claimTimeout' }`. Errors come back in the ack as `{ ok: false, error }` (e.g. "Not your turn", "Roll the dice first", "Move a goti first", "That goti can't move 3", "Pick one of your gotis", "Invalid move"; Raja Mantri: "Your chit is already open", "Wait for everyone to open their chit", "Only the Mantri finds the Chor", "Pick one of the two players left", "This round is over"; Darts: "Aim at the board", "Wait for the next turn"; Dots: "Pick a line between two dots", "That line is already drawn"; Colour Wars: "Tap a cell on the board", "Pick an empty cell to start", "Tap one of your own cells"; Fruit: "Wait for the countdown", "Wait for the item to show", "Too late, that item is over", "You already struck this one", "Too fast to be real, that strike did not count", "That strike doesn't match the clock, it did not count"; Spikes: "Wait for the countdown", "You're out"; Chess: "Illegal move", "The position has changed, try again", "Too late to abort, both sides have moved", "Make a move first", "No takebacks in rated games", "Nothing to take back", "No takeback to answer") |
 | `chat:send` | `{ kind: 'reaction' \| 'message', index, on? }` (`on: 'pile'`, reactions only, while a game is on: the emoji lands on the last play instead of floating up; a Quick Chat line also goes into the room's chat list) |
 | `room:say` | `{ text }` (1–`ROOM_CHAT_LENGTH` 200 characters, one line): a typed line for everyone in the room, sent to all as `room:msg` |
 | `room:messages` | → `{ messages }`: the room's chat list, oldest first (last `ROOM_CHAT_MAX` 500 lines, kept in memory only and gone when the room closes) |

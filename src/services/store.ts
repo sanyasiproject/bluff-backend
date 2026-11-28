@@ -1,5 +1,6 @@
 import type { DbNames } from '../db/documents.js';
 import { connectMongo } from '../db/mongo.js';
+import { ChessService } from './chess.js';
 import { FriendService } from './friends.js';
 import { GameRecorder } from './games.js';
 import { LeagueService } from './league.js';
@@ -29,6 +30,8 @@ export interface Store {
   spin: SpinService;
   pass: SeasonPassService;
   push: PushService;
+  /** chess ratings, leaderboard and saved chess games */
+  chess: ChessService;
   close: () => Promise<void>;
 }
 
@@ -63,6 +66,7 @@ export async function createStore(uri: string, names: DbNames, opts: UserService
     spin: new SpinService(cols),
     pass,
     push: new PushService(cols, opts.push ?? null),
+    chess: new ChessService(cols, client),
     close: () => client.close(),
   };
 }

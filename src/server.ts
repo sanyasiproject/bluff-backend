@@ -4,6 +4,7 @@ import * as ioParser from 'socket.io-parser';
 import { isAllowedOrigin } from './config.js';
 import { GameError } from './game.js';
 import { createApi } from './http/app.js';
+import { stopChessBots } from './games/chess/pool.js';
 import { ApiError } from './http/errors.js';
 import { Presence } from './presence.js';
 import { DEFAULT_ROOM_LIMITS, RoomManager, type RoomLimits } from './rooms.js';
@@ -119,6 +120,8 @@ export function createBluffServer(deps: ServerDeps = {}) {
           getAccounts: (userIds) => store.users.getAccounts(userIds),
           // the socket layer runs this in the background; a DB hiccup must never break the game
           onGameEnd: (record) => store.games.save(record),
+          chessBadges: (userIds, perf) => store.chess.badges(userIds, perf),
+          onChessEnd: (finish) => store.chess.settle(finish),
           areFriends: (a, b) => store.friends.areFriends(a, b),
           markSeen: (userId) => store.users.markSeen(userId),
           friendIdsOf: (userId) => store.friends.friendIdsOf(userId),
@@ -152,6 +155,7 @@ export function createBluffServer(deps: ServerDeps = {}) {
       clearInterval(seasonTimer);
       clearInterval(replayTimer);
       handlers.stop();
+      void stopChessBots();
       io.close();
     },
   };

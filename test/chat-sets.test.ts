@@ -19,7 +19,7 @@ const GAMES: GameKind[] = GAME_CATALOG.map((g) => g.kind);
 
 describe('per-game chat sets', () => {
   it('covers every game with its own set', () => {
-    expect(GAMES.length).toBe(11);
+    expect(GAMES.length).toBe(12);
     const sets = GAMES.map((g) => chatSetOf(g));
     expect(new Set(sets.map((s) => s.messages)).size).toBe(GAMES.length);
     expect(new Set(sets.map((s) => s.reactions)).size).toBe(GAMES.length);

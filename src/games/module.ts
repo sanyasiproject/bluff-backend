@@ -27,10 +27,16 @@ export interface GameModule<G extends PluggedGame = PluggedGame> {
   describe(game: G, event: GameEvent, name: (id: string | null) => string): [AnnounceKind, string] | null;
   /** the next step the room plays itself (no choice to make), or null */
   auto(game: G): AutoStep | null;
-  /** game time: when it runs out and what happens then; null with no limit */
-  clock(game: G): { endsAt: number; run(): GameEvent[] } | null;
+  /** game time: when it runs out and what happens then; null with no limit. key: re-armed whenever it changes (chess clocks), else once per game */
+  clock(game: G): { endsAt: number; run(): GameEvent[]; key?: string } | null;
   /** a bot's (or a timed-out person's) move, as a game:move payload */
   botMove(game: G, botId: string, level: BotLevel, rand: () => number): unknown;
+  /** right after create, with the seats as the room knows them (accounts, host) */
+  onStart?(game: G, seats: { id: string; userId: string | null; name: string; bot: boolean; host: boolean }[]): void;
+  /** bots that think off the event loop (chess: a worker pool); the driver plays the move it resolves with if the turn is still the same */
+  botThink?(game: G, botId: string, rand: () => number): Promise<unknown>;
+  /** the game runs its own clocks: no room turn timer and no stand-in moves */
+  ownClock?: boolean;
   /** changes with every step: timers are keyed on it */
   turnKey(game: G): string;
   /** still playing (not finished, not out): the room ends a game once no person is */

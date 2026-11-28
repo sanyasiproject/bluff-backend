@@ -53,7 +53,7 @@ function pluggedOf(room: Room): { g: PluggedGame; mod: GameModule<PluggedGame> }
  */
 export class PluggedDriver {
   private steps = new Map<Room, { key: string; timer: Timer }>();
-  private clocks = new Map<Room, { game: PluggedGame; timer: Timer }>();
+  private clocks = new Map<Room, { game: PluggedGame; timer: Timer; key?: string }>();
   private chatTimers = new Map<Room, Set<Timer>>();
 
   constructor(
@@ -87,6 +87,7 @@ export class PluggedDriver {
     }
     const id = g.turnId;
     if (!id || !room.isBot(id)) return;
+    if (mod.botThink) return this.think(room, key, g, mod, id);
     const move = mod.botMove(g, id, g.config.botLevel, this.rand);
     const [lo, hi] = (move as { type?: string }).type === 'roll' ? THINK.roll : THINK.move;
     this.schedule(room, key, lo + this.rand() * (hi - lo), () => this.play(room, g, mod, id, move));
@@ -154,6 +155,23 @@ export class PluggedDriver {
     }
   }
 
+  /** a bot that thinks off the event loop: its move lands only if the turn is still the one it thought about */
+  private think(room: Room, key: string, g: PluggedGame, mod: GameModule<PluggedGame>, id: string): void {
+    const timer = setTimeout(() => {}, 0);
+    this.steps.set(room, { key, timer });
+    mod.botThink!(g, id, this.rand).then(
+      (move) => {
+        if (this.steps.get(room)?.timer === timer) this.steps.delete(room);
+        if (!this.live(room, g) || mod.turnKey(g) !== key) return;
+        this.play(room, g, mod, id, move);
+      },
+      (err: Error) => {
+        if (this.steps.get(room)?.timer === timer) this.steps.delete(room);
+        console.error('[games] bot think failed:', err.message);
+      },
+    );
+  }
+
   private schedule(room: Room, key: string, ms: number, run: () => void): void {
     const g = room.plugged;
     const timer = setTimeout(() => {
@@ -168,10 +186,11 @@ export class PluggedDriver {
   private armClock(room: Room): void {
     const p = pluggedOf(room);
     const cur = this.clocks.get(room);
-    if (cur && p && cur.game === p.g && !p.g.over) return;
+    const clock = p && !p.g.over ? p.mod.clock(p.g) : null;
+    // keyed clocks (chess) re-arm when the key moves on; the rest are armed once per game
+    if (cur && p && cur.game === p.g && !p.g.over && cur.key === clock?.key) return;
     if (cur) clearTimeout(cur.timer);
     this.clocks.delete(room);
-    const clock = p && !p.g.over ? p.mod.clock(p.g) : null;
     if (!p || !clock) return;
     const timer = setTimeout(() => {
       this.clocks.delete(room);
@@ -179,7 +198,7 @@ export class PluggedDriver {
       this.hooks.onMove(room, clock.run());
     }, Math.max(0, clock.endsAt - Date.now()));
     timer.unref?.();
-    this.clocks.set(room, { game: p.g, timer });
+    this.clocks.set(room, { game: p.g, timer, key: clock.key });
   }
 
   private say(room: Room, id: string, lines: readonly string[]): void {

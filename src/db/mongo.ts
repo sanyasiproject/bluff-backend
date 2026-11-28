@@ -1,5 +1,6 @@
 import { MongoClient } from 'mongodb';
-import type { AuditDoc, Collections, DbNames, FriendDoc, GameDoc, MessageDoc, PushSubscriptionDoc, RivalTallyDoc, SeasonDoc, SessionDoc, SettingsDoc, UserDoc } from './documents.js';
+import { CHESS_PERFS } from '../types.js';
+import type { AuditDoc, ChessGameDoc, ChessRatingDoc, Collections, DbNames, FriendDoc, GameDoc, MessageDoc, PushSubscriptionDoc, RivalTallyDoc, SeasonDoc, SessionDoc, SettingsDoc, UserDoc } from './documents.js';
 
 export interface MongoConnection {
   client: MongoClient;
@@ -21,6 +22,8 @@ export async function connectMongo(uri: string, names: DbNames): Promise<MongoCo
     seasons: db.collection<SeasonDoc>(names.seasons ?? 'ranked_seasons'),
     messages: db.collection<MessageDoc>(names.messages ?? 'messages'),
     rivals: db.collection<RivalTallyDoc>(names.rivals ?? 'rival_tallies'),
+    chessRatings: db.collection<ChessRatingDoc>(names.chessRatings ?? 'chess_ratings'),
+    chessGames: db.collection<ChessGameDoc>(names.chessGames ?? 'chess_games'),
   };
   await Promise.all([
     cols.users.createIndex({ username: 1 }, { unique: true }),
@@ -45,6 +48,10 @@ export async function connectMongo(uri: string, names: DbNames): Promise<MongoCo
     // a pair's thread by time, and unread counts
     cols.messages.createIndex({ pair: 1, at: -1 }),
     cols.messages.createIndex({ to: 1, read: 1 }),
+    // each account's chess games, newest first
+    cols.chessGames.createIndex({ userIds: 1, endedAt: -1 }),
+    // the chess leaderboard: one index per perf, best first
+    ...CHESS_PERFS.map((p) => cols.chessRatings.createIndex({ [`perfs.${p.id}.r`]: -1 }, { sparse: true })),
   ]);
   return { client, cols };
 }

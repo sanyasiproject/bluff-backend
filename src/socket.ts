@@ -8,6 +8,7 @@ import { RangBots } from './rang/driver.js';
 import { RangClock } from './rang/clock.js';
 import { PluggedDriver } from './games/driver.js';
 import { moduleOf } from './games/registry.js';
+import { applySettlement, chessFinishOf, chessOf, loadChessBadges } from './games/chess/settle.js';
 import { rankPlural } from './cards.js';
 import { GameError } from './game.js';
 import type { AccountInfo, GameEvent, GameRecord, Member, MemberAccount, PlayerLook, SocketHooks, SocketUser, WatchRequest } from './models.js';
@@ -154,6 +155,7 @@ export function registerHandlers(
 
   /** saves in the background, then shows everyone the coin changes */
   const saveGame = (room: Room, record: GameRecord | null) => {
+    settleChess(room);
     if (!record || !hooks.onGameEnd) return;
     const game = room.table;
     // a quick rematch waits for this, so coin balances are settled before they're checked
@@ -172,6 +174,20 @@ export function registerHandlers(
         broadcast(room);
       })
       .catch((err: Error) => console.error('[games] could not save game:', err.message));
+  };
+
+  /** a finished chess game: stored with its ratings moved (rated games), then the table shows the change */
+  const settleChess = (room: Room) => {
+    const g = chessOf(room);
+    if (!g || !g.over || g.settling || !hooks.onChessEnd) return;
+    g.settling = true;
+    hooks
+      .onChessEnd(chessFinishOf(room, g))
+      .then((s) => {
+        applySettlement(g, s);
+        if (rooms.isOpen(room)) broadcast(room);
+      })
+      .catch((err: Error) => console.error('[chess] could not save game:', err.message));
   };
 
   /** live moves (positions) go out with the next view, at most one push every `ms` */
@@ -333,6 +349,15 @@ export function registerHandlers(
     }
     room.start(member.id);
     const table = room.table!;
+    // chess seats show each person's rating in this game's pool once it's read
+    const chess = chessOf(room);
+    if (chess && hooks.chessBadges) {
+      void loadChessBadges(chess, hooks.chessBadges)
+        .then((read) => {
+          if (read && rooms.isOpen(room) && room.plugged === chess) broadcast(room);
+        })
+        .catch((err: Error) => console.error('[chess] could not read ratings:', err.message));
+    }
     // games where everyone moves at once (Raja Mantri) have nobody going first
     const first = table.turnId ? `. ${room.member(table.turnId).name} goes first` : '';
     const pot = stake > 0 ? `. Pot: ${formatCoins(stake * table.order.length)} coins` : '';

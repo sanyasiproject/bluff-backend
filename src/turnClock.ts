@@ -20,6 +20,8 @@ function dueTurn(room: Room): { key: string; playerId: string } | null {
   if (!room.members.some((m) => !m.bot && m.socketId !== null)) return null;
   const mod = room.plugged ? maybeModule(room.plugged.config.game) : null;
   if (room.plugged && mod) {
+    // games with their own clocks (chess) have no turn timer
+    if (mod.ownClock) return null;
     // registry games' automatic steps play themselves
     if (mod.auto(room.plugged)) return null;
     return { key: `pg|${mod.turnKey(room.plugged)}`, playerId: g.turnId };

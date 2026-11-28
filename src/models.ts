@@ -1,4 +1,5 @@
-import type { Award, Card, CoinResult, GameConfig, DartThrow, FruitItemKind, GameReplay, InviteEvent, LifetimeStats, LudoLookChoice, PlayReveal, Rank, RangCard, RangColor, RankDivisionId, SazaBadge, ShopLookKind, SnakesLastMove, SpikeDir, Suit } from './types.js';
+import type { ChessFinish, ChessSettlement } from './services/chess.js';
+import type { Award, Card, ChessPerf, ChessRatingBadge, CoinResult, GameConfig, DartThrow, FruitItemKind, GameReplay, InviteEvent, LifetimeStats, LudoLookChoice, PlayReveal, Rank, RangCard, RangColor, RankDivisionId, SazaBadge, ShopLookKind, SnakesLastMove, SpikeDir, Suit } from './types.js';
 
 /** one of a player's plays this game with the true cards (server only); open: it never stood or was called (still waiting, or cut off by a walk-out or End game) */
 export interface LoggedPlay extends PlayReveal {
@@ -230,6 +231,10 @@ export interface SocketHooks {
   friendIdsOf?: (userId: string) => Promise<string[]>;
   /** moves coins to a friend within the daily gift limit; throws GameError with a reason players can read */
   giftCoins?: (fromUserId: string, toUserId: string, amount: number) => Promise<GiftResult>;
+  /** chess: each account's rating badge in one perf (seats at the start) */
+  chessBadges?: (userIds: string[], perf: ChessPerf) => Promise<Map<string, ChessRatingBadge>>;
+  /** chess: stores a finished game and moves ratings when rated */
+  onChessEnd?: (finish: ChessFinish) => Promise<ChessSettlement>;
 }
 
 /** what a room needs to know about an account */
@@ -359,7 +364,14 @@ export type GameEvent =
   | { kind: 'dots'; ev: DotsEvent }
   | { kind: 'colorwar'; ev: ColorWarEvent }
   | { kind: 'fruit'; ev: FruitEvent }
-  | { kind: 'spikes'; ev: SpikesEvent };
+  | { kind: 'spikes'; ev: SpikesEvent }
+  | { kind: 'chess'; ev: ChessEvent };
+
+/** chess: a move (with its SAN), an offer made or answered, a takeback done */
+export type ChessEvent =
+  | { type: 'move'; playerId: string; uci: string; san: string; ply: number }
+  | { type: 'offer'; playerId: string; offer: 'draw' | 'takeback'; answer: 'ask' | 'yes' | 'no' }
+  | { type: 'takeback'; plies: number };
 
 /** Fruit Slice Duel: play starts, an item pops up, a strike is taken, the item's result (winner: fastest on a fruit; slowed: magnet strikers) */
 export type FruitEvent =

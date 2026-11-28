@@ -1,4 +1,6 @@
 // Shapes shared with the client. Keep in sync with bluff-frontend/src/types.ts
+import type { ChessVariant } from './chess/variants.js';
+import type { ChessEndReason, Color as ChessColor } from './chess/position.js';
 export const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'] as const;
 export type Rank = (typeof RANKS)[number];
 
@@ -98,7 +100,7 @@ export const SHIELD_MAX_CARDS = 2;
 export const BET_STEPS = [50, 100, 250, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000] as const;
 
 /** which game a room plays */
-export type GameKind = 'bluff' | 'crazy7' | 'rang' | 'ludo' | 'snakes' | 'rmcs' | 'darts' | 'dots' | 'colorwar' | 'fruit' | 'spikes';
+export type GameKind = 'bluff' | 'crazy7' | 'rang' | 'ludo' | 'snakes' | 'rmcs' | 'darts' | 'dots' | 'colorwar' | 'fruit' | 'spikes' | 'chess';
 
 /** how well Bluff bots play; the host picks it in the lobby (Crazy 7 bots always play their best) */
 export const BOT_LEVELS = ['normal', 'hard', 'expert'] as const;
@@ -683,6 +685,29 @@ export const SPIKES_CHAT: ChatSet = spokenSet(
   ],
 );
 
+export const CHESS_CHAT: ChatSet = spokenSet(
+  ['♟️', '♛', '🔥', '😱', '🤔', '😭', '😂', '👏'],
+  [
+    ['Check! ♚', 'चेक!', 'excited'],
+    ['Checkmate! 🏁', 'चेकमेट!', 'excited'],
+    ['Wazir gaya 😭', 'वज़ीर गया!', 'sad'],
+    ['Free ka mohra, thanks 😈', 'फ्री का मोहरा, थैंक्स!', 'cheeky'],
+    ['Kya chaal hai! 🔥', 'क्या चाल है!', 'happy'],
+    ['Yeh nahi socha tha 😱', 'यह नहीं सोचा था!', 'sad'],
+    ['Soch ke chalo 🤔', 'सोच के चलो!', 'calm'],
+    ['Ghoda aa raha hai 🐴', 'घोड़ा आ रहा है!', 'cheeky'],
+    ['Raja bachao 👑', 'राजा बचाओ!', 'plead'],
+    ['Draw kar lein? 🤝', 'ड्रॉ कर लें?', 'calm'],
+    ['Time kam hai ⏰', 'टाइम कम है!', 'plead'],
+    ['Jaldi chalo ⏰', 'जल्दी चलो ना!', 'calm'],
+    ['Opening yaad hai 📖', 'ओपनिंग याद है!', 'cheeky'],
+    ['Nice move! 👏', 'नाइस मूव!', 'happy'],
+    ['Main aage hoon 🏆', 'मैं आगे हूँ!', 'excited'],
+    ['GG 🎉', 'जी जी! अच्छा खेले!', 'happy'],
+    ['Ek aur game! 🔁', 'एक और गेम!', 'excited'],
+  ],
+);
+
 export const CRAZY7_CHAT: ChatSet = {
   reactions: ['7️⃣', '🃏', '😈', '😭', '🔥', '😱', '😂', '👏'],
   messages: [
@@ -747,6 +772,7 @@ const CHAT_SETS: Record<GameKind, ChatSet> = {
   colorwar: COLORWAR_CHAT,
   fruit: FRUIT_CHAT,
   spikes: SPIKES_CHAT,
+  chess: CHESS_CHAT,
 };
 
 /** the emoji and quick lines a table uses (no game yet: Bluff's) */
@@ -755,7 +781,7 @@ export function chatSetOf(game: GameKind | undefined | null): ChatSet {
 }
 
 /** quick lines are spoken aloud at these tables (no announcer there, so the voice is free); each has voice lines */
-const SPOKEN_GAMES: readonly GameKind[] = ['ludo', 'snakes', 'rmcs', 'darts', 'dots', 'colorwar', 'fruit', 'spikes'];
+const SPOKEN_GAMES: readonly GameKind[] = ['ludo', 'snakes', 'rmcs', 'darts', 'dots', 'colorwar', 'fruit', 'spikes', 'chess'];
 export const speaksQuickChat = (game: GameKind | undefined | null): boolean => !!game && SPOKEN_GAMES.includes(game);
 
 export type ChatKind = 'reaction' | 'message';
@@ -2120,7 +2146,7 @@ export interface RoomMessage {
 export const APP_NAME = 'Game Baithak';
 
 /** games built on the game registry (one folder per game on each side); Bluff, Crazy 7 and Rang are wired by hand */
-export const PLUGGED_GAMES = ['ludo', 'snakes', 'rmcs', 'darts', 'dots', 'colorwar', 'fruit', 'spikes'] as const;
+export const PLUGGED_GAMES = ['ludo', 'snakes', 'rmcs', 'darts', 'dots', 'colorwar', 'fruit', 'spikes', 'chess'] as const;
 export type PluggedKind = (typeof PLUGGED_GAMES)[number];
 export const isPlugged = (k: GameKind | undefined | null): k is PluggedKind => (PLUGGED_GAMES as readonly string[]).includes(k ?? '');
 
@@ -2163,6 +2189,111 @@ export interface GameInfo {
   options: GameOptionSpec[];
 }
 
+// ─── Chess: variants, time controls, perfs, catalog ────────────────────────────────────
+
+/** the chess library's names (src/chess/, the same files in every repo) */
+export type { ChessVariant, ChessColor, ChessEndReason };
+
+export const CHESS_VARIANT_IDS: readonly ChessVariant[] = ['standard', 'chess960', 'crazyhouse', 'kingOfTheHill', 'threeCheck', 'antichess', 'atomic', 'horde', 'racingKings'];
+
+/** time controls as "minutes+increment seconds"; 'none' is untimed (friends only, never rated) */
+export const CHESS_TIMES = ['1+0', '2+1', '3+0', '3+2', '5+0', '5+3', '10+0', '10+5', '15+10', '30+0', '30+20', 'none'] as const;
+export type ChessTime = (typeof CHESS_TIMES)[number];
+export type ChessSpeed = 'bullet' | 'blitz' | 'rapid' | 'classical' | 'untimed';
+
+/** a time control's clock in ms; null when untimed */
+export function chessClockOf(time: string): { initialMs: number; incMs: number } | null {
+  const m = /^(\d+)\+(\d+)$/.exec(time);
+  return m ? { initialMs: Number(m[1]) * 60_000, incMs: Number(m[2]) * 1000 } : null;
+}
+
+/** Lichess's speed from the estimated game time: minutes×60 + 40×increment seconds */
+export function chessSpeedOf(time: string): ChessSpeed {
+  const c = chessClockOf(time);
+  if (!c) return 'untimed';
+  const est = c.initialMs / 1000 + 40 * (c.incMs / 1000);
+  return est < 180 ? 'bullet' : est < 480 ? 'blitz' : est < 1500 ? 'rapid' : 'classical';
+}
+
+/** a rating pool: Standard by speed, every other variant one pool for all speeds */
+export type ChessPerf = 'bullet' | 'blitz' | 'rapid' | 'classical' | Exclude<ChessVariant, 'standard'>;
+export const CHESS_PERFS: readonly { id: ChessPerf; name: string; icon: string }[] = [
+  { id: 'bullet', name: 'Bullet', icon: '🚀' },
+  { id: 'blitz', name: 'Blitz', icon: '⚡' },
+  { id: 'rapid', name: 'Rapid', icon: '🐇' },
+  { id: 'classical', name: 'Classical', icon: '🐢' },
+  { id: 'chess960', name: 'Chess960', icon: '🎲' },
+  { id: 'crazyhouse', name: 'Crazyhouse', icon: '🏠' },
+  { id: 'kingOfTheHill', name: 'King of the Hill', icon: '⛰️' },
+  { id: 'threeCheck', name: 'Three-check', icon: '3️⃣' },
+  { id: 'antichess', name: 'Antichess', icon: '🙃' },
+  { id: 'atomic', name: 'Atomic', icon: '☢️' },
+  { id: 'horde', name: 'Horde', icon: '🐜' },
+  { id: 'racingKings', name: 'Racing Kings', icon: '🏁' },
+];
+export const isChessPerf = (v: unknown): v is ChessPerf => CHESS_PERFS.some((p) => p.id === v);
+
+/** the pool a game counts in; untimed Standard reads as classical (untimed games are never rated) */
+export function chessPerfOf(variant: ChessVariant, time: string): ChessPerf {
+  if (variant !== 'standard') return variant;
+  const s = chessSpeedOf(time);
+  return s === 'untimed' ? 'classical' : s;
+}
+
+/** Glicko-2 (Glickman), like Lichess but everyone starts at 800 */
+export const CHESS_START_RATING = 800;
+export const CHESS_START_RD = 500;
+export const CHESS_START_VOL = 0.09;
+export const CHESS_MAX_RD = 500;
+export const CHESS_MIN_RD = 45;
+/** a rating shows "?" while its RD is above this; provisional ratings stay off the leaderboard */
+export const CHESS_PROVISIONAL_RD = 110;
+export const chessProvisional = (rd: number): boolean => rd > CHESS_PROVISIONAL_RD;
+/** "814" or "800?" */
+export const chessRatingText = (r: { r: number; rd: number }): string => `${Math.round(r.r)}${chessProvisional(r.rd) ? '?' : ''}`;
+
+/** bot levels 1–8 (like Lichess's AI levels) with their rough strength */
+export const CHESS_BOT_LEVELS: readonly { level: number; elo: number; label: string }[] = [
+  { level: 1, elo: 800, label: '≈ 800' },
+  { level: 2, elo: 1000, label: '≈ 1000' },
+  { level: 3, elo: 1200, label: '≈ 1200' },
+  { level: 4, elo: 1400, label: '≈ 1400' },
+  { level: 5, elo: 1600, label: '≈ 1600' },
+  { level: 6, elo: 1800, label: '≈ 1800' },
+  { level: 7, elo: 2000, label: '≈ 2000' },
+  { level: 8, elo: 2200, label: '≈ 2200+' },
+];
+
+const CHESS_TIME_HINT: Record<ChessSpeed, string> = { bullet: 'Bullet', blitz: 'Blitz', rapid: 'Rapid', classical: 'Classical', untimed: 'No clock, never rated' };
+
+export const CHESS_CATALOG: GameInfo = {
+  kind: 'chess', name: 'Chess', emoji: '♟️', tagline: 'Nine variants, real clocks, ratings from 800', category: 'board', minPlayers: 2, maxPlayers: 2, teams: false, bots: true, isNew: true, colors: ['#5d4037', '#c8a165'],
+  options: [
+    { id: 'variant', label: 'Variant', default: 'standard', choices: [
+      { value: 'standard', label: 'Standard', hint: 'Classic chess' },
+      { value: 'chess960', label: 'Chess960', hint: 'Back rank shuffled, 960 starts' },
+      { value: 'crazyhouse', label: 'Crazyhouse', hint: 'Drop the pieces you capture' },
+      { value: 'kingOfTheHill', label: 'King of the Hill', hint: 'Bring your king to the centre' },
+      { value: 'threeCheck', label: 'Three-check', hint: 'Give check three times' },
+      { value: 'antichess', label: 'Antichess', hint: 'Captures are forced, lose everything to win' },
+      { value: 'atomic', label: 'Atomic', hint: 'Captures explode nearby pieces' },
+      { value: 'horde', label: 'Horde', hint: '36 pawns against a full army' },
+      { value: 'racingKings', label: 'Racing Kings', hint: 'Race your king to the 8th rank' },
+    ] },
+    { id: 'time', label: 'Time', default: '10+0', choices: CHESS_TIMES.map((t) => ({ value: t, label: t === 'none' ? 'Untimed' : t, hint: CHESS_TIME_HINT[chessSpeedOf(t)] })) },
+    { id: 'rated', label: 'Rated', default: 'no', choices: [
+      { value: 'no', label: 'Casual', hint: 'Ratings stay as they are' },
+      { value: 'yes', label: 'Rated', hint: 'Two logged-in players on a clock' },
+    ] },
+    { id: 'color', label: 'Host plays', default: 'random', choices: [
+      { value: 'random', label: 'Random' },
+      { value: 'white', label: 'White' },
+      { value: 'black', label: 'Black' },
+    ] },
+    { id: 'level', label: 'Bot level', default: 3, choices: CHESS_BOT_LEVELS.map((l) => ({ value: l.level, label: `Level ${l.level}`, hint: l.label })) },
+  ],
+};
+
 export const LUDO_MODES = ['classic', 'quick', 'timed', 'master'] as const;
 export type LudoMode = (typeof LUDO_MODES)[number];
 /** Ludo timed mode: minutes, the choices (opts.time) */
@@ -2201,6 +2332,7 @@ export const GAME_CATALOG: readonly GameInfo[] = [
     options: [{ id: 'size', label: 'Board', default: 5, choices: [{ value: 5, label: '5 × 5' }, { value: 7, label: '7 × 7' }] }] },
   { kind: 'dots', name: 'Dots and Boxes', emoji: '⬛', tagline: 'Draw lines, close boxes, steal the board', category: 'board', minPlayers: 2, maxPlayers: 4, teams: false, bots: true, isNew: true, colors: ['#3949ab', '#26c6da'],
     options: [{ id: 'size', label: 'Board', default: 5, choices: [{ value: 4, label: '4 × 4' }, { value: 5, label: '5 × 5' }, { value: 6, label: '6 × 6' }] }] },
+  CHESS_CATALOG,
   { kind: 'bluff', name: 'Bluff', emoji: '🃏', tagline: 'Lie with a straight face, catch the liars', category: 'cards', minPlayers: 2, maxPlayers: 8, teams: true, bots: true, colors: ['#2e7d32', '#004d40'], options: [] },
   { kind: 'crazy7', name: 'Crazy 7', emoji: '7️⃣', tagline: 'Match suit or number, 7s make them pick', category: 'cards', minPlayers: 2, maxPlayers: 8, teams: false, bots: true, colors: ['#6a1b9a', '#283593'], options: [] },
   { kind: 'rang', name: 'Rang', emoji: '🌈', tagline: 'Colour cards, wilds and +4s', category: 'cards', minPlayers: 2, maxPlayers: 8, teams: true, bots: true, colors: ['#e53935', '#1e88e5'], options: [] },
@@ -2225,7 +2357,8 @@ export type PluggedView =
   | { kind: 'dots'; dots: DotsView }
   | { kind: 'colorwar'; colorwar: ColorWarView }
   | { kind: 'fruit'; fruit: FruitView }
-  | { kind: 'spikes'; spikes: SpikesView };
+  | { kind: 'spikes'; spikes: SpikesView }
+  | { kind: 'chess'; chess: ChessView };
 
 /** a registry game's move, sent with game:move */
 export type PluggedMove =
@@ -2236,7 +2369,8 @@ export type PluggedMove =
   | { kind: 'dots'; move: DotsMoveInput }
   | { kind: 'colorwar'; move: ColorWarMoveInput }
   | { kind: 'fruit'; move: FruitMoveInput }
-  | { kind: 'spikes'; move: SpikesMoveInput };
+  | { kind: 'spikes'; move: SpikesMoveInput }
+  | { kind: 'chess'; move: ChessMoveInput };
 
 /** per-account numbers for one game (stats.perGame[kind]); counters are the game's own (Ludo: kills, home, sixes, killed) */
 export type GameTally = { played: number; wins: number } & Partial<Record<string, number>>;
@@ -2840,3 +2974,166 @@ export interface SpikesView {
 }
 /** where my character is now (sent about 12 times a second while moving); the server checks it against SPIKES_SPEED */
 export type SpikesMoveInput = { type: 'move'; x: number; y: number };
+
+// ─── Chess: the table, moves, ratings and saved games ─────────────────────────────────
+
+/** one side's rating as shown on a seat */
+export interface ChessRatingBadge {
+  r: number;
+  rd: number;
+  /** RD above CHESS_PROVISIONAL_RD: show "?" */
+  prov: boolean;
+}
+
+export type ChessPockets = { w: Partial<Record<'p' | 'n' | 'b' | 'r' | 'q' | 'k', number>>; b: Partial<Record<'p' | 'n' | 'b' | 'r' | 'q' | 'k', number>> };
+
+/** the chess table; the same for players and watchers (watchers' engine hints are worked out on the phone) */
+export interface ChessView {
+  variant: ChessVariant;
+  /** time control id ('5+3', 'none') */
+  time: string;
+  speed: ChessSpeed;
+  fen: string;
+  initialFen: string;
+  /** every move so far in UCI (Chess960 castling: king takes own rook; crazyhouse drops 'N@f3') */
+  moves: string[];
+  sans: string[];
+  turn: ChessColor;
+  /** the last move in UCI, or null */
+  lastMove: string | null;
+  /** member ids by colour */
+  players: { w: string; b: string };
+  /** bot levels by colour (bots only) */
+  bots: Partial<Record<ChessColor, number>>;
+  /**
+   * ms left for each side when runningSince was set (the last move). The side to move is running:
+   * left = clock[turn] - (now - runningSince), using the view's `now` to line up phone and server time.
+   * runningSince is null until both sides have moved, and once the game is over. Null clock: untimed.
+   */
+  clock: { w: number; b: number; runningSince: number | null; inc: number } | null;
+  /** first moves: the side to move must move by then or the game is aborted (server time); null once both have moved */
+  abortAt: number | null;
+  /** three-check: checks given by each side */
+  checks?: { w: number; b: number };
+  /** crazyhouse: pieces in hand */
+  pockets?: ChessPockets;
+  /** the side to move is in check */
+  check: boolean;
+  status: 'playing' | 'over';
+  result?: { winner: ChessColor | null; reason: ChessEndReason };
+  /** a standing draw offer from this side */
+  drawOffer?: ChessColor;
+  /** a standing takeback request from this side (casual games only) */
+  takebackOffer?: ChessColor;
+  /** counts for ratings: host chose Rated, both are logged-in people and the game is timed */
+  rated: boolean;
+  perf: ChessPerf;
+  /** each person's rating in this perf (filled a moment after the start; none for bots and guests) */
+  ratings?: Partial<Record<ChessColor, ChessRatingBadge>>;
+  /** rated games, once saved after the end: the change (+14 / -9) */
+  ratingDiff?: { w: number; b: number };
+  /** saved game id once stored (Profile → Chess and the analysis read it) */
+  gameId?: string;
+  /** server time when this view was made */
+  now: number;
+  opening?: { eco: string; name: string };
+}
+
+/**
+ * game:move for chess. ply must equal moves.length (stale moves are refused).
+ * draw: offer true offers or accepts a standing offer, false declines (or withdraws your own).
+ * takeback: no accept asks; accept true/false answers the other side's request (casual games only).
+ * abort: only before both sides have moved.
+ */
+export type ChessMoveInput =
+  | { type: 'move'; uci: string; ply: number }
+  | { type: 'resign' }
+  | { type: 'draw'; offer: boolean }
+  | { type: 'takeback'; accept?: boolean }
+  | { type: 'abort' }
+  | { type: 'claimTimeout' };
+
+/** one perf's Glicko-2 rating and record */
+export interface ChessRating {
+  r: number;
+  rd: number;
+  vol: number;
+  games: number;
+  w: number;
+  l: number;
+  d: number;
+  peak: number;
+  /** wins in a row now (0 after a loss or draw) */
+  streak: number;
+  bestStreak: number;
+  /** one point per rated game: [time ms, rating after], oldest first (the newest CHESS_HISTORY_KEEP) */
+  history: [number, number][];
+  updatedAt: number;
+}
+export const CHESS_HISTORY_KEEP = 500;
+
+/** a fresh rating for a perf nobody has played yet */
+export const chessNewRating = (now = 0): ChessRating => ({
+  r: CHESS_START_RATING, rd: CHESS_START_RD, vol: CHESS_START_VOL, games: 0, w: 0, l: 0, d: 0, peak: CHESS_START_RATING, streak: 0, bestStreak: 0, history: [], updatedAt: now,
+});
+
+/** GET /api/chess/ratings/me and /api/chess/ratings/:userId: every perf played (missing perfs: chessNewRating) */
+export interface ChessRatingsResponse {
+  userId: string;
+  perfs: Partial<Record<ChessPerf, ChessRating>>;
+}
+
+export interface ChessLeaderRow {
+  rank: number;
+  userId: string;
+  username: string;
+  displayName: string;
+  avatar: string | null;
+  r: number;
+  rd: number;
+  games: number;
+}
+
+/** GET /api/chess/leaderboard/:perf: the top 50 non-provisional, plus where I stand (rank null while provisional or unplayed) */
+export interface ChessLeaderboard {
+  perf: ChessPerf;
+  top: ChessLeaderRow[];
+  me: { rank: number | null; rating: ChessRating | null } | null;
+}
+
+/** one side of a saved game */
+export interface ChessGamePlayer {
+  userId: string | null;
+  name: string;
+  /** bot level, for bots */
+  bot: number | null;
+  /** rated games: rating before and after (casual: before only, when known) */
+  before: number | null;
+  after: number | null;
+  prov: boolean;
+}
+
+/** a saved game as listed (GET /api/chess/games) */
+export interface ChessGameSummary {
+  id: string;
+  variant: ChessVariant;
+  time: string;
+  speed: ChessSpeed;
+  perf: ChessPerf;
+  rated: boolean;
+  players: { w: ChessGamePlayer; b: ChessGamePlayer };
+  result: { winner: ChessColor | null; reason: ChessEndReason };
+  plies: number;
+  opening: { eco: string; name: string } | null;
+  endedAt: number;
+}
+
+/** a saved game in full (GET /api/chess/games/:id), enough to replay and analyse */
+export interface ChessGameRecord extends ChessGameSummary {
+  initialFen: string;
+  moves: string[];
+  pgn: string;
+}
+
+/** how many finished chess games each account keeps */
+export const CHESS_GAMES_KEEP = 100;
